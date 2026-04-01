@@ -53,17 +53,37 @@ const aiRoutes = require('./routes/aiRoutes');
 const admin = require('firebase-admin');
 // Support loading service account from env var (Vercel) or local file
 let serviceAccount;
-if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-  serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-} else {
-  serviceAccount = require('./service-account.json.json');
+try {
+  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+    serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+  } else {
+    serviceAccount = require('./service-account.json.json');
+  }
+} catch (err) {
+  console.warn('⚠️ Firebase service account not found. Push notifications will be disabled.');
+  serviceAccount = null;
 }
 
 // WhatsApp Service (FREE - uses whatsapp-web.js)
-const { initializeWhatsApp, getWhatsAppStatus, forceReconnectWhatsApp, requestWhatsAppPairingCode } = require('./services/whatsappService');
+let initializeWhatsApp, getWhatsAppStatus, forceReconnectWhatsApp, requestWhatsAppPairingCode;
+try {
+  ({ initializeWhatsApp, getWhatsAppStatus, forceReconnectWhatsApp, requestWhatsAppPairingCode } = require('./services/whatsappService'));
+} catch (err) {
+  console.warn('⚠️ WhatsApp service not available:', err.message);
+  initializeWhatsApp = async () => {};
+  getWhatsAppStatus = () => ({ ready: false });
+  forceReconnectWhatsApp = async () => {};
+  requestWhatsAppPairingCode = async () => null;
+}
 
 // Reminder Service (Appointment reminders via WhatsApp + Push)
-const { startReminderScheduler } = require('./services/reminderService');
+let startReminderScheduler;
+try {
+  ({ startReminderScheduler } = require('./services/reminderService'));
+} catch (err) {
+  console.warn('⚠️ Reminder service not available:', err.message);
+  startReminderScheduler = () => {};
+}
 
 // Import models to register them with Mongoose
 const Order = require('./models/Order');
@@ -179,9 +199,18 @@ const messagingRoutes = require('./routes/messagingRoutes');
 app.use('/api/messaging', messagingRoutes);
 
 // Initialize Firebase Admin
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
-});
+if (serviceAccount) {
+  try {
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+    });
+    console.log('✅ Firebase Admin initialized');
+  } catch (err) {
+    console.warn('⚠️ Firebase Admin initialization failed:', err.message);
+  }
+} else {
+  console.warn('⚠️ Firebase Admin not initialized - no service account');
+}
 
 // WhatsApp status endpoint (to check if QR scan is needed)
 app.get('/api/whatsapp/status', (req, res) => {
