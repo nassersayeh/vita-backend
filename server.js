@@ -74,7 +74,18 @@ const Notification = require('./models/Notification');
 const Points = require('./models/Points');
 
 const app = express();
-app.use(cors());
+
+// CORS configuration
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'X-CSRF-Token', 'X-Api-Version'],
+  credentials: true
+}));
+
+// Handle preflight OPTIONS requests
+app.options('*', cors());
+
 app.use(bodyParser.json());
 
 // Connect to MongoDB
