@@ -115,25 +115,22 @@ const cartRoutes = require('./routes/cart');
 
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://nassersayeh:pop1990@cluster0.vefyn0g.mongodb.net/vita?appName=Cluster0';
 
-// Cache connection for serverless (Vercel)
-let isConnected = false;
-const connectDB = async () => {
-  if (isConnected) return;
-  try {
-    mongoose.set('bufferCommands', false);
-    await mongoose.connect(MONGODB_URI);
-    isConnected = true;
-    console.log('MongoDB connected');
-  } catch (err) {
-    console.error('MongoDB connection error:', err);
-    throw err;
+// Cache the connection promise for serverless (Vercel)
+let dbPromise = null;
+const connectDB = () => {
+  if (!dbPromise) {
+    dbPromise = mongoose.connect(MONGODB_URI).then(() => {
+      console.log('MongoDB connected');
+    }).catch(err => {
+      console.error('MongoDB connection error:', err);
+      dbPromise = null; // Reset so next request retries
+      throw err;
+    });
   }
+  return dbPromise;
 };
 
-// Connect immediately
-connectDB();
-
-// Middleware to ensure DB is connected before handling requests
+// Middleware to ensure DB is connected before handling any request
 app.use(async (req, res, next) => {
   try {
     await connectDB();
