@@ -112,9 +112,36 @@ app.use(bodyParser.json());
 const providerRoutes = require('./routes/provider');
 const medicationRoutes = require('./routes/medication');
 const cartRoutes = require('./routes/cart');
-mongoose.connect('mongodb+srv://nassersayeh:pop1990@cluster0.vefyn0g.mongodb.net/?appName=Cluster0')
-  .then(() => console.log('MongoDB connected'))
-  .catch(err => console.error(err));
+
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://nassersayeh:pop1990@cluster0.vefyn0g.mongodb.net/vita?appName=Cluster0';
+
+// Cache connection for serverless (Vercel)
+let isConnected = false;
+const connectDB = async () => {
+  if (isConnected) return;
+  try {
+    mongoose.set('bufferCommands', false);
+    await mongoose.connect(MONGODB_URI);
+    isConnected = true;
+    console.log('MongoDB connected');
+  } catch (err) {
+    console.error('MongoDB connection error:', err);
+    throw err;
+  }
+};
+
+// Connect immediately
+connectDB();
+
+// Middleware to ensure DB is connected before handling requests
+app.use(async (req, res, next) => {
+  try {
+    await connectDB();
+    next();
+  } catch (err) {
+    res.status(500).json({ message: 'Database connection error', error: err.message });
+  }
+});
 
 // Mount existing routes
 app.use('/api/auth', authRoutes);

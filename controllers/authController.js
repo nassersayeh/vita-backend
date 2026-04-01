@@ -298,8 +298,8 @@ exports.login = async (req, res) => {
       dailyPointsEarned
     });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Server error during login.' });
+    console.error('Login error:', err);
+    res.status(500).json({ message: 'Server error during login.', error: err.message, stack: err.stack });
   }
 };
 
