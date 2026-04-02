@@ -28,17 +28,62 @@ router.get('/:doctorId/patients', async (req, res) => {
     if (!doctor) {
       return res.status(404).json({ message: 'Doctor not found' });
     }
-    // Compute total outstanding debt per patient from appointments
+    
+    // Compute total outstanding debt per patient from Financial.debts (clinic owner's record)
+    const Financial = require('../models/Financial');
+    const Clinic = require('../models/Clinic');
     const Appointment = require('../models/Appointment');
     const patientIds = doctor.patients.map(p => p._id);
 
+    // Find the clinic this doctor belongs to
+    let clinic = null;
+    if (doctor.clinicId) {
+      clinic = await Clinic.findById(doctor.clinicId);
+    }
+    if (!clinic) {
+      clinic = await Clinic.findOne({
+        $or: [
+          { ownerId: doctorId },
+          { 'doctors.doctorId': doctorId, 'doctors.status': 'active' }
+        ]
+      });
+    }
+    const financialOwnerId = clinic ? clinic.ownerId : doctorId;
+
+    // Get debts from clinic owner's Financial record
+    const debtMap = {};
+    const ownerFinancial = await Financial.findOne({ doctorId: financialOwnerId });
+    if (ownerFinancial && ownerFinancial.debts) {
+      for (const debt of ownerFinancial.debts) {
+        if (debt.status === 'pending' && debt.patientId) {
+          const pid = debt.patientId.toString();
+          debtMap[pid] = (debtMap[pid] || 0) + (debt.amount || 0);
+        }
+      }
+    }
+    
+    // Also check doctor's own Financial for old debts (backwards compatibility)
+    if (financialOwnerId.toString() !== doctorId.toString()) {
+      const doctorFinancial = await Financial.findOne({ doctorId: doctorId });
+      if (doctorFinancial && doctorFinancial.debts) {
+        for (const debt of doctorFinancial.debts) {
+          if (debt.status === 'pending' && debt.patientId) {
+            const pid = debt.patientId.toString();
+            debtMap[pid] = (debtMap[pid] || 0) + (debt.amount || 0);
+          }
+        }
+      }
+    }
+
+    // Also add appointment debts (old system)
     const appointmentDebts = await Appointment.aggregate([
       { $match: { doctorId: doctor._id, patient: { $in: patientIds }, debt: { $gt: 0 } } },
       { $group: { _id: '$patient', totalAppointmentDebt: { $sum: '$debt' } } }
     ]);
-
-    const debtMap = {};
-    appointmentDebts.forEach(d => { debtMap[d._id.toString()] = d.totalAppointmentDebt; });
+    appointmentDebts.forEach(d => {
+      const pid = d._id.toString();
+      debtMap[pid] = (debtMap[pid] || 0) + d.totalAppointmentDebt;
+    });
 
     // Attach totalDebt to each patient object (lean clone)
     const patientsWithDebt = doctor.patients.map(p => {
