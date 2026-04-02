@@ -472,6 +472,55 @@ router.get('/doctors/:doctorId/financial', async (req, res) => {
     const totalExpenses = filteredExpenses.reduce((sum, exp) => sum + exp.amount, 0);
 
     // Debts are not filtered by month (show all debts)
+    // Merge debts from clinic owner's Financial record (where treatment costs are stored)
+    let allDebts = [...(financial.debts || [])];
+    
+    try {
+      const Clinic = require('../models/Clinic');
+      const User = require('../models/User');
+      const doctorId = req.params.doctorId;
+      
+      // Find the clinic this doctor belongs to
+      const doctorUser = await User.findById(doctorId);
+      let clinic = null;
+      if (doctorUser?.clinicId) {
+        clinic = await Clinic.findById(doctorUser.clinicId);
+      }
+      if (!clinic) {
+        clinic = await Clinic.findOne({
+          $or: [
+            { ownerId: doctorId },
+            { 'doctors.doctorId': doctorId, 'doctors.status': 'active' }
+          ]
+        });
+      }
+      
+      if (clinic && clinic.ownerId.toString() !== doctorId) {
+        // Doctor is not the clinic owner - merge debts from clinic owner's Financial
+        const ownerFinancial = await Financial.findOne({ doctorId: clinic.ownerId })
+          .populate('debts.patientId', 'fullName');
+        
+        if (ownerFinancial && ownerFinancial.debts) {
+          // Only include debts created by this doctor (or debts without doctorId for backward compat)
+          const ownerDebts = ownerFinancial.debts.filter(d => {
+            // Include if debt was created by this doctor
+            if (d.doctorId && d.doctorId.toString() === doctorId) return true;
+            return false;
+          });
+          
+          // Avoid duplicates - check by _id
+          const existingDebtIds = new Set(allDebts.map(d => d._id.toString()));
+          for (const debt of ownerDebts) {
+            if (!existingDebtIds.has(debt._id.toString())) {
+              allDebts.push(debt);
+            }
+          }
+        }
+      }
+    } catch (clinicErr) {
+      console.error('Error merging clinic owner debts:', clinicErr);
+    }
+
     const formattedFinancial = {
       totalEarnings,
       totalExpenses,
@@ -480,9 +529,9 @@ router.get('/doctors/:doctorId/financial', async (req, res) => {
         patientName: trans.patientId?.fullName || 'غير معروف',
       })),
       expenses: filteredExpenses,
-      debts: financial.debts.map((debt) => ({
-        ...debt.toObject(),
-        patientName: debt.patientId?.fullName || 'غير معروف',
+      debts: allDebts.map((debt) => ({
+        ...(debt.toObject ? debt.toObject() : debt),
+        patientName: debt.patientId?.fullName || (typeof debt.patientId === 'string' ? 'غير معروف' : debt.patientId?.fullName) || 'غير معروف',
       })),
     };
 
