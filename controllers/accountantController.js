@@ -106,14 +106,36 @@ exports.getDashboardStats = async (req, res) => {
     // Use the higher of the two to avoid double-counting
     const totalDebts = Math.max(appointmentDebts[0]?.total || 0, financialDebts);
 
+    // Also get non-appointment income from Financial.transactions (debt payments, manual payments)
+    // These are NOT counted in the Appointment aggregate above
+    const clinicOwnerId2 = clinic.ownerId;
+    let financialTodayIncome = 0;
+    let financialMonthIncome = 0;
+    try {
+      const ownerFinancial = await Financial.findOne({ doctorId: clinicOwnerId2 });
+      if (ownerFinancial && ownerFinancial.transactions) {
+        for (const txn of ownerFinancial.transactions) {
+          // Skip appointment-linked transactions (already counted from Appointment model)
+          if (txn.appointmentId) continue;
+          const txnDate = new Date(txn.date);
+          if (txnDate >= monthStart && txnDate < tomorrow) {
+            financialMonthIncome += txn.amount || 0;
+          }
+          if (txnDate >= today && txnDate < tomorrow) {
+            financialTodayIncome += txn.amount || 0;
+          }
+        }
+      }
+    } catch (e) { /* ignore */ }
+
     res.status(200).json({
       success: true,
       stats: {
         patientCount: allPatientIds.size,
         todayAppointments,
         pendingPayments,
-        monthRevenue: monthRevenue[0]?.total || 0,
-        todayRevenue: todayRevenue[0]?.total || 0,
+        monthRevenue: (monthRevenue[0]?.total || 0) + financialMonthIncome,
+        todayRevenue: (todayRevenue[0]?.total || 0) + financialTodayIncome,
         totalDebts,
         clinicName: clinic.name,
         doctorCount: doctorIds.length
@@ -776,6 +798,35 @@ exports.getMonthlyReport = async (req, res) => {
         debt: 0,
         labRequestId: lab._id
       });
+    }
+
+    // Also include non-appointment Financial.transactions (debt payments, manual payments)
+    const clinicOwnerId = clinic.ownerId;
+    try {
+      const ownerFinancial = await Financial.findOne({ doctorId: clinicOwnerId })
+        .populate('transactions.patientId', 'fullName mobileNumber');
+      if (ownerFinancial && ownerFinancial.transactions) {
+        for (const txn of ownerFinancial.transactions) {
+          // Skip appointment-linked transactions (already in report from Appointment query)
+          if (txn.appointmentId) continue;
+          const txnDate = new Date(txn.date);
+          if (txnDate >= startDate && txnDate <= endDate) {
+            report.push({
+              type: 'payment',
+              date: txnDate,
+              patientName: txn.patientId?.fullName || 'غير معروف',
+              patientMobile: txn.patientId?.mobileNumber || '',
+              doctorName: '',
+              description: txn.description || 'دفعة',
+              amount: txn.amount || 0,
+              debt: 0,
+              paymentMethod: txn.paymentMethod || 'Cash'
+            });
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Error fetching financial transactions for report:', e);
     }
 
     // Sort by date
@@ -1879,7 +1930,20 @@ exports.getFinancialData = async (req, res) => {
     });
     const monthExpensesTotal = monthExpenses.reduce((sum, exp) => sum + (exp.amount || 0), 0);
 
-    const totalMonthlyIncome = appointmentIncome + labIncome;
+    // Also add non-appointment Financial.transactions income (debt payments, manual payments)
+    // These are NOT counted in the Appointment/Lab queries above
+    let financialTransactionIncome = 0;
+    const ownerTransactions = financial.transactions || [];
+    for (const txn of ownerTransactions) {
+      // Skip appointment-linked transactions (already counted from Appointment model)
+      if (txn.appointmentId) continue;
+      const txnDate = new Date(txn.date);
+      if (txnDate >= startOfMonth && txnDate <= endOfMonth) {
+        financialTransactionIncome += txn.amount || 0;
+      }
+    }
+
+    const totalMonthlyIncome = appointmentIncome + labIncome + financialTransactionIncome;
 
     // Build response - augment financial with computed income and merged debts
     const financialData = financial.toObject ? financial.toObject() : { ...financial };
@@ -1888,6 +1952,7 @@ exports.getFinancialData = async (req, res) => {
     financialData.totalExpenses = monthExpensesTotal;
     financialData.appointmentIncome = appointmentIncome;
     financialData.labIncome = labIncome;
+    financialData.paymentIncome = financialTransactionIncome;
     financialData.monthLabel = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 
     res.status(200).json({ success: true, financial: financialData });
