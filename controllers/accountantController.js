@@ -875,7 +875,6 @@ exports.getPatientReceipt = async (req, res) => {
 
     // Get patient debt info from clinic owner AND all clinic doctors
     const clinicOwnerId = clinic.ownerId;
-    const doctorIds = clinic.doctors.filter(d => d.status === 'active').map(d => d.doctorId);
     const allFinancialIds = [clinicOwnerId, ...doctorIds];
     const allFinancials = await Financial.find({ doctorId: { $in: allFinancialIds } });
     
