@@ -1522,6 +1522,27 @@ exports.rejectLabRequest = async (req, res) => {
 
 const Supplier = require('../models/Supplier');
 
+// Get single patient with all fields
+exports.getPatientById = async (req, res) => {
+  try {
+    const accountantId = req.user._id;
+    const clinic = await getClinicForAccountant(accountantId);
+    if (!clinic) {
+      return res.status(404).json({ message: 'لم يتم العثور على عيادة مرتبطة بحسابك' });
+    }
+
+    const { patientId } = req.params;
+    const patient = await User.findById(patientId).select('-password -resetCode -twoFactorCode -phoneVerificationCode');
+    if (!patient) {
+      return res.status(404).json({ message: 'المريض غير موجود' });
+    }
+    res.status(200).json({ success: true, patient });
+  } catch (error) {
+    console.error('Error fetching patient:', error);
+    res.status(500).json({ message: 'فشل في جلب بيانات المريض', error: error.message });
+  }
+};
+
 // Get all medical records for a patient (sorted newest first, including follow-ups)
 exports.getPatientRecords = async (req, res) => {
   try {

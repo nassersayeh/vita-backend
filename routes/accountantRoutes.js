@@ -47,6 +47,9 @@ router.put('/lab-requests/:requestId/reject', accountantController.rejectLabRequ
 router.get('/monthly-report', accountantController.getMonthlyReport);
 router.get('/patients/:patientId/receipt', accountantController.getPatientReceipt);
 
+// Get single patient full data
+router.get('/patients/:patientId/details', accountantController.getPatientById);
+
 // Patient records
 router.get('/patients/:patientId/records', accountantController.getPatientRecords);
 
