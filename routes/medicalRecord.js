@@ -1129,4 +1129,23 @@ router.delete('/:recordId', async (req, res) => {
   }
 });
 
+// GET nurse notes for a specific patient (accessible by doctors and accountants)
+router.get('/patient/:patientId/nurse-notes', async (req, res) => {
+  try {
+    const { patientId } = req.params;
+    const NurseNote = require('../models/NurseNote');
+    
+    const notes = await NurseNote.find({ patient: patientId })
+      .populate('nurse', 'fullName profileImage')
+      .populate('patient', 'fullName mobileNumber')
+      .populate('assignedDoctor', 'fullName specialty')
+      .sort({ createdAt: -1 });
+    
+    res.json({ success: true, notes });
+  } catch (err) {
+    console.error('Error fetching patient nurse notes:', err);
+    res.status(500).json({ message: 'Server error fetching nurse notes' });
+  }
+});
+
 module.exports = router;
