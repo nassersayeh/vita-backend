@@ -196,6 +196,25 @@ router.get('/:doctorId/clinic-lab-staff', async (req, res) => {
   }
 });
 
+// GET /api/doctors/:doctorId/patients/:patientId/details - get full patient data including medical history
+router.get('/:doctorId/patients/:patientId/details', async (req, res) => {
+  try {
+    const { doctorId, patientId } = req.params;
+    const doctor = await User.findById(doctorId);
+    if (!doctor || doctor.role !== 'Doctor') {
+      return res.status(404).json({ message: 'Doctor not found' });
+    }
+    const patient = await User.findById(patientId).select('-password -resetCode -twoFactorCode -phoneVerificationCode');
+    if (!patient) {
+      return res.status(404).json({ message: 'Patient not found' });
+    }
+    res.json({ success: true, patient });
+  } catch (error) {
+    console.error('Error fetching patient details:', error);
+    res.status(500).json({ message: 'Server error fetching patient details' });
+  }
+});
+
 // GET /api/doctors/:doctorId/trial-status - get trial status for doctor
 router.get('/:doctorId/trial-status', async (req, res) => {
   try {
