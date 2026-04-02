@@ -158,7 +158,7 @@ exports.getPatients = async (req, res) => {
 
     const doctorIds = clinic.doctors.filter(d => d.status === 'active').map(d => d.doctorId);
     const doctors = await User.find({ _id: { $in: doctorIds } })
-      .populate('patients', 'fullName email mobileNumber profileImage city address birthdate sex idNumber');
+      .populate('patients', 'fullName email mobileNumber profileImage city address birthdate sex idNumber maritalStatus emergencyContactName emergencyContactRelation emergencyPhone hasChronicDiseases chronicDiseasesText hasSurgeries surgeriesText hasFamilyDiseases familyDiseasesText hasDrugAllergies drugAllergiesText hasFoodAllergies foodAllergiesText height weight bloodPressure heartRate temperature bloodSugar smoking previousDiseases disabilities');
 
     const patientsMap = new Map();
     for (const doctor of doctors) {
@@ -200,7 +200,17 @@ exports.registerPatient = async (req, res) => {
       return res.status(404).json({ message: 'لم يتم العثور على عيادة مرتبطة بحسابك' });
     }
 
-    const { fullName, mobileNumber, idNumber, birthdate, sex, address, country, city, doctorId, password } = req.body;
+    const { fullName, mobileNumber, idNumber, birthdate, sex, address, country, city, doctorId, password,
+      maritalStatus,
+      emergencyContactName, emergencyContactRelation, emergencyPhone,
+      hasChronicDiseases, chronicDiseasesText,
+      hasSurgeries, surgeriesText,
+      hasFamilyDiseases, familyDiseasesText,
+      hasDrugAllergies, drugAllergiesText,
+      hasFoodAllergies, foodAllergiesText,
+      height, weight, bloodPressure, heartRate, temperature, bloodSugar,
+      smoking, previousDiseases, disabilities
+    } = req.body;
 
     if (!fullName || !mobileNumber || !idNumber) {
       return res.status(400).json({ message: 'يرجى ملء جميع الحقول المطلوبة' });
@@ -271,7 +281,31 @@ exports.registerPatient = async (req, res) => {
       country: country || clinicOwner.country || 'Palestine',
       city: city || clinicOwner.city || '',
       isPhoneVerified: true,
-      activationStatus: 'active'
+      activationStatus: 'active',
+      // New comprehensive fields
+      maritalStatus: maritalStatus || '',
+      emergencyContactName: emergencyContactName || '',
+      emergencyContactRelation: emergencyContactRelation || '',
+      emergencyPhone: emergencyPhone || '',
+      hasChronicDiseases: hasChronicDiseases || false,
+      chronicDiseasesText: chronicDiseasesText || '',
+      hasSurgeries: hasSurgeries || false,
+      surgeriesText: surgeriesText || '',
+      hasFamilyDiseases: hasFamilyDiseases || false,
+      familyDiseasesText: familyDiseasesText || '',
+      hasDrugAllergies: hasDrugAllergies || false,
+      drugAllergiesText: drugAllergiesText || '',
+      hasFoodAllergies: hasFoodAllergies || false,
+      foodAllergiesText: foodAllergiesText || '',
+      height: height ? Number(height) : null,
+      weight: weight ? Number(weight) : null,
+      bloodPressure: bloodPressure || '',
+      heartRate: heartRate || '',
+      temperature: temperature || '',
+      bloodSugar: bloodSugar || '',
+      smoking: smoking || false,
+      previousDiseases: previousDiseases || '',
+      disabilities: disabilities || '',
     });
 
     await newPatient.save();
@@ -1536,7 +1570,17 @@ exports.updatePatient = async (req, res) => {
     }
 
     const { patientId } = req.params;
-    const { fullName, mobileNumber, email, idNumber, birthdate, sex, address, city, country } = req.body;
+    const { fullName, mobileNumber, email, idNumber, birthdate, sex, address, city, country,
+      maritalStatus,
+      emergencyContactName, emergencyContactRelation, emergencyPhone,
+      hasChronicDiseases, chronicDiseasesText,
+      hasSurgeries, surgeriesText,
+      hasFamilyDiseases, familyDiseasesText,
+      hasDrugAllergies, drugAllergiesText,
+      hasFoodAllergies, foodAllergiesText,
+      height, weight, bloodPressure, heartRate, temperature, bloodSugar,
+      smoking, previousDiseases, disabilities
+    } = req.body;
 
     // Verify patient belongs to clinic doctors
     const doctorIds = clinic.doctors.filter(d => d.status === 'active').map(d => d.doctorId);
@@ -1556,9 +1600,32 @@ exports.updatePatient = async (req, res) => {
     if (address !== undefined) updateData.address = address;
     if (city !== undefined) updateData.city = city;
     if (country !== undefined) updateData.country = country;
+    if (maritalStatus !== undefined) updateData.maritalStatus = maritalStatus;
+    if (emergencyContactName !== undefined) updateData.emergencyContactName = emergencyContactName;
+    if (emergencyContactRelation !== undefined) updateData.emergencyContactRelation = emergencyContactRelation;
+    if (emergencyPhone !== undefined) updateData.emergencyPhone = emergencyPhone;
+    if (hasChronicDiseases !== undefined) updateData.hasChronicDiseases = hasChronicDiseases;
+    if (chronicDiseasesText !== undefined) updateData.chronicDiseasesText = chronicDiseasesText;
+    if (hasSurgeries !== undefined) updateData.hasSurgeries = hasSurgeries;
+    if (surgeriesText !== undefined) updateData.surgeriesText = surgeriesText;
+    if (hasFamilyDiseases !== undefined) updateData.hasFamilyDiseases = hasFamilyDiseases;
+    if (familyDiseasesText !== undefined) updateData.familyDiseasesText = familyDiseasesText;
+    if (hasDrugAllergies !== undefined) updateData.hasDrugAllergies = hasDrugAllergies;
+    if (drugAllergiesText !== undefined) updateData.drugAllergiesText = drugAllergiesText;
+    if (hasFoodAllergies !== undefined) updateData.hasFoodAllergies = hasFoodAllergies;
+    if (foodAllergiesText !== undefined) updateData.foodAllergiesText = foodAllergiesText;
+    if (height !== undefined) updateData.height = height ? Number(height) : null;
+    if (weight !== undefined) updateData.weight = weight ? Number(weight) : null;
+    if (bloodPressure !== undefined) updateData.bloodPressure = bloodPressure;
+    if (heartRate !== undefined) updateData.heartRate = heartRate;
+    if (temperature !== undefined) updateData.temperature = temperature;
+    if (bloodSugar !== undefined) updateData.bloodSugar = bloodSugar;
+    if (smoking !== undefined) updateData.smoking = smoking;
+    if (previousDiseases !== undefined) updateData.previousDiseases = previousDiseases;
+    if (disabilities !== undefined) updateData.disabilities = disabilities;
 
     const patient = await User.findByIdAndUpdate(patientId, updateData, { new: true })
-      .select('fullName mobileNumber email idNumber birthdate sex address city country');
+      .select('fullName mobileNumber email idNumber birthdate sex address city country maritalStatus emergencyContactName emergencyContactRelation emergencyPhone hasChronicDiseases chronicDiseasesText hasSurgeries surgeriesText hasFamilyDiseases familyDiseasesText hasDrugAllergies drugAllergiesText hasFoodAllergies foodAllergiesText height weight bloodPressure heartRate temperature bloodSugar smoking previousDiseases disabilities');
 
     if (!patient) {
       return res.status(404).json({ message: 'المريض غير موجود' });

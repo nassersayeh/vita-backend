@@ -39,16 +39,49 @@ const UserSchema = new mongoose.Schema({
   height: { type: Number, default: null },
   weight: { type: Number, default: null },
   
+  // Marital status
+  maritalStatus: { type: String, enum: ['single', 'married', 'widowed', 'divorced', ''], default: '' },
+  
   // Enhanced profile fields
-// Enhanced profile fields
-allergies: [{ type: String }],
-pastIllnesses: [{ type: String }],
-chronicConditions: [{ type: String }],
-medications: [{ type: String }],
-emergencyContact: { type: String },
-emergencyPhone: { type: String },
-insuranceProvider: { type: String },
-insuranceNumber: { type: String },
+  allergies: [{ type: String }],
+  pastIllnesses: [{ type: String }],
+  chronicConditions: [{ type: String }],
+  medications: [{ type: String }],
+  
+  // Emergency contact
+  emergencyContact: { type: String },
+  emergencyContactName: { type: String, default: '' },
+  emergencyContactRelation: { type: String, default: '' },
+  emergencyPhone: { type: String },
+  
+  // Insurance
+  insuranceProvider: { type: String },
+  insuranceNumber: { type: String },
+  
+  // Medical history
+  hasChronicDiseases: { type: Boolean, default: false },
+  chronicDiseasesText: { type: String, default: '' },
+  hasSurgeries: { type: Boolean, default: false },
+  surgeriesText: { type: String, default: '' },
+  hasFamilyDiseases: { type: Boolean, default: false },
+  familyDiseasesText: { type: String, default: '' },
+  
+  // Allergies detailed
+  hasDrugAllergies: { type: Boolean, default: false },
+  drugAllergiesText: { type: String, default: '' },
+  hasFoodAllergies: { type: Boolean, default: false },
+  foodAllergiesText: { type: String, default: '' },
+  
+  // Vital signs (initial registration)
+  bloodPressure: { type: String, default: '' },
+  heartRate: { type: String, default: '' },
+  temperature: { type: String, default: '' },
+  bloodSugar: { type: String, default: '' },
+  
+  // Additional info
+  smoking: { type: Boolean, default: false },
+  previousDiseases: { type: String, default: '' },
+  disabilities: { type: String, default: '' },
   
   // Points and gamification
   points: { type: Number, default: 0 },

@@ -62,6 +62,19 @@ const MedicalRecordSchema = new mongoose.Schema({
   treatmentPlan: { type: String },
   treatment: { type: String }, // General treatment description (for all doctors)
   followUpDate: { type: Date },
+  
+  // Additional info (section 6 - entered by doctor)
+  smoking: { type: Boolean, default: null },
+  previousDiseases: { type: String },
+  disabilities: { type: String },
+  
+  // Medical assessment (section 7 - entered by doctor)
+  clinicalExamination: { type: String },
+  preliminaryDiagnosis: { type: String },
+  recommendations: { type: String },
+  requiredTests: { type: String },
+  examinerName: { type: String },
+  examDate: { type: Date },
   followUpAppointment: { type: mongoose.Schema.Types.ObjectId, ref: 'Appointment' }, // Link to follow-up appointment
   notes: { type: String },
   
