@@ -1616,10 +1616,15 @@ exports.insertPayment = async (req, res) => {
     for (const debt of patientDebts) {
       if (remainingPayment <= 0) break;
       const paidForThisDebt = Math.min(remainingPayment, debt.amount);
+      // Save original amount before modifying
+      if (!debt.originalAmount) {
+        debt.originalAmount = debt.amount;
+      }
       if (remainingPayment >= debt.amount) {
         remainingPayment -= debt.amount;
         debt.amount = 0;
         debt.status = 'paid';
+        debt.paidAt = new Date();
       } else {
         debt.amount -= remainingPayment;
         remainingPayment = 0;
@@ -1652,13 +1657,25 @@ exports.insertPayment = async (req, res) => {
         
         for (const debt of docDebts) {
           if (remainingPayment <= 0) break;
+          const paidForThisDebt = Math.min(remainingPayment, debt.amount);
+          // Save original amount before modifying
+          if (!debt.originalAmount) {
+            debt.originalAmount = debt.amount;
+          }
           if (remainingPayment >= debt.amount) {
             remainingPayment -= debt.amount;
             debt.amount = 0;
             debt.status = 'paid';
+            debt.paidAt = new Date();
           } else {
             debt.amount -= remainingPayment;
             remainingPayment = 0;
+          }
+          // Track payment for this doctor (old debts on doctor's own Financial)
+          // The doctor is docFin.doctorId
+          const docIdStr = docFin.doctorId.toString();
+          if (docIdStr !== clinicOwnerId.toString()) {
+            doctorDebtPayments[docIdStr] = (doctorDebtPayments[docIdStr] || 0) + paidForThisDebt;
           }
         }
         docFin.markModified('debts');
@@ -1786,10 +1803,14 @@ exports.insertPayment = async (req, res) => {
           let rem = paidAmount;
           for (const dd of docDebts) {
             if (rem <= 0) break;
+            if (!dd.originalAmount) {
+              dd.originalAmount = dd.amount;
+            }
             if (rem >= dd.amount) {
               rem -= dd.amount;
               dd.amount = 0;
               dd.status = 'paid';
+              dd.paidAt = new Date();
             } else {
               dd.amount -= rem;
               rem = 0;
@@ -2207,11 +2228,23 @@ exports.payDebt = async (req, res) => {
     if (!debt) return res.status(404).json({ message: 'الدين غير موجود' });
 
     const paymentAmount = amount ? Number(amount) : debt.amount;
-    const debtDoctorId = debt.doctorId; // The doctor who created the debt
+    // Determine which doctor created this debt:
+    // 1. From debt.doctorId (new debts have this)
+    // 2. From the Financial record's doctorId if debt was found on a doctor's record (old debts)
+    let debtDoctorId = debt.doctorId;
+    if (!debtDoctorId && debtOwnerFinancial.doctorId && debtOwnerFinancial.doctorId.toString() !== clinicOwnerId.toString()) {
+      debtDoctorId = debtOwnerFinancial.doctorId;
+    }
+
+    // Save original amount before modifying (for tracking purposes)
+    if (!debt.originalAmount) {
+      debt.originalAmount = debt.amount;
+    }
 
     if (paymentAmount >= debt.amount) {
       debt.status = 'paid';
       debt.amount = 0;
+      debt.paidAt = new Date();
     } else {
       debt.amount -= paymentAmount;
     }
@@ -2265,10 +2298,14 @@ exports.payDebt = async (req, res) => {
           let remaining = paymentAmount;
           for (const dd of doctorDebts) {
             if (remaining <= 0) break;
+            if (!dd.originalAmount) {
+              dd.originalAmount = dd.amount;
+            }
             if (remaining >= dd.amount) {
               remaining -= dd.amount;
               dd.amount = 0;
               dd.status = 'paid';
+              dd.paidAt = new Date();
             } else {
               dd.amount -= remaining;
               remaining = 0;
@@ -2655,10 +2692,13 @@ exports.getDoctorAccountsReport = async (req, res) => {
       }));
 
       // Also get treatment cost income from doctor's Financial.transactions (debt payments split to doctor)
+      // AND from paid debts on clinic owner's Financial that have this doctor's ID
       let treatmentIncome = 0;
       let treatmentClinicShare = 0;
       const treatmentTransactions = [];
+      const clinicOwnerId2 = clinic.ownerId;
       try {
+        // 1. Check doctor's own Financial transactions (income from debt payment splits)
         const doctorFinancial = await Financial.findOne({ doctorId: doc._id })
           .populate('transactions.patientId', 'fullName mobileNumber');
         if (doctorFinancial) {

@@ -45,9 +45,11 @@ const financialSchema = new mongoose.Schema({
       doctorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // Doctor who created the debt (for revenue split)
       orderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Order' },
       amount: { type: Number, required: true },
+      originalAmount: { type: Number }, // Original amount before any payment (preserved when debt is paid)
       description: { type: String, default: 'دين يدوي' },
       date: { type: Date, default: Date.now },
       status: { type: String, enum: ['pending', 'paid'], default: 'pending' },
+      paidAt: { type: Date }, // When the debt was paid
     },
   ],
 });
