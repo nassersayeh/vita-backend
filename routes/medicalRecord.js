@@ -21,9 +21,135 @@ router.get('/patient/:patientId', async (req, res) => {
   }
 });
 
+// GET clinic-wide patient records (all records from doctors in the same clinic)
+router.get('/patient/:patientId/clinic/:clinicId', async (req, res) => {
+  try {
+    const { patientId, clinicId } = req.params;
+    const Clinic = require('../models/Clinic');
+    
+    // Verify the clinic exists
+    const clinic = await Clinic.findById(clinicId);
+    if (!clinic) {
+      return res.status(404).json({ message: 'Clinic not found' });
+    }
+    
+    // Get all doctor IDs in this clinic (including owner)
+    const clinicDoctorIds = clinic.doctors
+      .filter(d => d.status === 'active')
+      .map(d => d.doctorId);
+    clinicDoctorIds.push(clinic.ownerId); // include clinic owner
+    
+    // Find records that either:
+    // 1. Have clinicId matching this clinic, OR
+    // 2. Were created by a doctor who belongs to this clinic (for old records without clinicId)
+    const records = await MedicalRecord.find({
+      patient: patientId,
+      $or: [
+        { clinicId: clinicId },
+        { doctor: { $in: clinicDoctorIds } }
+      ]
+    })
+      .populate('doctor', 'fullName specialty')
+      .populate('lastEditedBy', 'fullName')
+      .sort({ date: -1 });
+    
+    res.json(records);
+  } catch (err) {
+    console.error('Error fetching clinic patient records:', err);
+    res.status(500).json({ message: 'Server error fetching clinic patient records' });
+  }
+});
+
+// GET clinic-wide patient records by auto-detecting the user's clinic
+router.get('/patient/:patientId/my-clinic/:userId', async (req, res) => {
+  try {
+    const { patientId, userId } = req.params;
+    const Clinic = require('../models/Clinic');
+    const User = require('../models/User');
+    
+    // Find the user's clinic - check if they're an owner, doctor, or staff
+    let clinic = await Clinic.findOne({ ownerId: userId });
+    
+    if (!clinic) {
+      // Check if user is a doctor in a clinic
+      clinic = await Clinic.findOne({ 'doctors.doctorId': userId, 'doctors.status': 'active' });
+    }
+    
+    if (!clinic) {
+      // Check if user is a staff member
+      clinic = await Clinic.findOne({ 'staff.userId': userId, 'staff.status': 'active' });
+    }
+    
+    if (!clinic) {
+      // Check user's clinicId field
+      const user = await User.findById(userId);
+      if (user && user.clinicId) {
+        clinic = await Clinic.findById(user.clinicId);
+      }
+    }
+    
+    if (!clinic) {
+      // No clinic found - return only this user's records
+      const records = await MedicalRecord.find({ patient: patientId, doctor: userId })
+        .populate('doctor', 'fullName specialty')
+        .populate('lastEditedBy', 'fullName')
+        .sort({ date: -1 });
+      return res.json(records);
+    }
+    
+    // Get all member IDs in this clinic
+    const clinicMemberIds = clinic.doctors
+      .filter(d => d.status === 'active')
+      .map(d => d.doctorId);
+    clinicMemberIds.push(clinic.ownerId);
+    
+    // Find all records from clinic members for this patient
+    const records = await MedicalRecord.find({
+      patient: patientId,
+      $or: [
+        { clinicId: clinic._id },
+        { doctor: { $in: clinicMemberIds } }
+      ]
+    })
+      .populate('doctor', 'fullName specialty')
+      .populate('lastEditedBy', 'fullName')
+      .sort({ date: -1 });
+    
+    res.json(records);
+  } catch (err) {
+    console.error('Error fetching my-clinic patient records:', err);
+    res.status(500).json({ message: 'Server error fetching clinic patient records' });
+  }
+});
+
 // POST new medical record (for creating records, e.g., by doctors)
 router.post('/', async (req, res) => {
   try {
+    // Auto-set clinicId from doctor's clinic if not provided
+    if (!req.body.clinicId && req.body.doctor) {
+      try {
+        const User = require('../models/User');
+        const doctor = await User.findById(req.body.doctor);
+        if (doctor && doctor.clinicId) {
+          req.body.clinicId = doctor.clinicId;
+        } else {
+          // Check if this doctor is in any clinic
+          const Clinic = require('../models/Clinic');
+          const clinic = await Clinic.findOne({
+            $or: [
+              { ownerId: req.body.doctor },
+              { 'doctors.doctorId': req.body.doctor, 'doctors.status': 'active' }
+            ]
+          });
+          if (clinic) {
+            req.body.clinicId = clinic._id;
+          }
+        }
+      } catch (clinicErr) {
+        console.error('Error auto-setting clinicId:', clinicErr);
+      }
+    }
+
     const newRecord = new MedicalRecord(req.body);
     const savedRecord = await newRecord.save();
 
@@ -75,12 +201,36 @@ router.post('/', async (req, res) => {
     const treatmentCost = req.body.treatmentCost || req.body.specialtyFields?.treatmentCost;
     if (treatmentCost && treatmentCost > 0 && req.body.doctor && req.body.patient) {
       try {
-        // Find or create financial record for the doctor
-        let doctorFinancial = await Financial.findOne({ doctorId: req.body.doctor });
+        const User = require('../models/User');
+        const Clinic = require('../models/Clinic');
         
-        if (!doctorFinancial) {
-          doctorFinancial = new Financial({
-            doctorId: req.body.doctor,
+        // Get doctor info for the description
+        const doctorUser = await User.findById(req.body.doctor);
+        const doctorName = doctorUser?.fullName || 'طبيب';
+        
+        // Find the clinic this doctor belongs to
+        let clinic = null;
+        if (doctorUser?.clinicId) {
+          clinic = await Clinic.findById(doctorUser.clinicId);
+        }
+        if (!clinic) {
+          clinic = await Clinic.findOne({
+            $or: [
+              { ownerId: req.body.doctor },
+              { 'doctors.doctorId': req.body.doctor, 'doctors.status': 'active' }
+            ]
+          });
+        }
+        
+        // Determine the financial record owner: clinic owner if in a clinic, otherwise the doctor
+        const financialOwnerId = clinic ? clinic.ownerId : req.body.doctor;
+        
+        // Find or create financial record
+        let ownerFinancial = await Financial.findOne({ doctorId: financialOwnerId });
+        
+        if (!ownerFinancial) {
+          ownerFinancial = new Financial({
+            doctorId: financialOwnerId,
             transactions: [],
             expenses: [],
             debts: [],
@@ -90,17 +240,17 @@ router.post('/', async (req, res) => {
           });
         }
 
-        // Determine debt description based on specialty
+        // Determine debt description based on specialty - include doctor name
         let debtDescription;
         if (req.body.dentalTreatment || req.body.specialtyFields?.dentalTreatment) {
-          debtDescription = `علاج أسنان: ${req.body.dentalTreatment || req.body.specialtyFields.dentalTreatment}`;
+          debtDescription = `علاج أسنان: ${req.body.dentalTreatment || req.body.specialtyFields.dentalTreatment} (د. ${doctorName})`;
         } else if (req.body.ptTreatment || req.body.specialtyFields?.ptTreatment) {
-          debtDescription = `جلسة علاج طبيعي: ${req.body.ptTreatment || req.body.specialtyFields.ptTreatment || 'Physical Therapy Session'}`;
+          debtDescription = `جلسة علاج طبيعي: ${req.body.ptTreatment || req.body.specialtyFields.ptTreatment || 'Physical Therapy Session'} (د. ${doctorName})`;
         } else {
-          debtDescription = `Treatment - ${req.body.title || 'Medical Treatment'}`;
+          debtDescription = `${req.body.title || 'علاج طبي'} (د. ${doctorName})`;
         }
 
-        doctorFinancial.debts.push({
+        ownerFinancial.debts.push({
           patientId: req.body.patient,
           amount: parseFloat(treatmentCost),
           description: debtDescription,
@@ -108,8 +258,8 @@ router.post('/', async (req, res) => {
           status: 'pending',
         });
 
-        await doctorFinancial.save();
-        console.log(`Debt of ${treatmentCost} ILS added for patient ${req.body.patient}`);
+        await ownerFinancial.save();
+        console.log(`Debt of ${treatmentCost} ILS added for patient ${req.body.patient} on clinic owner ${financialOwnerId} financial record`);
       } catch (debtError) {
         console.error('Error adding patient debt:', debtError);
         // Don't fail the medical record creation if debt creation fails
@@ -463,55 +613,61 @@ router.post('/:recordId/followup', async (req, res) => {
 
     const savedFollowUp = await followUpRecord.save();
 
-    // Handle payment - add to doctor's income AND reduce patient's debt
+    // Handle payment - add to doctor's income AND reduce patient's debt from clinic owner's financial
     const paymentAmount = followUpData.paymentAmount ? parseFloat(followUpData.paymentAmount) : 0;
     if (paymentAmount > 0 && !isNaN(paymentAmount) && isFinite(paymentAmount)) {
       try {
         const doctorId = followUpData.doctor || parentRecord.doctor;
         const patientId = parentRecord.patient;
         
-        // 1. Add to doctor's income (transactions)
-        let doctorFinancial = await Financial.findOne({ doctorId: doctorId });
-        if (!doctorFinancial) {
-          doctorFinancial = new Financial({ doctorId: doctorId, transactions: [], expenses: [], debts: [] });
+        const User = require('../models/User');
+        const Clinic = require('../models/Clinic');
+        
+        // Find the clinic this doctor belongs to
+        const doctorUser = await User.findById(doctorId);
+        let clinic = null;
+        if (doctorUser?.clinicId) {
+          clinic = await Clinic.findById(doctorUser.clinicId);
+        }
+        if (!clinic) {
+          clinic = await Clinic.findOne({
+            $or: [
+              { ownerId: doctorId },
+              { 'doctors.doctorId': doctorId, 'doctors.status': 'active' }
+            ]
+          });
+        }
+        const financialOwnerId = clinic ? clinic.ownerId : doctorId;
+        
+        // 1. Add to clinic owner's income (transactions)
+        let ownerFinancial = await Financial.findOne({ doctorId: financialOwnerId });
+        if (!ownerFinancial) {
+          ownerFinancial = new Financial({ doctorId: financialOwnerId, transactions: [], expenses: [], debts: [] });
         }
         
-        doctorFinancial.transactions.push({
+        const doctorName = doctorUser?.fullName || 'طبيب';
+        ownerFinancial.transactions.push({
           date: new Date(),
           amount: paymentAmount,
-          description: `Follow-up payment - Visit #${savedFollowUp.visitNumber}`,
+          description: `Follow-up payment - Visit #${savedFollowUp.visitNumber} (د. ${doctorName})`,
           paymentMethod: followUpData.paymentMethod || 'Cash',
           patientId: patientId
         });
-        doctorFinancial.totalEarnings = (doctorFinancial.totalEarnings || 0) + paymentAmount;
+        ownerFinancial.totalEarnings = (ownerFinancial.totalEarnings || 0) + paymentAmount;
         
-        await doctorFinancial.save();
-        console.log('✅ Follow-up payment added to doctor income:', paymentAmount);
-        
-        // 2. Reduce patient's debt if they have any pending debts with this doctor
-        let patientFinancial = await Financial.findOne({ 
-          $or: [
-            { 'debts.patientId': patientId },
-            { doctorId: doctorId, 'debts.patientId': patientId }
-          ]
-        });
-        
-        // Also check if the debt is stored in the doctor's financial record
-        if (doctorFinancial.debts && doctorFinancial.debts.length > 0) {
+        // 2. Reduce patient's debt from clinic owner's financial record
+        if (ownerFinancial.debts && ownerFinancial.debts.length > 0) {
           let remainingPayment = paymentAmount;
           
-          // Find pending debts for this patient and reduce them
-          for (let i = 0; i < doctorFinancial.debts.length && remainingPayment > 0; i++) {
-            const debt = doctorFinancial.debts[i];
+          for (let i = 0; i < ownerFinancial.debts.length && remainingPayment > 0; i++) {
+            const debt = ownerFinancial.debts[i];
             if (debt.patientId && debt.patientId.toString() === patientId.toString() && debt.status === 'pending') {
               if (remainingPayment >= debt.amount) {
-                // Full payment of this debt
                 remainingPayment -= debt.amount;
                 debt.amount = 0;
                 debt.status = 'paid';
                 console.log(`✅ Debt fully paid: ${debt.description}`);
               } else {
-                // Partial payment
                 debt.amount -= remainingPayment;
                 console.log(`✅ Debt partially paid: ${debt.description}, remaining: ${debt.amount}`);
                 remainingPayment = 0;
@@ -519,9 +675,33 @@ router.post('/:recordId/followup', async (req, res) => {
             }
           }
           
-          // Remove fully paid debts
-          doctorFinancial.debts = doctorFinancial.debts.filter(d => d.status !== 'paid' || d.amount > 0);
-          await doctorFinancial.save();
+          ownerFinancial.debts = ownerFinancial.debts.filter(d => d.status !== 'paid' || d.amount > 0);
+        }
+        
+        await ownerFinancial.save();
+        console.log('✅ Follow-up payment added to clinic owner income:', paymentAmount);
+        
+        // 3. Also check doctor's own financial for old debts (backwards compatibility)
+        if (financialOwnerId.toString() !== doctorId.toString()) {
+          let doctorFinancial = await Financial.findOne({ doctorId: doctorId });
+          if (doctorFinancial && doctorFinancial.debts && doctorFinancial.debts.length > 0) {
+            let remainingPayment = paymentAmount;
+            for (let i = 0; i < doctorFinancial.debts.length && remainingPayment > 0; i++) {
+              const debt = doctorFinancial.debts[i];
+              if (debt.patientId && debt.patientId.toString() === patientId.toString() && debt.status === 'pending') {
+                if (remainingPayment >= debt.amount) {
+                  remainingPayment -= debt.amount;
+                  debt.amount = 0;
+                  debt.status = 'paid';
+                } else {
+                  debt.amount -= remainingPayment;
+                  remainingPayment = 0;
+                }
+              }
+            }
+            doctorFinancial.debts = doctorFinancial.debts.filter(d => d.status !== 'paid' || d.amount > 0);
+            await doctorFinancial.save();
+          }
         }
         
       } catch (financialErr) {
@@ -529,63 +709,111 @@ router.post('/:recordId/followup', async (req, res) => {
       }
     }
 
-    // Handle treatment cost - add to patient's debt (stored in doctor's financial record)
+    // Handle treatment cost - add to patient's debt (stored in clinic owner's financial record)
     const treatmentCost = followUpData.treatmentCost ? parseFloat(followUpData.treatmentCost) : 0;
     if (treatmentCost > 0 && !isNaN(treatmentCost) && isFinite(treatmentCost)) {
       try {
         const doctorId = followUpData.doctor || parentRecord.doctor;
         const patientId = parentRecord.patient;
         
-        let doctorFinancial = await Financial.findOne({ doctorId: doctorId });
-        if (!doctorFinancial) {
-          doctorFinancial = new Financial({ doctorId: doctorId, transactions: [], expenses: [], debts: [] });
+        const User = require('../models/User');
+        const Clinic = require('../models/Clinic');
+        
+        // Get doctor info for the description
+        const doctorUser = await User.findById(doctorId);
+        const doctorName = doctorUser?.fullName || 'طبيب';
+        
+        // Find the clinic this doctor belongs to
+        let clinic = null;
+        if (doctorUser?.clinicId) {
+          clinic = await Clinic.findById(doctorUser.clinicId);
+        }
+        if (!clinic) {
+          clinic = await Clinic.findOne({
+            $or: [
+              { ownerId: doctorId },
+              { 'doctors.doctorId': doctorId, 'doctors.status': 'active' }
+            ]
+          });
         }
         
-        // Generate description based on dental treatment
+        // Save debt to clinic owner's financial record
+        const financialOwnerId = clinic ? clinic.ownerId : doctorId;
+        
+        let ownerFinancial = await Financial.findOne({ doctorId: financialOwnerId });
+        if (!ownerFinancial) {
+          ownerFinancial = new Financial({ doctorId: financialOwnerId, transactions: [], expenses: [], debts: [] });
+        }
+        
+        // Generate description based on dental treatment - include doctor name
         const teethInfo = followUpData.selectedTeeth?.length ? 
           ` (${followUpData.selectedTeeth.map(t => t.toothName || t.name).join(', ')})` : '';
         
-        doctorFinancial.debts.push({
+        ownerFinancial.debts.push({
           patientId: patientId,
           amount: treatmentCost,
-          description: `${followUpData.dentalTreatment || 'Treatment'} - Follow-up Visit #${savedFollowUp.visitNumber}${teethInfo}`,
+          description: `${followUpData.dentalTreatment || 'Treatment'} - Follow-up Visit #${savedFollowUp.visitNumber}${teethInfo} (د. ${doctorName})`,
           date: new Date(),
           status: 'pending'
         });
         
-        await doctorFinancial.save();
-        console.log('✅ Follow-up treatment cost added as patient debt:', treatmentCost);
+        await ownerFinancial.save();
+        console.log(`✅ Follow-up treatment cost added as patient debt on clinic owner ${financialOwnerId}:`, treatmentCost);
       } catch (debtErr) {
         console.error('Error adding follow-up treatment cost as debt:', debtErr);
       }
     }
     
-    // Handle PT cost - add to patient's debt (stored in doctor's financial record)
+    // Handle PT cost - add to patient's debt (stored in clinic owner's financial record)
     const ptCost = followUpData.ptCost ? parseFloat(followUpData.ptCost) : 0;
     if (ptCost > 0 && !isNaN(ptCost) && isFinite(ptCost)) {
       try {
         const doctorId = followUpData.doctor || parentRecord.doctor;
         const patientId = parentRecord.patient;
         
-        let doctorFinancial = await Financial.findOne({ doctorId: doctorId });
-        if (!doctorFinancial) {
-          doctorFinancial = new Financial({ doctorId: doctorId, transactions: [], expenses: [], debts: [] });
+        const User = require('../models/User');
+        const Clinic = require('../models/Clinic');
+        
+        // Get doctor info for the description
+        const doctorUser = await User.findById(doctorId);
+        const doctorName = doctorUser?.fullName || 'طبيب';
+        
+        // Find the clinic this doctor belongs to
+        let clinic = null;
+        if (doctorUser?.clinicId) {
+          clinic = await Clinic.findById(doctorUser.clinicId);
+        }
+        if (!clinic) {
+          clinic = await Clinic.findOne({
+            $or: [
+              { ownerId: doctorId },
+              { 'doctors.doctorId': doctorId, 'doctors.status': 'active' }
+            ]
+          });
         }
         
-        // Generate description based on PT treatment
+        // Save debt to clinic owner's financial record
+        const financialOwnerId = clinic ? clinic.ownerId : doctorId;
+        
+        let ownerFinancial = await Financial.findOne({ doctorId: financialOwnerId });
+        if (!ownerFinancial) {
+          ownerFinancial = new Financial({ doctorId: financialOwnerId, transactions: [], expenses: [], debts: [] });
+        }
+        
+        // Generate description based on PT treatment - include doctor name
         const muscleInfo = followUpData.selectedMuscles?.length ? 
           ` (${followUpData.selectedMuscles.map(m => m.muscleName || m.muscleNameAr).join(', ')})` : '';
         
-        doctorFinancial.debts.push({
+        ownerFinancial.debts.push({
           patientId: patientId,
           amount: ptCost,
-          description: `علاج طبيعي: ${followUpData.ptTreatment || 'Treatment'} - Follow-up Visit #${savedFollowUp.visitNumber}${muscleInfo}`,
+          description: `علاج طبيعي: ${followUpData.ptTreatment || 'Treatment'} - Follow-up Visit #${savedFollowUp.visitNumber}${muscleInfo} (د. ${doctorName})`,
           date: new Date(),
           status: 'pending'
         });
         
-        await doctorFinancial.save();
-        console.log('✅ Follow-up PT cost added as patient debt:', ptCost);
+        await ownerFinancial.save();
+        console.log(`✅ Follow-up PT cost added as patient debt on clinic owner ${financialOwnerId}:`, ptCost);
       } catch (debtErr) {
         console.error('Error adding follow-up PT cost as debt:', debtErr);
       }

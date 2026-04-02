@@ -12,6 +12,12 @@ const MedicalRecordSchema = new mongoose.Schema({
     ref: 'User',
     required: true
   },
+  // Clinic this record belongs to (for sharing within clinic)
+  clinicId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Clinic',
+    default: null
+  },
   date: {
     type: Date,
     required: true
@@ -203,5 +209,9 @@ const MedicalRecordSchema = new mongoose.Schema({
 }, {
   timestamps: true
 });
+
+// Indexes for clinic-wide queries
+MedicalRecordSchema.index({ clinicId: 1, patient: 1 });
+MedicalRecordSchema.index({ doctor: 1, patient: 1 });
 
 module.exports = mongoose.model('MedicalRecord', MedicalRecordSchema);

@@ -90,13 +90,14 @@ exports.getDashboardStats = async (req, res) => {
       { $group: { _id: null, total: { $sum: '$debt' } } }
     ]).catch(() => []);
 
-    // Also get debts from Financial model (clinic owner) for lab tests etc.
+    // Get debts from Financial model for clinic owner AND all doctors
     const clinicOwnerId = clinic.ownerId;
     let financialDebts = 0;
     try {
-      const financial = await Financial.findOne({ doctorId: clinicOwnerId });
-      if (financial) {
-        financialDebts = (financial.debts || [])
+      const allFinancialIds = [clinicOwnerId, ...doctorIds];
+      const allFinancials = await Financial.find({ doctorId: { $in: allFinancialIds } });
+      for (const fin of allFinancials) {
+        financialDebts += (fin.debts || [])
           .filter(d => d.status === 'pending')
           .reduce((sum, d) => sum + (d.amount || 0), 0);
       }
@@ -872,19 +873,29 @@ exports.getPatientReceipt = async (req, res) => {
     const patient = await User.findById(patientId, 'fullName mobileNumber idNumber');
     const totalPaid = items.reduce((sum, item) => sum + item.amount, 0);
 
-    // Get patient debt info
+    // Get patient debt info from clinic owner AND all clinic doctors
     const clinicOwnerId = clinic.ownerId;
-    const financial = await Financial.findOne({ doctorId: clinicOwnerId });
-    const patientDebts = (financial?.debts || []).filter(d =>
-      d.patientId?.toString() === patientId && d.status === 'pending'
-    );
+    const doctorIds = clinic.doctors.filter(d => d.status === 'active').map(d => d.doctorId);
+    const allFinancialIds = [clinicOwnerId, ...doctorIds];
+    const allFinancials = await Financial.find({ doctorId: { $in: allFinancialIds } });
+    
+    let patientDebts = [];
+    let patientTransactions = [];
+    for (const fin of allFinancials) {
+      const finDebts = (fin.debts || []).filter(d =>
+        d.patientId?.toString() === patientId && d.status === 'pending'
+      );
+      patientDebts = patientDebts.concat(finDebts);
+      
+      const finTransactions = (fin.transactions || [])
+        .filter(t => t.patientId?.toString() === patientId);
+      patientTransactions = patientTransactions.concat(finTransactions);
+    }
     const totalDebt = patientDebts.reduce((sum, d) => sum + (d.amount || 0), 0);
 
     // Get latest payments from transactions
-    const patientTransactions = (financial?.transactions || [])
-      .filter(t => t.patientId?.toString() === patientId)
-      .sort((a, b) => new Date(b.date) - new Date(a.date))
-      .slice(0, 20);
+    patientTransactions.sort((a, b) => new Date(b.date) - new Date(a.date));
+    patientTransactions = patientTransactions.slice(0, 20);
 
     for (const txn of patientTransactions) {
       // avoid duplicating appointment items already added
@@ -1538,6 +1549,7 @@ exports.insertPayment = async (req, res) => {
     financial.totalEarnings += Number(amount);
 
     // Reduce patient's pending debts with this payment
+    // First clear debts from clinic owner's record
     let remainingPayment = Number(amount);
     const patientDebts = financial.debts.filter(d => 
       d.patientId?.toString() === patientId && d.status === 'pending'
@@ -1559,6 +1571,38 @@ exports.insertPayment = async (req, res) => {
 
     financial.markModified('debts');
     await financial.save();
+
+    // If still remaining payment, also clear debts from individual doctors' Financial records
+    if (remainingPayment > 0) {
+      const doctorIdsForDebts = clinic.doctors?.filter(d => d.status === 'active').map(d => d.doctorId) || [];
+      const doctorFinancials = await Financial.find({ 
+        doctorId: { $in: doctorIdsForDebts },
+        'debts.patientId': patientId,
+        'debts.status': 'pending'
+      });
+      
+      for (const docFin of doctorFinancials) {
+        if (remainingPayment <= 0) break;
+        const docDebts = docFin.debts.filter(d =>
+          d.patientId?.toString() === patientId && d.status === 'pending'
+        );
+        docDebts.sort((a, b) => new Date(a.date) - new Date(b.date));
+        
+        for (const debt of docDebts) {
+          if (remainingPayment <= 0) break;
+          if (remainingPayment >= debt.amount) {
+            remainingPayment -= debt.amount;
+            debt.amount = 0;
+            debt.status = 'paid';
+          } else {
+            debt.amount -= remainingPayment;
+            remainingPayment = 0;
+          }
+        }
+        docFin.markModified('debts');
+        await docFin.save();
+      }
+    }
 
     // Mark unpaid appointments as paid for this patient
     const doctorIds = clinic.doctors?.filter(d => d.status === 'active').map(d => d.doctorId) || [];
@@ -1715,9 +1759,17 @@ exports.getPatientsWithDebt = async (req, res) => {
       }
     }
 
-    // Get financial data for debts (from clinic owner's Financial record)
-    const financial = await Financial.findOne({ doctorId: clinicOwnerId });
-    const debts = financial?.debts || [];
+    // Get financial data for debts from clinic owner AND all clinic doctors
+    const allFinancialIds = [clinicOwnerId, ...doctorIds];
+    const allFinancials = await Financial.find({ doctorId: { $in: allFinancialIds } });
+    
+    // Merge all debts from all financial records (clinic owner + all doctors)
+    let debts = [];
+    for (const fin of allFinancials) {
+      if (fin.debts && fin.debts.length > 0) {
+        debts = debts.concat(fin.debts);
+      }
+    }
 
     // Also get appointment-based debts from all clinic doctors
     const allDoctorIds = [...doctorIds];
@@ -1771,7 +1823,7 @@ exports.getFinancialData = async (req, res) => {
     const clinicOwnerId = clinic.ownerId;
     const doctorIds = clinic.doctors.filter(d => d.status === 'active').map(d => d.doctorId);
 
-    // Get Financial model data (expenses, debts, manual transactions)
+    // Get Financial model data (expenses, debts, manual transactions) from clinic owner
     let financial = await Financial.findOne({ doctorId: clinicOwnerId })
       .populate('expenses.employeeId', 'fullName')
       .populate('expenses.supplierId', 'name')
@@ -1779,6 +1831,21 @@ exports.getFinancialData = async (req, res) => {
 
     if (!financial) {
       financial = { transactions: [], expenses: [], debts: [], totalEarnings: 0, totalExpenses: 0 };
+    }
+
+    // Also get debts from all clinic doctors' Financial records
+    const doctorFinancials = await Financial.find({ 
+      doctorId: { $in: doctorIds },
+    }).populate('debts.patientId', 'fullName mobileNumber');
+    
+    // Merge debts from doctors into the main financial object
+    const financialObj = financial.toObject ? financial.toObject() : { ...financial };
+    for (const docFin of doctorFinancials) {
+      if (docFin.doctorId.toString() === clinicOwnerId.toString()) continue; // skip owner, already included
+      const docDebts = (docFin.debts || []).filter(d => d.status === 'pending');
+      if (docDebts.length > 0) {
+        financialObj.debts = [...(financialObj.debts || []), ...docDebts.map(d => d.toObject ? d.toObject() : d)];
+      }
     }
 
     // Calculate actual income from paid appointments (current month) across ALL clinic doctors
@@ -1815,8 +1882,9 @@ exports.getFinancialData = async (req, res) => {
 
     const totalMonthlyIncome = appointmentIncome + labIncome;
 
-    // Build response - augment financial with computed income
+    // Build response - augment financial with computed income and merged debts
     const financialData = financial.toObject ? financial.toObject() : { ...financial };
+    financialData.debts = financialObj.debts || []; // Use merged debts from all doctors
     financialData.totalEarnings = totalMonthlyIncome;
     financialData.totalExpenses = monthExpensesTotal;
     financialData.appointmentIncome = appointmentIncome;
