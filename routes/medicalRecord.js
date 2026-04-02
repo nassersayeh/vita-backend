@@ -252,6 +252,7 @@ router.post('/', async (req, res) => {
 
         ownerFinancial.debts.push({
           patientId: req.body.patient,
+          doctorId: req.body.doctor,
           amount: parseFloat(treatmentCost),
           description: debtDescription,
           date: new Date(),
@@ -751,6 +752,7 @@ router.post('/:recordId/followup', async (req, res) => {
         
         ownerFinancial.debts.push({
           patientId: patientId,
+          doctorId: doctorId,
           amount: treatmentCost,
           description: `${followUpData.dentalTreatment || 'Treatment'} - Follow-up Visit #${savedFollowUp.visitNumber}${teethInfo} (د. ${doctorName})`,
           date: new Date(),
@@ -806,6 +808,7 @@ router.post('/:recordId/followup', async (req, res) => {
         
         ownerFinancial.debts.push({
           patientId: patientId,
+          doctorId: doctorId,
           amount: ptCost,
           description: `علاج طبيعي: ${followUpData.ptTreatment || 'Treatment'} - Follow-up Visit #${savedFollowUp.visitNumber}${muscleInfo} (د. ${doctorName})`,
           date: new Date(),

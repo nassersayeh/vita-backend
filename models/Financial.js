@@ -42,6 +42,7 @@ const financialSchema = new mongoose.Schema({
   debts: [
     {
       patientId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      doctorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // Doctor who created the debt (for revenue split)
       orderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Order' },
       amount: { type: Number, required: true },
       description: { type: String, default: 'دين يدوي' },
