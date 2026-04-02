@@ -822,6 +822,58 @@ router.post('/:recordId/followup', async (req, res) => {
       }
     }
 
+    // Handle consultation fee - add to patient's debt (stored in clinic owner's financial record)
+    const consultationFee = followUpData.consultationFee ? parseFloat(followUpData.consultationFee) : 0;
+    if (consultationFee > 0 && !isNaN(consultationFee) && isFinite(consultationFee)) {
+      try {
+        const doctorId = followUpData.doctor || parentRecord.doctor;
+        const patientId = parentRecord.patient;
+        
+        const User = require('../models/User');
+        const Clinic = require('../models/Clinic');
+        
+        // Get doctor info for the description
+        const doctorUser = await User.findById(doctorId);
+        const doctorName = doctorUser?.fullName || 'طبيب';
+        
+        // Find the clinic this doctor belongs to
+        let clinic = null;
+        if (doctorUser?.clinicId) {
+          clinic = await Clinic.findById(doctorUser.clinicId);
+        }
+        if (!clinic) {
+          clinic = await Clinic.findOne({
+            $or: [
+              { ownerId: doctorId },
+              { 'doctors.doctorId': doctorId, 'doctors.status': 'active' }
+            ]
+          });
+        }
+        
+        // Save debt to clinic owner's financial record
+        const financialOwnerId = clinic ? clinic.ownerId : doctorId;
+        
+        let ownerFinancial = await Financial.findOne({ doctorId: financialOwnerId });
+        if (!ownerFinancial) {
+          ownerFinancial = new Financial({ doctorId: financialOwnerId, transactions: [], expenses: [], debts: [] });
+        }
+        
+        ownerFinancial.debts.push({
+          patientId: patientId,
+          doctorId: doctorId,
+          amount: consultationFee,
+          description: `قيمة كشف - متابعة زيارة #${savedFollowUp.visitNumber} (د. ${doctorName})`,
+          date: new Date(),
+          status: 'pending'
+        });
+        
+        await ownerFinancial.save();
+        console.log(`✅ Follow-up consultation fee added as patient debt on clinic owner ${financialOwnerId}:`, consultationFee);
+      } catch (debtErr) {
+        console.error('Error adding follow-up consultation fee as debt:', debtErr);
+      }
+    }
+
     // Update the parent/root record's follow-up date to the new follow-up date
     // This keeps the main record's next follow-up date in sync
     if (followUpData.followUpDate) {
@@ -947,17 +999,47 @@ router.post('/:recordId/followup', async (req, res) => {
       .populate('patient', 'fullName mobileNumber')
       .populate('followUpAppointment');
 
-    // Calculate total remaining debt for the patient with this doctor
+    // Calculate total remaining debt for the patient (from clinic owner's financial)
     let totalPatientDebt = 0;
     try {
       const doctorId = followUpData.doctor || parentRecord.doctor;
       const patientId = parentRecord.patient;
       
-      const doctorFinancial = await Financial.findOne({ doctorId: doctorId });
-      if (doctorFinancial && doctorFinancial.debts) {
-        totalPatientDebt = doctorFinancial.debts
+      const User = require('../models/User');
+      const Clinic = require('../models/Clinic');
+      
+      // Find the clinic this doctor belongs to
+      const doctorUser = await User.findById(doctorId);
+      let clinic = null;
+      if (doctorUser?.clinicId) {
+        clinic = await Clinic.findById(doctorUser.clinicId);
+      }
+      if (!clinic) {
+        clinic = await Clinic.findOne({
+          $or: [
+            { ownerId: doctorId },
+            { 'doctors.doctorId': doctorId, 'doctors.status': 'active' }
+          ]
+        });
+      }
+      const financialOwnerId = clinic ? clinic.ownerId : doctorId;
+      
+      // Check clinic owner's financial for debts
+      const ownerFinancial = await Financial.findOne({ doctorId: financialOwnerId });
+      if (ownerFinancial && ownerFinancial.debts) {
+        totalPatientDebt += ownerFinancial.debts
           .filter(d => d.patientId && d.patientId.toString() === patientId.toString() && d.status === 'pending')
           .reduce((sum, d) => sum + (d.amount || 0), 0);
+      }
+      
+      // Also check doctor's own financial for old debts (backwards compatibility)
+      if (financialOwnerId.toString() !== doctorId.toString()) {
+        const doctorFinancial = await Financial.findOne({ doctorId: doctorId });
+        if (doctorFinancial && doctorFinancial.debts) {
+          totalPatientDebt += doctorFinancial.debts
+            .filter(d => d.patientId && d.patientId.toString() === patientId.toString() && d.status === 'pending')
+            .reduce((sum, d) => sum + (d.amount || 0), 0);
+        }
       }
     } catch (debtCalcErr) {
       console.error('Error calculating total patient debt:', debtCalcErr);
