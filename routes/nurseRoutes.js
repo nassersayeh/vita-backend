@@ -20,6 +20,7 @@ router.get('/stats', nurseController.getDashboardStats);
 
 // Patients
 router.get('/patients', nurseController.getPatients);
+router.get('/patients/:patientId/details', nurseController.getPatientDetails);
 
 // Clinic doctors
 router.get('/doctors', nurseController.getClinicDoctors);

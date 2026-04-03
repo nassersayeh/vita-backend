@@ -233,7 +233,31 @@ exports.registerPatient = async (req, res) => {
     }
 
     if (patient) {
-      // Patient exists, just add to doctor(s) if needed
+      // Patient exists — update medical history fields if provided
+      const medicalFields = {
+        maritalStatus, emergencyContactName, emergencyContactRelation, emergencyPhone,
+        hasChronicDiseases, chronicDiseasesText, hasSurgeries, surgeriesText,
+        hasFamilyDiseases, familyDiseasesText, hasDrugAllergies, drugAllergiesText,
+        hasFoodAllergies, foodAllergiesText, bloodPressure, heartRate, temperature, bloodSugar,
+        smoking, previousDiseases, disabilities
+      };
+      // Only update fields that are explicitly provided (not undefined)
+      const updates = {};
+      for (const [key, value] of Object.entries(medicalFields)) {
+        if (value !== undefined && value !== null) {
+          updates[key] = value;
+        }
+      }
+      if (height) updates.height = Number(height);
+      if (weight) updates.weight = Number(weight);
+      if (birthdate) updates.birthdate = birthdate;
+      if (sex) updates.sex = sex;
+      if (address) updates.address = address;
+      if (Object.keys(updates).length > 0) {
+        await User.findByIdAndUpdate(patient._id, { $set: updates });
+      }
+
+      // Add to doctor(s) if needed
       if (doctorId) {
         const doctor = await User.findById(doctorId);
         if (doctor && !doctor.patients.includes(patient._id)) {
