@@ -22,6 +22,8 @@ router.get('/stats', accountantController.getDashboardStats);
 router.get('/patients', accountantController.getPatients);
 router.post('/patients', accountantController.registerPatient);
 router.get('/patients/search', accountantController.searchPatient);
+router.get('/patients/network-search', accountantController.searchNetworkPatient);
+router.post('/patients/add-to-clinic', accountantController.addPatientToClinic);
 
 // Doctors
 router.get('/doctors', accountantController.getClinicDoctors);
@@ -89,6 +91,7 @@ router.get('/staff', accountantController.getStaffList);
 
 // Invoices
 router.post('/invoices', accountantController.createInvoice);
+router.get('/invoices', accountantController.getInvoices);
 
 // Doctor clinic percentages
 router.get('/doctors/percentages', accountantController.getDoctorsWithPercentages);

@@ -4,6 +4,8 @@ const LabRequest = require('../models/LabRequest');
 const MedicalTest = require('../models/MedicalTest');
 const Points = require('../models/Points');
 const User = require('../models/User');
+const Financial = require('../models/Financial');
+const Clinic = require('../models/Clinic');
 const multer = require('multer');
 const path = require('path');
 
@@ -88,7 +90,57 @@ router.post('/', async (req, res) => {
     });
 
     await labRequest.save();
-    
+
+    // Add lab test cost as DEBT to the patient
+    if (totalCost > 0) {
+      try {
+        const testNames = tests.map(t => t.name).join(', ');
+        
+        if (isClinicManaged && doctorClinicId) {
+          // Clinic-managed: add debt to clinic owner's financial
+          const clinic = await Clinic.findById(doctorClinicId);
+          if (clinic) {
+            const clinicOwnerId = clinic.ownerId;
+            let financial = await Financial.findOne({ doctorId: clinicOwnerId });
+            if (!financial) {
+              financial = new Financial({ doctorId: clinicOwnerId, totalEarnings: 0, totalExpenses: 0 });
+            }
+            financial.debts.push({
+              patientId,
+              doctorId,
+              amount: totalCost,
+              originalAmount: totalCost,
+              description: `فحوصات مخبرية - ${testNames}`,
+              date: new Date(),
+              status: 'pending'
+            });
+            await financial.save();
+            console.log(`Added lab test debt of ${totalCost} ILS for patient ${patientId} (clinic-managed)`);
+          }
+        } else {
+          // Independent doctor: add debt to doctor's own financial
+          let financial = await Financial.findOne({ doctorId });
+          if (!financial) {
+            financial = new Financial({ doctorId, totalEarnings: 0, totalExpenses: 0 });
+          }
+          financial.debts.push({
+            patientId,
+            doctorId,
+            amount: totalCost,
+            originalAmount: totalCost,
+            description: `فحوصات مخبرية - ${testNames}`,
+            date: new Date(),
+            status: 'pending'
+          });
+          await financial.save();
+          console.log(`Added lab test debt of ${totalCost} ILS for patient ${patientId} (independent doctor)`);
+        }
+      } catch (debtErr) {
+        console.error('Error adding lab test debt:', debtErr);
+        // Don't fail the request if debt recording fails
+      }
+    }
+
     // Award 10 points to patient for requesting a lab test
     try {
       let userPoints = await Points.findOne({ userId: patientId });

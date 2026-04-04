@@ -637,6 +637,31 @@ exports.requestLabTest = async (req, res) => {
 
     await labRequest.save();
 
+    // Add lab test cost as DEBT to the patient in CLINIC OWNER's Financial
+    if (totalCost > 0) {
+      try {
+        const clinicOwnerId = clinic.ownerId;
+        let financial = await Financial.findOne({ doctorId: clinicOwnerId });
+        if (!financial) {
+          financial = new Financial({ doctorId: clinicOwnerId, totalEarnings: 0, totalExpenses: 0 });
+        }
+        const testNames = tests.map(t => t.name).join(', ');
+        financial.debts.push({
+          patientId,
+          doctorId: doctorId || clinic.doctors[0]?.doctorId,
+          amount: totalCost,
+          originalAmount: totalCost,
+          description: `فحوصات مخبرية - ${testNames}`,
+          date: new Date(),
+          status: 'pending'
+        });
+        await financial.save();
+        console.log(`Accountant added lab test debt of ${totalCost} ILS for patient ${patientId}`);
+      } catch (debtErr) {
+        console.error('Error adding lab test debt from accountant:', debtErr);
+      }
+    }
+
     res.status(201).json({
       success: true,
       message: 'تم طلب الفحوصات بنجاح',
@@ -1088,6 +1113,131 @@ exports.searchPatient = async (req, res) => {
   } catch (error) {
     console.error('Error searching patients:', error);
     res.status(500).json({ message: 'فشل في البحث', error: error.message });
+  }
+};
+
+// Search patient in the entire network by mobile number
+exports.searchNetworkPatient = async (req, res) => {
+  try {
+    const accountantId = req.user._id;
+    const clinic = await getClinicForAccountant(accountantId);
+    if (!clinic) {
+      return res.status(404).json({ message: 'لم يتم العثور على عيادة مرتبطة بحسابك' });
+    }
+
+    const { mobileNumber } = req.query;
+    if (!mobileNumber || mobileNumber.trim().length < 3) {
+      return res.status(400).json({ message: 'يرجى إدخال رقم جوال صحيح' });
+    }
+
+    // Search in all Users (patients)
+    const patient = await User.findOne({
+      role: 'User',
+      mobileNumber: { $regex: mobileNumber.trim(), $options: 'i' }
+    }).select('-password -resetCode -twoFactorCode -phoneVerificationCode -twoFactorCodeExpiration -phoneVerificationCodeExpiration -resetCodeExpiration');
+
+    if (!patient) {
+      return res.status(404).json({ success: false, message: 'لم يتم العثور على مريض بهذا الرقم' });
+    }
+
+    // Check if patient is already in this clinic
+    const doctorIds = clinic.doctors.filter(d => d.status === 'active').map(d => d.doctorId);
+    const clinicDoctors = await User.find({ _id: { $in: doctorIds } }).select('patients fullName specialty');
+    const isInClinic = clinicDoctors.some(doc => (doc.patients || []).some(p => p.toString() === patient._id.toString()));
+
+    // Get all medical records for this patient (from ALL doctors, not just clinic)
+    const allRecords = await MedicalRecord.find({ patient: patient._id })
+      .populate('doctor', 'fullName specialty')
+      .sort({ createdAt: -1 })
+      .limit(50);
+
+    // Get lab requests
+    const labRequests = await LabRequest.find({ patientId: patient._id })
+      .populate('testIds', 'name price')
+      .populate('doctorId', 'fullName specialty')
+      .sort({ createdAt: -1 })
+      .limit(30);
+
+    // Get appointments history
+    const appointments = await Appointment.find({ patient: patient._id })
+      .populate('doctorId', 'fullName specialty')
+      .sort({ appointmentDateTime: -1 })
+      .limit(30);
+
+    res.status(200).json({
+      success: true,
+      patient: patient.toObject(),
+      isInClinic,
+      medicalRecords: allRecords,
+      labRequests,
+      appointments,
+      stats: {
+        totalRecords: allRecords.length,
+        totalLabRequests: labRequests.length,
+        totalAppointments: appointments.length,
+      }
+    });
+  } catch (error) {
+    console.error('Error searching network patient:', error);
+    res.status(500).json({ message: 'فشل في البحث في الشبكة', error: error.message });
+  }
+};
+
+// Add a patient from the network to the clinic
+exports.addPatientToClinic = async (req, res) => {
+  try {
+    const accountantId = req.user._id;
+    const clinic = await getClinicForAccountant(accountantId);
+    if (!clinic) {
+      return res.status(404).json({ message: 'لم يتم العثور على عيادة مرتبطة بحسابك' });
+    }
+
+    const { patientId, doctorId } = req.body;
+    if (!patientId) {
+      return res.status(400).json({ message: 'يرجى تحديد المريض' });
+    }
+
+    const patient = await User.findById(patientId);
+    if (!patient || patient.role !== 'User') {
+      return res.status(404).json({ message: 'المريض غير موجود' });
+    }
+
+    const activeDoctorIds = clinic.doctors.filter(d => d.status === 'active').map(d => d.doctorId);
+
+    if (doctorId) {
+      // Add to specific doctor
+      if (!activeDoctorIds.some(id => id.toString() === doctorId)) {
+        return res.status(403).json({ message: 'الطبيب غير موجود في هذه العيادة' });
+      }
+      const doctor = await User.findById(doctorId);
+      if (doctor && !doctor.patients.includes(patient._id)) {
+        doctor.patients.push(patient._id);
+        await doctor.save({ validateBeforeSave: false });
+      }
+    } else {
+      // Add to all active clinic doctors
+      for (const docId of activeDoctorIds) {
+        const doc = await User.findById(docId);
+        if (doc && !doc.patients.includes(patient._id)) {
+          doc.patients.push(patient._id);
+          await doc.save({ validateBeforeSave: false });
+        }
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'تم إضافة المريض إلى العيادة بنجاح',
+      patient: {
+        _id: patient._id,
+        fullName: patient.fullName,
+        mobileNumber: patient.mobileNumber,
+        idNumber: patient.idNumber
+      }
+    });
+  } catch (error) {
+    console.error('Error adding patient to clinic:', error);
+    res.status(500).json({ message: 'فشل في إضافة المريض', error: error.message });
   }
 };
 
@@ -1692,11 +1842,12 @@ exports.insertPayment = async (req, res) => {
       return res.status(404).json({ message: 'لم يتم العثور على عيادة مرتبطة بحسابك' });
     }
 
-    const { patientId, amount, description, paymentMethod, date } = req.body;
+    const { patientId, amount, description, paymentMethod, date, discount } = req.body;
     if (!patientId || !amount) {
       return res.status(400).json({ message: 'المريض والمبلغ مطلوبان' });
     }
 
+    const discountAmount = Number(discount) || 0;
     const clinicOwnerId = clinic.ownerId;
     let financial = await Financial.findOne({ doctorId: clinicOwnerId });
     if (!financial) {
@@ -1709,9 +1860,31 @@ exports.insertPayment = async (req, res) => {
       description: description || 'دفعة من مريض',
       date: date ? new Date(date) : new Date(),
       patientId,
-      paymentMethod: paymentMethod || 'Cash'
+      paymentMethod: paymentMethod || 'Cash',
+      discount: discountAmount
     });
     financial.totalEarnings += Number(amount);
+
+    // If there's a discount, reduce debts by the discount amount too
+    if (discountAmount > 0) {
+      let discountPool = discountAmount;
+      const discountDebts = financial.debts.filter(d => 
+        d.patientId?.toString() === patientId && d.status === 'pending'
+      ).sort((a, b) => new Date(a.date) - new Date(b.date));
+      for (const debt of discountDebts) {
+        if (discountPool <= 0) break;
+        if (!debt.originalAmount) debt.originalAmount = debt.amount;
+        if (discountPool >= debt.amount) {
+          discountPool -= debt.amount;
+          debt.amount = 0;
+          debt.status = 'paid';
+          debt.paidAt = new Date();
+        } else {
+          debt.amount -= discountPool;
+          discountPool = 0;
+        }
+      }
+    }
 
     // Reduce patient's pending debts with this payment
     // First clear debts from clinic owner's record
@@ -1955,6 +2128,7 @@ exports.insertPayment = async (req, res) => {
         patientPhone: patient?.mobileNumber || '',
         clinicName: clinic.name || 'العيادة',
         amount: Number(amount),
+        discount: discountAmount,
         paymentMethod: paymentMethod || 'Cash',
         description: description || 'دفعة من مريض',
         remainingDebt,
@@ -3216,5 +3390,90 @@ exports.updateMedicalRecord = async (req, res) => {
   } catch (error) {
     console.error('Error updating medical record:', error);
     res.status(500).json({ message: 'فشل في تعديل السجل الطبي', error: error.message });
+  }
+};
+
+// Get all invoices/payments for the clinic (الفواتير)
+exports.getInvoices = async (req, res) => {
+  try {
+    const accountantId = req.user._id;
+    const clinic = await getClinicForAccountant(accountantId);
+    if (!clinic) {
+      return res.status(404).json({ message: 'لم يتم العثور على عيادة مرتبطة بحسابك' });
+    }
+
+    const clinicOwnerId = clinic.ownerId;
+    const financial = await Financial.findOne({ doctorId: clinicOwnerId });
+    if (!financial) {
+      return res.status(200).json({ success: true, invoices: [] });
+    }
+
+    // Get all transactions (payments)
+    const transactions = financial.transactions || [];
+    if (transactions.length === 0) {
+      return res.status(200).json({ success: true, invoices: [] });
+    }
+
+    // Get unique patient IDs from transactions
+    const patientIds = [...new Set(transactions.filter(t => t.patientId).map(t => t.patientId.toString()))];
+    const patients = await User.find({ _id: { $in: patientIds } }).select('fullName mobileNumber idNumber');
+    const patientMap = {};
+    patients.forEach(p => { patientMap[p._id.toString()] = p; });
+
+    // Get unique appointment IDs
+    const appointmentIds = [...new Set(transactions.filter(t => t.appointmentId).map(t => t.appointmentId.toString()))];
+    const appointments = appointmentIds.length > 0 
+      ? await Appointment.find({ _id: { $in: appointmentIds } }).populate('doctorId', 'fullName specialty')
+      : [];
+    const appointmentMap = {};
+    appointments.forEach(a => { appointmentMap[a._id.toString()] = a; });
+
+    // Get doctor IDs from clinic
+    const doctorIds = clinic.doctors.filter(d => d.status === 'active').map(d => d.doctorId);
+    const doctorsData = await User.find({ _id: { $in: doctorIds } }).select('fullName specialty');
+    const doctorMap = {};
+    doctorsData.forEach(d => { doctorMap[d._id.toString()] = d; });
+
+    // Build invoices list sorted by date descending
+    const invoices = transactions
+      .map(t => {
+        const patient = t.patientId ? patientMap[t.patientId.toString()] : null;
+        const appointment = t.appointmentId ? appointmentMap[t.appointmentId.toString()] : null;
+        const doctor = appointment?.doctorId || null;
+
+        return {
+          _id: t._id,
+          amount: t.amount,
+          discount: t.discount || 0,
+          description: t.description,
+          date: t.date,
+          paymentMethod: t.paymentMethod,
+          patient: patient ? {
+            _id: patient._id,
+            fullName: patient.fullName,
+            mobileNumber: patient.mobileNumber,
+            idNumber: patient.idNumber
+          } : null,
+          doctor: doctor ? {
+            _id: doctor._id,
+            fullName: doctor.fullName,
+            specialty: doctor.specialty
+          } : null,
+          appointmentId: t.appointmentId || null,
+          invoiceNo: t._id.toString().slice(-8).toUpperCase()
+        };
+      })
+      .sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    res.status(200).json({
+      success: true,
+      invoices,
+      totalAmount: invoices.reduce((sum, inv) => sum + (inv.amount || 0), 0),
+      totalDiscount: invoices.reduce((sum, inv) => sum + (inv.discount || 0), 0),
+      totalCount: invoices.length
+    });
+  } catch (error) {
+    console.error('Error getting invoices:', error);
+    res.status(500).json({ message: 'فشل في جلب الفواتير', error: error.message });
   }
 };

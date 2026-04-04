@@ -17,7 +17,7 @@ const MedicalTest = require('../models/MedicalTest');
 const LabTestPricing = require('../models/LabTestPricing');
 const User = require('../models/User');
 
-const MONGO_URI = 'mongodb+srv://nassersayeh:pop1990@cluster0.vefyn0g.mongodb.net/?appName=Cluster0';
+const MONGO_URI = process.env.MONGODB_URI || 'mongodb+srv://vita:pop1990@cluster0.nj5pcz0.mongodb.net';
 const XLS_PATH = path.join(__dirname, '../../vita-web/src/utils/تسعيرة النقابة 2018.xls');
 
 // Categorize tests based on their name

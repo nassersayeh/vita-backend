@@ -14,6 +14,8 @@ const financialSchema = new mongoose.Schema({
       appointmentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Appointment' },
       orderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Order' },
       paymentMethod: { type: String, enum: ['Cash', 'Card', 'Visa', 'Insurance', 'BankTransfer'], required: true },
+      // Discount applied to this payment
+      discount: { type: Number, default: 0 },
       // Audit: who last edited this transaction
       lastEditedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
       lastEditedAt: { type: Date, default: null },
