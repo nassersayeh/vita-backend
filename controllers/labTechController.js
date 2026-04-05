@@ -45,6 +45,37 @@ exports.getDashboardStats = async (req, res) => {
 
     const testCount = await MedicalTest.countDocuments({ isActive: true });
 
+    // Revenue calculations from completed lab requests
+    const [monthlyRevenueResult, totalRevenueResult, paidMonthlyResult, paidTotalResult] = await Promise.all([
+      // Monthly revenue (completed this month)
+      LabRequest.aggregate([
+        { $match: { ...queryFilter, status: 'completed', completedDate: { $gte: monthStart } } },
+        { $group: { _id: null, total: { $sum: '$totalCost' }, count: { $sum: 1 } } }
+      ]),
+      // Total revenue (all completed)
+      LabRequest.aggregate([
+        { $match: { ...queryFilter, status: 'completed' } },
+        { $group: { _id: null, total: { $sum: '$totalCost' }, count: { $sum: 1 } } }
+      ]),
+      // Monthly paid amount
+      LabRequest.aggregate([
+        { $match: { ...queryFilter, status: 'completed', isPaid: true, completedDate: { $gte: monthStart } } },
+        { $group: { _id: null, total: { $sum: '$paidAmount' } } }
+      ]),
+      // Total paid amount
+      LabRequest.aggregate([
+        { $match: { ...queryFilter, status: 'completed', isPaid: true } },
+        { $group: { _id: null, total: { $sum: '$paidAmount' } } }
+      ]),
+    ]);
+
+    const monthlyRevenue = monthlyRevenueResult[0]?.total || 0;
+    const totalRevenue = totalRevenueResult[0]?.total || 0;
+    const monthlyPaid = paidMonthlyResult[0]?.total || 0;
+    const totalPaid = paidTotalResult[0]?.total || 0;
+    const monthlyUnpaid = monthlyRevenue - monthlyPaid;
+    const totalUnpaid = totalRevenue - totalPaid;
+
     res.status(200).json({
       success: true,
       stats: {
@@ -53,7 +84,14 @@ exports.getDashboardStats = async (req, res) => {
         completedRequests: completedThisMonth,
         todayRequests,
         totalTests: testCount,
-        clinicName: clinic?.name || ''
+        clinicName: clinic?.name || '',
+        // Revenue data
+        monthlyRevenue,
+        totalRevenue,
+        monthlyPaid,
+        totalPaid,
+        monthlyUnpaid,
+        totalUnpaid,
       }
     });
   } catch (error) {
