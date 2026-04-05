@@ -2871,6 +2871,38 @@ exports.setDoctorClinicPercentage = async (req, res) => {
   }
 };
 
+// Set lab clinic percentage
+exports.setLabPercentage = async (req, res) => {
+  try {
+    const accountantId = req.user._id;
+    const { labPercentage } = req.body;
+    const clinic = await getClinicForAccountant(accountantId);
+    if (!clinic) return res.status(404).json({ message: 'لم يتم العثور على عيادة' });
+
+    if (labPercentage === undefined || labPercentage === null) {
+      return res.status(400).json({ message: 'يجب تحديد نسبة المختبر' });
+    }
+    const percentage = Number(labPercentage);
+    if (isNaN(percentage) || percentage < 0 || percentage > 100) {
+      return res.status(400).json({ message: 'النسبة يجب أن تكون بين 0 و 100' });
+    }
+
+    if (!clinic.settings) clinic.settings = {};
+    clinic.settings.labPercentage = percentage;
+    clinic.markModified('settings');
+    await clinic.save();
+
+    res.status(200).json({
+      success: true,
+      message: `تم تحديد نسبة العيادة من المختبر ${percentage}%`,
+      labPercentage: percentage
+    });
+  } catch (error) {
+    console.error('Error setting lab percentage:', error);
+    res.status(500).json({ message: 'فشل في تحديد نسبة المختبر', error: error.message });
+  }
+};
+
 // Get doctors with their clinic percentages
 exports.getDoctorsWithPercentages = async (req, res) => {
   try {
@@ -2895,7 +2927,11 @@ exports.getDoctorsWithPercentages = async (req, res) => {
       };
     });
 
-    res.status(200).json({ success: true, doctors: doctorsWithPercentages });
+    res.status(200).json({ 
+      success: true, 
+      doctors: doctorsWithPercentages,
+      labPercentage: clinic.settings?.labPercentage || 0
+    });
   } catch (error) {
     console.error('Error fetching doctors with percentages:', error);
     res.status(500).json({ message: 'فشل في جلب بيانات الأطباء', error: error.message });
@@ -3046,6 +3082,45 @@ exports.getDoctorAccountsReport = async (req, res) => {
       });
     }
 
+    // Lab Revenue Calculation
+    const labPercentage = clinic.settings?.labPercentage || 0;
+    const completedLabRequests = await LabRequest.find({
+      clinicId: clinic._id,
+      status: 'completed',
+      completedDate: { $gte: startDate, $lte: endDate }
+    }).populate('patientId', 'fullName mobileNumber').populate('testIds', 'name price');
+
+    const labTotalRevenue = completedLabRequests.reduce((sum, lr) => sum + (lr.totalCost || 0), 0);
+    const labClinicShare = Math.round(labTotalRevenue * labPercentage / 100 * 100) / 100;
+    const labNetRevenue = Math.round((labTotalRevenue - labClinicShare) * 100) / 100;
+    const labPaidCount = completedLabRequests.filter(lr => lr.isPaid).length;
+    const labPaidAmount = completedLabRequests.filter(lr => lr.isPaid).reduce((sum, lr) => sum + (lr.paidAmount || lr.totalCost || 0), 0);
+    const labUnpaidAmount = labTotalRevenue - labPaidAmount;
+
+    const labReport = {
+      labPercentage,
+      totalRequests: completedLabRequests.length,
+      totalRevenue: labTotalRevenue,
+      clinicShare: labClinicShare,
+      labNetRevenue,
+      paidCount: labPaidCount,
+      unpaidCount: completedLabRequests.length - labPaidCount,
+      paidAmount: Math.round(labPaidAmount * 100) / 100,
+      unpaidAmount: Math.round(labUnpaidAmount * 100) / 100,
+      requests: completedLabRequests.map(lr => ({
+        _id: lr._id,
+        date: lr.completedDate || lr.createdAt,
+        patientName: lr.patientId?.fullName || 'غير معروف',
+        patientMobile: lr.patientId?.mobileNumber || '',
+        tests: (lr.testIds || []).map(t => t.name).join(', '),
+        totalCost: lr.totalCost || 0,
+        clinicShare: Math.round((lr.totalCost || 0) * labPercentage / 100 * 100) / 100,
+        labShare: Math.round((lr.totalCost || 0) * (100 - labPercentage) / 100 * 100) / 100,
+        isPaid: lr.isPaid || false,
+        paidAmount: lr.paidAmount || 0
+      }))
+    };
+
     // Summary
     const totalAllFees = report.reduce((sum, r) => sum + r.totalFees, 0);
     const totalAllClinicShare = report.reduce((sum, r) => sum + r.totalClinicShare, 0);
@@ -3056,12 +3131,16 @@ exports.getDoctorAccountsReport = async (req, res) => {
     res.status(200).json({
       success: true,
       report,
+      labReport,
       summary: {
         totalFees: totalAllFees,
-        totalClinicShare: Math.round(totalAllClinicShare * 100) / 100,
+        totalClinicShare: Math.round((totalAllClinicShare + labClinicShare) * 100) / 100,
         totalDoctorShare: Math.round(totalAllDoctorShare * 100) / 100,
         totalPaidToDoctors: Math.round(totalAllPaid * 100) / 100,
         totalRemainingForDoctors: Math.round(totalAllRemaining * 100) / 100,
+        labTotalRevenue,
+        labClinicShare,
+        labNetRevenue,
         month: filterMonth,
         year: filterYear
       }

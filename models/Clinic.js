@@ -122,7 +122,8 @@ const ClinicSchema = new mongoose.Schema({
     allowDoctorFinancialView: { type: Boolean, default: true },
     allowDoctorPatientView: { type: Boolean, default: true },
     allowDoctorScheduleEdit: { type: Boolean, default: true },
-    autoApproveAppointments: { type: Boolean, default: false }
+    autoApproveAppointments: { type: Boolean, default: false },
+    labPercentage: { type: Number, default: 0, min: 0, max: 100 }
   },
   
   // Status

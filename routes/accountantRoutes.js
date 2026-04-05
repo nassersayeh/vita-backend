@@ -97,6 +97,9 @@ router.get('/invoices', accountantController.getInvoices);
 router.get('/doctors/percentages', accountantController.getDoctorsWithPercentages);
 router.put('/doctors/:doctorId/percentage', accountantController.setDoctorClinicPercentage);
 
+// Lab percentage
+router.put('/lab/percentage', accountantController.setLabPercentage);
+
 // Doctor accounts report
 router.get('/doctor-accounts', accountantController.getDoctorAccountsReport);
 
