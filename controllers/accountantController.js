@@ -1834,6 +1834,8 @@ exports.updatePatient = async (req, res) => {
 };
 
 // Insert payment for a patient (add to clinic's financial transactions)
+// Supports: discount percentage + partial payment
+// Example: debt=1000, discount=10% → net=900, patient pays 500 → remaining debt=400
 exports.insertPayment = async (req, res) => {
   try {
     const accountantId = req.user._id;
@@ -1842,7 +1844,7 @@ exports.insertPayment = async (req, res) => {
       return res.status(404).json({ message: 'لم يتم العثور على عيادة مرتبطة بحسابك' });
     }
 
-    const { patientId, description, paymentMethod, date, discountPercent } = req.body;
+    const { patientId, amount, description, paymentMethod, date, discountPercent } = req.body;
     if (!patientId) {
       return res.status(400).json({ message: 'المريض مطلوب' });
     }
@@ -1850,7 +1852,7 @@ exports.insertPayment = async (req, res) => {
     const discountPct = Math.min(Math.max(Number(discountPercent) || 0, 0), 100);
     const clinicOwnerId = clinic.ownerId;
 
-    // ====== Step 1: Gather ALL pending debts for this patient (from clinic owner's financial) ======
+    // ====== Step 1: Gather ALL pending debts for this patient ======
     let financial = await Financial.findOne({ doctorId: clinicOwnerId });
     if (!financial) {
       financial = new Financial({ doctorId: clinicOwnerId, totalEarnings: 0, totalExpenses: 0 });
@@ -1868,7 +1870,7 @@ exports.insertPayment = async (req, res) => {
       'debts.status': 'pending'
     });
 
-    // Build a unified list of all debts: { debt, source: 'clinic'|'doctor', financialDoc, doctorId }
+    // Build a unified list of all debts
     const allDebts = [];
     for (const debt of patientDebts) {
       allDebts.push({ debt, source: 'clinic', financialDoc: financial, doctorId: debt.doctorId?.toString() || clinicOwnerId.toString() });
@@ -1889,11 +1891,26 @@ exports.insertPayment = async (req, res) => {
     }
 
     const discountAmount = Math.round(totalDebt * discountPct / 100 * 100) / 100;
-    const effectivePayment = Math.round((totalDebt - discountAmount) * 100) / 100; // What patient actually pays
+    const netAfterDiscount = Math.round((totalDebt - discountAmount) * 100) / 100; // Max the patient needs to pay
+
+    // paidAmount: what the patient actually pays now (can be partial)
+    // If amount not provided or 0, default to full net amount
+    let paidAmount = Number(amount) || 0;
+    if (paidAmount <= 0) {
+      paidAmount = netAfterDiscount; // Pay full net if no amount specified
+    }
+    // Cap paid amount to net after discount (can't pay more than what's owed after discount)
+    paidAmount = Math.min(paidAmount, netAfterDiscount);
+    paidAmount = Math.round(paidAmount * 100) / 100;
+
+    // The total amount covered (paid + discount) out of original debt
+    const totalCovered = paidAmount + discountAmount;
+    // Remaining debt after this payment
+    const newRemainingDebt = Math.round((totalDebt - totalCovered) * 100) / 100;
 
     // ====== Step 3: Record the payment transaction on clinic owner's financial ======
     financial.transactions.push({
-      amount: effectivePayment,
+      amount: paidAmount,
       description: description || 'دفعة من مريض',
       date: date ? new Date(date) : new Date(),
       patientId,
@@ -1902,39 +1919,55 @@ exports.insertPayment = async (req, res) => {
       discountPercent: discountPct,
       totalDebtBeforeDiscount: totalDebt,
     });
-    financial.totalEarnings += effectivePayment;
+    financial.totalEarnings += paidAmount;
 
-    // ====== Step 4: Mark ALL debts as paid ======
-    // Track how much each doctor had in debt (for proportional distribution)
-    const doctorDebtTotals = {}; // { doctorId: totalOriginalDebt }
+    // ====== Step 4: Process debts - FIFO, mark paid/partial based on coverage ======
+    // Sort debts oldest first
+    allDebts.sort((a, b) => new Date(a.debt.date) - new Date(b.debt.date));
+
+    // Track how much each doctor gets from this payment (for revenue split)
+    const doctorPaidAmounts = {}; // { doctorId: amountPaidForThisDoctor }
+    let coveragePool = totalCovered; // discount + paid amount to distribute across debts
 
     for (const item of allDebts) {
+      if (coveragePool <= 0) break;
       const { debt, doctorId } = item;
-      // Preserve original amount
       if (!debt.originalAmount) {
         debt.originalAmount = debt.amount;
       }
-      // Track per-doctor total
-      doctorDebtTotals[doctorId] = (doctorDebtTotals[doctorId] || 0) + debt.amount;
-      // Mark as paid
-      debt.amount = 0;
-      debt.status = 'paid';
-      debt.paidAt = new Date();
+      const debtAmount = debt.amount;
+      const covered = Math.min(coveragePool, debtAmount);
+      coveragePool = Math.round((coveragePool - covered) * 100) / 100;
+
+      if (covered >= debtAmount) {
+        // Fully covered
+        debt.amount = 0;
+        debt.status = 'paid';
+        debt.paidAt = new Date();
+      } else {
+        // Partially covered
+        debt.amount = Math.round((debtAmount - covered) * 100) / 100;
+      }
+
+      // Track per-doctor: how much of the PAID amount (not discount) goes to this doctor
+      // Proportional: (covered / totalCovered) * paidAmount
+      if (totalCovered > 0) {
+        const doctorPaidPortion = Math.round((covered / totalCovered) * paidAmount * 100) / 100;
+        doctorPaidAmounts[doctorId] = (doctorPaidAmounts[doctorId] || 0) + doctorPaidPortion;
+      }
     }
 
     // Save clinic owner's financial
     financial.markModified('debts');
     await financial.save();
 
-    // Save each doctor's financial (debts marked as paid)
-    const savedDocFinancials = new Set();
+    // Save each doctor's financial (debts updated)
     for (const docFin of doctorFinancials) {
       docFin.markModified('debts');
       await docFin.save();
-      savedDocFinancials.add(docFin.doctorId.toString());
     }
 
-    // ====== Step 5: Mark unpaid appointments as paid for this patient ======
+    // ====== Step 5: Mark unpaid appointments as paid (up to coverage) ======
     const allDoctorIds = clinic.doctors?.filter(d => d.status === 'active').map(d => d.doctorId) || [];
     if (!allDoctorIds.some(id => id.toString() === clinicOwnerId.toString())) {
       allDoctorIds.push(clinicOwnerId);
@@ -1946,32 +1979,50 @@ exports.insertPayment = async (req, res) => {
       status: { $in: ['confirmed', 'completed'] }
     }).sort({ appointmentDateTime: 1 });
 
+    let aptCoveragePool = totalCovered;
     const paidAppointmentIds = [];
     for (const apt of unpaidAppointments) {
+      if (aptCoveragePool <= 0) break;
       const totalAptFee = (apt.doctorFee || 0) + (apt.clinicFee || apt.appointmentFee || 0);
-      apt.isPaid = true;
-      apt.paymentAmount = totalAptFee;
-      apt.paidAt = new Date();
-      apt.debt = 0;
-      apt.debtStatus = 'none';
-      await apt.save();
-      paidAppointmentIds.push(apt._id);
+      const alreadyPaid = apt.paymentAmount || 0;
+      const remaining = totalAptFee - alreadyPaid;
+      if (remaining <= 0) {
+        apt.isPaid = true;
+        apt.paymentAmount = totalAptFee;
+        apt.paidAt = new Date();
+        apt.debt = 0;
+        apt.debtStatus = 'none';
+        await apt.save();
+        paidAppointmentIds.push(apt._id);
+        continue;
+      }
+      if (aptCoveragePool >= remaining) {
+        aptCoveragePool -= remaining;
+        apt.isPaid = true;
+        apt.paymentAmount = totalAptFee;
+        apt.paidAt = new Date();
+        apt.debt = 0;
+        apt.debtStatus = 'none';
+        await apt.save();
+        paidAppointmentIds.push(apt._id);
+      } else {
+        apt.paymentAmount = alreadyPaid + aptCoveragePool;
+        apt.debt = totalAptFee - apt.paymentAmount;
+        apt.debtStatus = 'partial';
+        await apt.save();
+        aptCoveragePool = 0;
+      }
     }
 
-    // ====== Step 6: Distribute discounted payment proportionally to doctors ======
-    // Each doctor gets: (doctorDebt / totalDebt) * effectivePayment * (1 - clinicPercentage/100)
-    for (const [docId, doctorTotalDebt] of Object.entries(doctorDebtTotals)) {
-      // Skip clinic owner - the clinic owner's share is already in the main financial
+    // ====== Step 6: Distribute paid amount proportionally to doctors ======
+    for (const [docId, docPaidAmount] of Object.entries(doctorPaidAmounts)) {
       if (docId === clinicOwnerId.toString()) continue;
+      if (docPaidAmount <= 0) continue;
 
       try {
         const doctorEntry = clinic.doctors.find(d => d.doctorId.toString() === docId);
         const clinicPercentage = doctorEntry?.clinicPercentage || 0;
-
-        // Proportional share of the effective (discounted) payment
-        const proportionalShare = Math.round((doctorTotalDebt / totalDebt) * effectivePayment * 100) / 100;
-        // After clinic percentage deduction
-        const doctorShare = Math.round(proportionalShare * (100 - clinicPercentage) / 100 * 100) / 100;
+        const doctorShare = Math.round(docPaidAmount * (100 - clinicPercentage) / 100 * 100) / 100;
 
         if (doctorShare > 0) {
           let doctorFinancial = await Financial.findOne({ doctorId: docId });
@@ -1979,10 +2030,13 @@ exports.insertPayment = async (req, res) => {
             doctorFinancial = new Financial({ doctorId: docId, totalEarnings: 0, totalExpenses: 0 });
           }
 
-          // Check if we already recorded for this same transaction (avoid double-counting)
+          const descParts = [];
+          if (discountPct > 0) descParts.push(`خصم ${discountPct}%`);
+          descParts.push(`نسبة المركز ${clinicPercentage}%`);
+
           doctorFinancial.transactions.push({
             amount: doctorShare,
-            description: `حصة الطبيب من دفعة مريض - ${clinic.name} (خصم ${discountPct}% | نسبة المركز ${clinicPercentage}%)`,
+            description: `حصة الطبيب من دفعة مريض - ${clinic.name} (${descParts.join(' | ')})`,
             date: new Date(),
             patientId,
             paymentMethod: paymentMethod || 'Cash'
@@ -2002,7 +2056,7 @@ exports.insertPayment = async (req, res) => {
 
           doctorFinancial.markModified('debts');
           await doctorFinancial.save();
-          console.log(`✅ Doctor ${docId}: debt ${doctorTotalDebt}, proportional share ${proportionalShare}, after clinic ${clinicPercentage}% = ${doctorShare}`);
+          console.log(`✅ Doctor ${docId}: paid portion ${docPaidAmount}, after clinic ${clinicPercentage}% = ${doctorShare}`);
         }
       } catch (docErr) {
         console.error('Error splitting payment to doctor:', docErr);
@@ -2011,7 +2065,7 @@ exports.insertPayment = async (req, res) => {
 
     // Also handle paid appointments for doctors who are not the clinic owner
     for (const apt of unpaidAppointments) {
-      if (apt.doctorId.toString() !== clinicOwnerId.toString()) {
+      if (apt.isPaid && apt.doctorId.toString() !== clinicOwnerId.toString()) {
         try {
           const doctorFeeAmount = apt.doctorFee || 0;
           if (doctorFeeAmount > 0) {
@@ -2025,16 +2079,15 @@ exports.insertPayment = async (req, res) => {
             if (!alreadyRecorded) {
               const doctorEntry = clinic.doctors.find(d => d.doctorId.toString() === apt.doctorId.toString());
               const clinicPercentage = doctorEntry?.clinicPercentage || 0;
-              // Apply discount proportionally to appointment fee, then clinic percentage
-              const aptTotalFee = (apt.doctorFee || 0) + (apt.clinicFee || apt.appointmentFee || 0);
-              const aptDiscountedFee = aptTotalFee > 0 ? Math.round(aptTotalFee * (100 - discountPct) / 100 * 100) / 100 : 0;
-              const doctorPortion = aptTotalFee > 0 ? (doctorFeeAmount / aptTotalFee) * aptDiscountedFee : 0;
-              const doctorShare = Math.round(doctorPortion * (100 - clinicPercentage) / 100 * 100) / 100;
+              const doctorShare = Math.round(doctorFeeAmount * (100 - clinicPercentage) / 100 * 100) / 100;
 
               if (doctorShare > 0) {
+                const descParts = [];
+                if (discountPct > 0) descParts.push(`خصم ${discountPct}%`);
+                descParts.push(`نسبة المركز ${clinicPercentage}%`);
                 doctorFinancial.transactions.push({
                   amount: doctorShare,
-                  description: `حصة الطبيب من موعد مريض - ${clinic.name} (خصم ${discountPct}% | نسبة المركز ${clinicPercentage}%)`,
+                  description: `حصة الطبيب من موعد مريض - ${clinic.name} (${descParts.join(' | ')})`,
                   date: new Date(),
                   patientId: apt.patient,
                   appointmentId: apt._id,
@@ -2052,7 +2105,6 @@ exports.insertPayment = async (req, res) => {
     }
 
     // ====== Step 7: Calculate remaining total debt for response ======
-    // Reload to get fresh data
     const freshFinancial = await Financial.findOne({ doctorId: clinicOwnerId });
     const remainingDebt = (freshFinancial?.debts || [])
       .filter(d => d.patientId?.toString() === patientId && d.status === 'pending')
@@ -2071,9 +2123,10 @@ exports.insertPayment = async (req, res) => {
         patientPhone: patient?.mobileNumber || '',
         clinicName: clinic.name || 'العيادة',
         totalDebt,
+        netAfterDiscount,
         discountPercent: discountPct,
         discountAmount,
-        amount: effectivePayment,
+        amount: paidAmount,
         discount: discountAmount,
         paymentMethod: paymentMethod || 'Cash',
         description: description || 'دفعة من مريض',
