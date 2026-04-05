@@ -125,7 +125,7 @@ exports.getRequests = async (req, res) => {
     }
 
     const requests = await LabRequest.find(queryFilter)
-      .populate('patientId', 'fullName mobileNumber profileImage')
+      .populate('patientId', 'fullName mobileNumber profileImage birthdate sex')
       .populate('doctorId', 'fullName specialty')
       .populate('testIds', 'name type category price normalRange unit')
       .sort({ requestDate: -1 })
