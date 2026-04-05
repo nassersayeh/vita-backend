@@ -16,6 +16,8 @@ const financialSchema = new mongoose.Schema({
       paymentMethod: { type: String, enum: ['Cash', 'Card', 'Visa', 'Insurance', 'BankTransfer'], required: true },
       // Discount applied to this payment
       discount: { type: Number, default: 0 },
+      discountPercent: { type: Number, default: 0 },
+      totalDebtBeforeDiscount: { type: Number, default: 0 },
       // Audit: who last edited this transaction
       lastEditedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
       lastEditedAt: { type: Date, default: null },
