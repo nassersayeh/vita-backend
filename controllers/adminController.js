@@ -478,12 +478,20 @@ exports.deleteUser = async (req, res) => {
 exports.createUser = async (req, res) => {
   try {
     const userData = req.body;
+    const bcrypt = require('bcryptjs');
+    
     const existingUser = await User.findOne({ 
       $or: [{ email: userData.email }, { mobileNumber: userData.mobileNumber }, { idNumber: userData.idNumber }] 
     });
     
     if (existingUser) {
       return res.status(400).json({ message: 'User with this email, mobile number, or ID already exists' });
+    }
+
+    // Hash password before saving
+    if (userData.password) {
+      const salt = await bcrypt.genSalt(10);
+      userData.password = await bcrypt.hash(userData.password, salt);
     }
 
     const newUser = new User(userData);
@@ -516,8 +524,15 @@ exports.updateUser = async (req, res) => {
   try {
     const { userId } = req.params;
     const updateData = req.body;
+    const bcrypt = require('bcryptjs');
     
-    delete updateData.password;
+    // Handle password: hash if provided, otherwise remove from update
+    if (updateData.password && updateData.password.trim()) {
+      const salt = await bcrypt.genSalt(10);
+      updateData.password = await bcrypt.hash(updateData.password.trim(), salt);
+    } else {
+      delete updateData.password;
+    }
     
     const user = await User.findByIdAndUpdate(userId, { $set: updateData }, { new: true, runValidators: true }).select('-password');
     
