@@ -550,8 +550,13 @@ exports.updateUser = async (req, res) => {
     const cleanData = {};
     for (const key of allowedFields) {
       if (key in updateData && updateData[key] !== undefined) {
-        // Skip empty strings for non-string fields
+        // Skip empty strings for numeric fields
         if (updateData[key] === '' && ['yearsOfExperience', 'consultationFee', 'height', 'weight'].includes(key)) {
+          continue;
+        }
+        // Convert empty strings to null for unique-indexed fields to avoid duplicate key errors
+        if (updateData[key] === '' && ['email', 'idNumber', 'username'].includes(key)) {
+          cleanData[key] = null;
           continue;
         }
         cleanData[key] = updateData[key];
