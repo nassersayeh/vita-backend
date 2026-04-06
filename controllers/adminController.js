@@ -534,7 +534,35 @@ exports.updateUser = async (req, res) => {
       delete updateData.password;
     }
     
-    const user = await User.findByIdAndUpdate(userId, { $set: updateData }, { new: true, runValidators: true }).select('-password');
+    // Remove fields that don't exist on the User model to avoid errors
+    const allowedFields = [
+      'fullName', 'username', 'password', 'email', 'role', 'profileImage',
+      'mobileNumber', 'country', 'city', 'idNumber', 'address', 'sex',
+      'bloodType', 'height', 'weight', 'maritalStatus',
+      'allergies', 'chronicConditions', 'medications', 'pastIllnesses',
+      'emergencyContact', 'emergencyContactName', 'emergencyContactRelation', 'emergencyPhone',
+      'insuranceProvider', 'insuranceNumber',
+      'bio', 'specialty', 'licenseNumber', 'yearsOfExperience', 'consultationFee',
+      'birthdate', 'gender', 'language',
+      'activationStatus', 'isPaid', 'trialEndDate',
+    ];
+    
+    const cleanData = {};
+    for (const key of allowedFields) {
+      if (key in updateData && updateData[key] !== undefined) {
+        // Skip empty strings for non-string fields
+        if (updateData[key] === '' && ['yearsOfExperience', 'consultationFee', 'height', 'weight'].includes(key)) {
+          continue;
+        }
+        cleanData[key] = updateData[key];
+      }
+    }
+    
+    // Don't allow changing role or username via update
+    delete cleanData.role;
+    delete cleanData.username;
+    
+    const user = await User.findByIdAndUpdate(userId, { $set: cleanData }, { new: true }).select('-password');
     
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
