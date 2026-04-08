@@ -2,6 +2,44 @@ const express = require('express');
 const router = express.Router();
 const Drug = require('../models/Drug');
 
+// Arabic to Latin transliteration — produces a regex pattern
+// that accounts for common ambiguities (ب→b/p, ف→f/v/ph, etc.)
+const arabicToLatinRegex = {
+  'ا': 'a?', 'أ': 'a?', 'إ': '[ei]?', 'آ': 'a',
+  'ب': '[bp]', 'ت': 't', 'ث': 'th',
+  'ج': '[jg]', 'ح': 'h', 'خ': 'kh',
+  'د': 'd', 'ذ': 'th', 'ر': 'r', 'ز': 'z',
+  'س': '[scx]', 'ش': 'sh', 'ص': 's', 'ض': 'd',
+  'ط': 't', 'ظ': 'z', 'ع': 'a?', 'غ': 'g[h]?',
+  'ف': '[fvp]h?', 'ق': '[qk]', 'ك': '[ckx]', 'ل': 'l',
+  'م': 'm', 'ن': 'n', 'ه': 'h?', 'و': '[ouew]?',
+  'ي': '[iey]', 'ى': 'a', 'ئ': '[ei]', 'ؤ': '[ou]',
+  'ة': '[aeh]?', 'ء': 'a?',
+  'َ': 'a?', 'ُ': 'u?', 'ِ': 'i?', 'ّ': '', 'ْ': '',
+};
+
+function transliterateArabicToRegex(text) {
+  let result = '';
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (arabicToLatinRegex[ch] !== undefined) {
+      result += arabicToLatinRegex[ch];
+      // Add optional vowel between consonant clusters for fuzzy matching
+      result += '[aeiou]?';
+    } else if (/\s/.test(ch)) {
+      result += '\\s*';
+    } else {
+      // Keep non-Arabic chars as-is (escape if needed)
+      result += ch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+  }
+  return result;
+}
+
+function hasArabic(text) {
+  return /[\u0600-\u06FF]/.test(text);
+}
+
 // Get all drugs with search and filtering
 router.get('/', async (req, res) => {
   try {
@@ -10,11 +48,20 @@ router.get('/', async (req, res) => {
     let filter = { isActive: true };
     
     if (search) {
-      filter.$or = [
+      const searchConditions = [
         { name: { $regex: search, $options: 'i' } },
         { genericName: { $regex: search, $options: 'i' } },
         { activeIngredients: { $in: [new RegExp(search, 'i')] } }
       ];
+      // If Arabic input, also search transliterated version
+      if (hasArabic(search)) {
+        const latinPattern = transliterateArabicToRegex(search);
+        if (latinPattern && latinPattern.length >= 2) {
+          searchConditions.push({ name: { $regex: latinPattern, $options: 'i' } });
+          searchConditions.push({ genericName: { $regex: latinPattern, $options: 'i' } });
+        }
+      }
+      filter.$or = searchConditions;
     }
     
     if (category) {
@@ -36,20 +83,6 @@ router.get('/', async (req, res) => {
     });
   } catch (error) {
     console.error('Get drugs error:', error);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-// Get drug by ID
-router.get('/:drugId', async (req, res) => {
-  try {
-    const drug = await Drug.findById(req.params.drugId);
-    if (!drug) {
-      return res.status(404).json({ message: 'Drug not found' });
-    }
-    res.json(drug);
-  } catch (error) {
-    console.error('Get drug error:', error);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -148,7 +181,33 @@ router.get('/categories/list', async (req, res) => {
   }
 });
 
-// Quick search endpoint for prescriptions (returns limited results)
+// Popular drugs endpoint - returns drugs for browsing (paginated)
+router.get('/popular', async (req, res) => {
+  try {
+    const { page = 1, limit = 40 } = req.query;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    
+    const drugs = await Drug.find({ isActive: true, unitSellingPrice: { $gt: 0 } })
+      .select('name genericName unitSellingPrice barcode')
+      .sort({ name: 1 })
+      .skip(skip)
+      .limit(parseInt(limit));
+
+    const total = await Drug.countDocuments({ isActive: true, unitSellingPrice: { $gt: 0 } });
+
+    res.json({
+      drugs,
+      total,
+      totalPages: Math.ceil(total / parseInt(limit)),
+      currentPage: parseInt(page)
+    });
+  } catch (error) {
+    console.error('Popular drugs error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Quick search endpoint (supports Arabic & English)
 router.get('/search/quick', async (req, res) => {
   try {
     const { q, limit = 20 } = req.query;
@@ -158,15 +217,28 @@ router.get('/search/quick', async (req, res) => {
     }
 
     const searchTerm = q.trim();
+    
+    // Build search conditions
+    const searchConditions = [
+      { name: { $regex: searchTerm, $options: 'i' } },
+      { genericName: { $regex: searchTerm, $options: 'i' } },
+      { activeIngredients: { $in: [new RegExp(searchTerm, 'i')] } }
+    ];
+
+    // If input has Arabic characters, also search transliterated version
+    if (hasArabic(searchTerm)) {
+      const latinPattern = transliterateArabicToRegex(searchTerm);
+      if (latinPattern && latinPattern.length >= 2) {
+        searchConditions.push({ name: { $regex: latinPattern, $options: 'i' } });
+        searchConditions.push({ genericName: { $regex: latinPattern, $options: 'i' } });
+      }
+    }
+
     const drugs = await Drug.find({
       isActive: true,
-      $or: [
-        { name: { $regex: searchTerm, $options: 'i' } },
-        { genericName: { $regex: searchTerm, $options: 'i' } },
-        { activeIngredients: { $in: [new RegExp(searchTerm, 'i')] } }
-      ]
+      $or: searchConditions
     })
-    .select('name genericName category manufacturer')
+    .select('name genericName category manufacturer unitSellingPrice barcode')
     .sort({ name: 1 })
     .limit(parseInt(limit));
 
@@ -187,6 +259,20 @@ router.get('/barcode/:barcode', async (req, res) => {
     res.json(drug);
   } catch (error) {
     console.error('Search by barcode error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Get drug by ID (MUST be after all specific routes to avoid catching /popular, /search/quick etc.)
+router.get('/:drugId', async (req, res) => {
+  try {
+    const drug = await Drug.findById(req.params.drugId);
+    if (!drug) {
+      return res.status(404).json({ message: 'Drug not found' });
+    }
+    res.json(drug);
+  } catch (error) {
+    console.error('Get drug error:', error);
     res.status(500).json({ message: 'Server error' });
   }
 });

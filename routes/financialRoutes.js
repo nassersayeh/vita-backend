@@ -1006,4 +1006,101 @@ router.post('/doctors/:doctorId/financial/debt/:debtId/pay', [
   }
 });
 
+// ============================================================
+// Patient Financial Summary - all debts & payments across all doctors/centers
+// GET /api/patient/:patientId/financial-summary
+// ============================================================
+router.get('/patient/:patientId/financial-summary', async (req, res) => {
+  try {
+    const { patientId } = req.params;
+
+    // Find all Financial records that have this patient in transactions or debts
+    const financials = await Financial.find({
+      $or: [
+        { 'transactions.patientId': patientId },
+        { 'debts.patientId': patientId },
+      ],
+    }).populate('doctorId', 'fullName specialty profileImage mobileNumber role')
+      .populate('pharmacyId', 'fullName profileImage mobileNumber role');
+
+    const providers = []; // Each doctor/pharmacy/lab with their financial relationship to this patient
+
+    for (const fin of financials) {
+      // Determine provider info
+      const provider = fin.doctorId || fin.pharmacyId;
+      if (!provider) continue;
+
+      const providerName = provider.fullName || 'غير معروف';
+      const providerSpecialty = provider.specialty || '';
+      const providerImage = provider.profileImage || '';
+      const providerPhone = provider.mobileNumber || '';
+      const providerRole = provider.role || (fin.doctorId ? 'doctor' : 'pharmacy');
+      const providerId = provider._id;
+
+      // Filter transactions for this patient
+      const patientTransactions = fin.transactions.filter(
+        (t) => t.patientId && t.patientId.toString() === patientId
+      );
+
+      // Filter debts for this patient
+      const patientDebts = fin.debts.filter(
+        (d) => d.patientId && d.patientId.toString() === patientId
+      );
+
+      const totalPaid = patientTransactions.reduce((sum, t) => sum + (t.amount || 0), 0);
+      const totalPendingDebt = patientDebts
+        .filter((d) => d.status === 'pending')
+        .reduce((sum, d) => sum + (d.amount || 0), 0);
+      const totalPaidDebt = patientDebts
+        .filter((d) => d.status === 'paid')
+        .reduce((sum, d) => sum + (d.originalAmount || d.amount || 0), 0);
+
+      providers.push({
+        providerId,
+        providerName,
+        providerSpecialty,
+        providerImage,
+        providerPhone,
+        providerRole,
+        totalPaid,
+        totalPendingDebt,
+        totalPaidDebt,
+        transactions: patientTransactions.map((t) => ({
+          _id: t._id,
+          amount: t.amount,
+          description: t.description,
+          date: t.date,
+          paymentMethod: t.paymentMethod,
+          discount: t.discount || 0,
+        })),
+        debts: patientDebts.map((d) => ({
+          _id: d._id,
+          amount: d.amount,
+          originalAmount: d.originalAmount,
+          description: d.description,
+          date: d.date,
+          status: d.status,
+          paidAt: d.paidAt,
+        })),
+      });
+    }
+
+    // Calculate overall totals
+    const overallTotalPaid = providers.reduce((sum, p) => sum + p.totalPaid, 0);
+    const overallTotalPendingDebt = providers.reduce((sum, p) => sum + p.totalPendingDebt, 0);
+
+    res.status(200).json({
+      providers,
+      summary: {
+        totalPaid: overallTotalPaid,
+        totalPendingDebt: overallTotalPendingDebt,
+        providerCount: providers.length,
+      },
+    });
+  } catch (error) {
+    console.error('Error fetching patient financial summary:', error);
+    res.status(500).json({ message: 'خطأ في جلب الملخص المالي للمريض', error: error.message });
+  }
+});
+
 module.exports = router;

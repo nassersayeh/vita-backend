@@ -198,6 +198,7 @@ app.use('/api/prescriptions-enhanced', prescriptionsEnhancedRoutes);
 app.use('/api/pharmacy-inventory', pharmacyInventoryRoutes);
 app.use('/api/pharmacy-financial', pharmacyFinancialRoutes);
 app.use('/api/pharmacy-employees', pharmacyEmployeeRoutes);
+app.use('/api/addresses', require('./routes/addressRoutes'));
 app.use('/api/pharmacy-suppliers', pharmacySupplierRoutes);
 app.use('/api/medical-records', medicalRecordRoutes);
 app.use('/api/pharmacy', pharmacyCustomerRoutes);

@@ -155,6 +155,7 @@ const Points = require('../models/Points');
 const Order = require('../models/Order');
 const Appointment = require('../models/Appointment');
 const Financial = require('../models/Financial');
+const { assignDefaultInventory } = require('../utils/assignDefaultInventory');
 
 // Get pending provider approvals
 exports.getPendingApprovals = async (req, res) => {
@@ -201,6 +202,17 @@ exports.approveUser = async (req, res) => {
     }
 
     await user.save();
+
+    // Auto-assign default drug inventory when a Pharmacy is approved
+    if (status === 'active' && user.role === 'Pharmacy') {
+      try {
+        const invCount = await assignDefaultInventory(user._id);
+        console.log(`Auto-assigned ${invCount} inventory items to pharmacy ${user._id} (${user.fullName})`);
+      } catch (invErr) {
+        console.error('Failed to auto-assign inventory:', invErr.message);
+        // Don't fail the approval - inventory can be assigned later
+      }
+    }
 
     res.json({
       message: `User ${status === 'active' ? 'approved' : 'rejected'} successfully`,
@@ -496,6 +508,16 @@ exports.createUser = async (req, res) => {
 
     const newUser = new User(userData);
     await newUser.save();
+
+    // Auto-assign default drug inventory when creating a Pharmacy user
+    if (newUser.role === 'Pharmacy') {
+      try {
+        const invCount = await assignDefaultInventory(newUser._id);
+        console.log(`Auto-assigned ${invCount} inventory items to new pharmacy ${newUser._id}`);
+      } catch (invErr) {
+        console.error('Failed to auto-assign inventory on create:', invErr.message);
+      }
+    }
 
     res.status(201).json({ message: 'User created successfully', user: { id: newUser._id, fullName: newUser.fullName, role: newUser.role } });
   } catch (error) {

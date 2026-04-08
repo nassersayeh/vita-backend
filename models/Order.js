@@ -55,7 +55,19 @@ const OrderSchema = new mongoose.Schema({
   },
   prescriptionNotes: String,
   prescriptionRequested: { type: Boolean, default: false },
-  prescriptionRequestedAt: { type: Date }
+  prescriptionRequestedAt: { type: Date },
+  // Delivery
+  deliveryMethod: { type: String, enum: ['delivery', 'pickup'], default: 'pickup' },
+  deliveryAddress: {
+    label: String,
+    city: String,
+    street: String,
+    building: String,
+    floor: String,
+    apartment: String,
+    phone: String,
+    notes: String,
+  },
 }, { timestamps: true });
 
 module.exports = mongoose.model('Order', OrderSchema);

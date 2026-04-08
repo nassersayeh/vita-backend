@@ -164,6 +164,20 @@ const UserSchema = new mongoose.Schema({
   // Pharmacy insurance companies
   insuranceCompanies: [{ type: String }],
   
+  // Delivery addresses (for patients)
+  deliveryAddresses: [{
+    label: { type: String, required: true },
+    city: { type: String, required: true },
+    street: { type: String, required: true },
+    building: { type: String },
+    floor: { type: String },
+    apartment: { type: String },
+    phone: { type: String },
+    notes: { type: String },
+    isDefault: { type: Boolean, default: false },
+    createdAt: { type: Date, default: Date.now },
+  }],
+  
   createdAt: { type: Date, default: Date.now },
 });
 
