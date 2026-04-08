@@ -144,8 +144,17 @@ const initializePharmacyWhatsApp = async (pharmacyId) => {
     const {
       makeWASocket,
       DisconnectReason,
-      useMultiFileAuthState
+      useMultiFileAuthState,
+      fetchLatestBaileysVersion
     } = await import('@whiskeysockets/baileys');
+
+    let waVersion;
+    try {
+      const { version } = await fetchLatestBaileysVersion();
+      waVersion = version;
+    } catch (e) {
+      waVersion = [2, 3000, 1015901307];
+    }
 
     // Use MongoDB auth state on Vercel, filesystem locally
     let state, saveCreds;
@@ -163,7 +172,7 @@ const initializePharmacyWhatsApp = async (pharmacyId) => {
       auth: state,
       printQRInTerminal: false,
       browser: [`Vita Pharmacy ${pharmacyId}`, 'Chrome', '1.0.0'],
-      version: [2, 3000, 1033893291]
+      version: waVersion
     });
 
     const sessionId = generatePharmacySessionId();
@@ -350,8 +359,17 @@ const initializeWhatsApp = async (pairingPhoneNumber = null) => {
     const {
       makeWASocket,
       DisconnectReason,
-      useMultiFileAuthState
+      useMultiFileAuthState,
+      fetchLatestBaileysVersion
     } = await import('@whiskeysockets/baileys');
+
+    let waVersion;
+    try {
+      const { version } = await fetchLatestBaileysVersion();
+      waVersion = version;
+    } catch (e) {
+      waVersion = [2, 3000, 1015901307];
+    }
 
     // Use MongoDB auth state on Vercel, filesystem locally
     let state, saveCreds;
@@ -367,7 +385,7 @@ const initializeWhatsApp = async (pairingPhoneNumber = null) => {
     sock = makeWASocket({
       auth: state,
       browser: ['Vita Backend', 'Chrome', '1.0.0'],
-      version: [2, 3000, 1033893291]
+      version: waVersion
     });
 
     // Handle connection updates

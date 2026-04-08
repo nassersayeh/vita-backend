@@ -66,8 +66,20 @@ async function initializeWhatsApp() {
     const {
       makeWASocket,
       DisconnectReason,
-      useMultiFileAuthState
+      useMultiFileAuthState,
+      fetchLatestBaileysVersion
     } = await import('@whiskeysockets/baileys');
+
+    // Fetch latest WhatsApp Web version
+    let waVersion;
+    try {
+      const { version } = await fetchLatestBaileysVersion();
+      waVersion = version;
+      console.log('📱 Using WhatsApp version:', waVersion);
+    } catch (e) {
+      console.warn('⚠️ Could not fetch latest version, using default');
+      waVersion = [2, 3000, 1015901307];
+    }
 
     const authDir = path.join(__dirname, 'baileys_auth');
     if (!fs.existsSync(authDir)) {
@@ -78,9 +90,9 @@ async function initializeWhatsApp() {
 
     sock = makeWASocket({
       auth: state,
-      printQRInTerminal: true,
+      printQRInTerminal: false,
       browser: ['Vita Backend', 'Chrome', '1.0.0'],
-      version: [2, 3000, 1033893291]
+      version: waVersion
     });
 
     sock.ev.on('connection.update', async (update) => {
