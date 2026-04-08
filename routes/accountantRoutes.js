@@ -79,6 +79,14 @@ router.put('/expenses/:expenseId', accountantController.updateExpense);
 router.delete('/expenses/:expenseId', accountantController.deleteExpense);
 router.post('/debts', accountantController.addDebt);
 router.post('/debts/:debtId/pay', accountantController.payDebt);
+router.put('/debts/:debtId', accountantController.editDebt);
+router.delete('/debts/:debtId', accountantController.deleteDebt);
+
+// Edit appointment financial data
+router.put('/appointments/:appointmentId/financials', accountantController.editAppointmentFinancials);
+
+// Delete patient permanently
+router.delete('/patients/:patientId', accountantController.deletePatient);
 
 // Suppliers
 router.get('/suppliers', accountantController.getSuppliers);

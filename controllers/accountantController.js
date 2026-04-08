@@ -103,8 +103,9 @@ exports.getDashboardStats = async (req, res) => {
       }
     } catch (e) { /* ignore */ }
 
-    // Use the higher of the two to avoid double-counting
-    const totalDebts = Math.max(appointmentDebts[0]?.total || 0, financialDebts);
+    // Use Financial.debts as the primary source of truth for debts
+    // Appointment.debt is a secondary tracker that may be out of sync
+    const totalDebts = financialDebts || appointmentDebts[0]?.total || 0;
 
     // Also get non-appointment income from Financial.transactions (debt payments, manual payments)
     // These are NOT counted in the Appointment aggregate above
@@ -544,7 +545,9 @@ exports.markAsPaid = async (req, res) => {
       }
     }
 
-    if (remaining > 0) {
+    // If there's remaining debt and NO pending debt entries were found to deduct from,
+    // add a new debt entry. Otherwise, the FIFO loop already left the correct remaining.
+    if (remaining > 0 && patientDebts.length === 0) {
       financial.debts.push({
         patientId: appointment.patient,
         doctorId: appointment.doctorId,
@@ -1271,6 +1274,7 @@ exports.acceptAppointment = async (req, res) => {
     await appointment.save();
 
     // Add appointment fee as debt to patient (if fee > 0)
+    // BUT only if a debt wasn't already added during createAppointment
     const fee = appointment.clinicFee || appointment.appointmentFee || 0;
     if (fee > 0) {
       const clinicOwnerId = clinic.ownerId;
@@ -1278,16 +1282,24 @@ exports.acceptAppointment = async (req, res) => {
       if (!financial) {
         financial = new Financial({ doctorId: clinicOwnerId, totalEarnings: 0, totalExpenses: 0 });
       }
-      financial.debts.push({
-        patientId: appointment.patient,
-        doctorId: appointment.doctorId,
-        amount: fee,
-        description: 'موعد - ' + (appointment.reason || 'كشف عام'),
-        date: new Date(),
-        status: 'pending'
-      });
-      financial.markModified('debts');
-      await financial.save();
+      // Check if a pending debt for this patient+appointment already exists (from createAppointment)
+      const existingDebt = (financial.debts || []).find(d =>
+        d.patientId?.toString() === appointment.patient.toString() &&
+        d.status === 'pending' &&
+        d.amount === fee
+      );
+      if (!existingDebt) {
+        financial.debts.push({
+          patientId: appointment.patient,
+          doctorId: appointment.doctorId,
+          amount: fee,
+          description: 'موعد - ' + (appointment.reason || 'كشف عام'),
+          date: new Date(),
+          status: 'pending'
+        });
+        financial.markModified('debts');
+        await financial.save();
+      }
     }
 
     // Auto-connect patient to doctor
@@ -2207,10 +2219,8 @@ exports.getPatientsWithDebt = async (req, res) => {
         return debtPatientId === pid && d.status !== 'paid';
       });
       const financialDebtTotal = patientDebts.reduce((sum, d) => sum + (d.amount || 0), 0);
-      // Use whichever is higher to avoid double-counting
-      // (appointment.debt and Financial.debts should be in sync, but use max as safety)
-      const appointmentDebtTotal = appointmentDebtMap[pid] || 0;
-      const totalDebt = Math.max(financialDebtTotal, appointmentDebtTotal);
+      // Use Financial.debts as the primary source of truth
+      const totalDebt = financialDebtTotal || (appointmentDebtMap[pid] || 0);
       return { ...patient, totalDebt, debts: patientDebts };
     });
 
@@ -3306,7 +3316,7 @@ exports.editPayment = async (req, res) => {
     }
 
     const { transactionId } = req.params;
-    const { amount, description, paymentMethod } = req.body;
+    const { amount, description, paymentMethod, discount, discountPercent, totalDebtBeforeDiscount } = req.body;
     const clinicOwnerId = clinic.ownerId;
 
     const financial = await Financial.findOne({ doctorId: clinicOwnerId });
@@ -3328,6 +3338,10 @@ exports.editPayment = async (req, res) => {
     transaction.amount = newAmount;
     if (description !== undefined) transaction.description = description;
     if (paymentMethod) transaction.paymentMethod = paymentMethod;
+    // Update discount fields
+    if (discount !== undefined) transaction.discount = Number(discount) || 0;
+    if (discountPercent !== undefined) transaction.discountPercent = Number(discountPercent) || 0;
+    if (totalDebtBeforeDiscount !== undefined) transaction.totalDebtBeforeDiscount = Number(totalDebtBeforeDiscount) || 0;
     // Audit trail
     transaction.lastEditedBy = accountantId;
     transaction.lastEditedAt = new Date();
@@ -3512,12 +3526,21 @@ exports.getInvoices = async (req, res) => {
     const doctorMap = {};
     doctorsData.forEach(d => { doctorMap[d._id.toString()] = d; });
 
+    // Get editor names for audit trail
+    const editorIds = [...new Set(transactions.filter(t => t.lastEditedBy).map(t => t.lastEditedBy.toString()))];
+    const editors = editorIds.length > 0
+      ? await User.find({ _id: { $in: editorIds } }).select('fullName')
+      : [];
+    const editorMap = {};
+    editors.forEach(e => { editorMap[e._id.toString()] = e; });
+
     // Build invoices list sorted by date descending
     const invoices = transactions
       .map(t => {
         const patient = t.patientId ? patientMap[t.patientId.toString()] : null;
         const appointment = t.appointmentId ? appointmentMap[t.appointmentId.toString()] : null;
         const doctor = appointment?.doctorId || null;
+        const editor = t.lastEditedBy ? editorMap[t.lastEditedBy.toString()] : null;
 
         return {
           _id: t._id,
@@ -3540,7 +3563,10 @@ exports.getInvoices = async (req, res) => {
             specialty: doctor.specialty
           } : null,
           appointmentId: t.appointmentId || null,
-          invoiceNo: t._id.toString().slice(-8).toUpperCase()
+          invoiceNo: t._id.toString().slice(-8).toUpperCase(),
+          isEdited: !!t.lastEditedBy,
+          lastEditedBy: editor ? { _id: editor._id, fullName: editor.fullName } : null,
+          lastEditedAt: t.lastEditedAt || null
         };
       })
       .sort((a, b) => new Date(b.date) - new Date(a.date));
@@ -3555,5 +3581,396 @@ exports.getInvoices = async (req, res) => {
   } catch (error) {
     console.error('Error getting invoices:', error);
     res.status(500).json({ message: 'فشل في جلب الفواتير', error: error.message });
+  }
+};
+
+// ==================== DEBT MANAGEMENT ====================
+
+// Edit a debt entry (change amount or description)
+exports.editDebt = async (req, res) => {
+  try {
+    const accountantId = req.user._id;
+    const clinic = await getClinicForAccountant(accountantId);
+    if (!clinic) return res.status(404).json({ message: 'لم يتم العثور على عيادة' });
+
+    const { debtId } = req.params;
+    const { amount, description } = req.body;
+    const clinicOwnerId = clinic.ownerId;
+
+    // Search in clinic owner's financial first
+    let financial = await Financial.findOne({ doctorId: clinicOwnerId });
+    let debt = financial?.debts?.id(debtId);
+    let targetFinancial = financial;
+
+    // If not found, search in doctors' financials
+    if (!debt) {
+      const doctorIds = clinic.doctors?.filter(d => d.status === 'active').map(d => d.doctorId) || [];
+      for (const docId of doctorIds) {
+        const docFin = await Financial.findOne({ doctorId: docId });
+        if (docFin) {
+          const found = docFin.debts.id(debtId);
+          if (found) {
+            debt = found;
+            targetFinancial = docFin;
+            break;
+          }
+        }
+      }
+    }
+
+    if (!debt) return res.status(404).json({ message: 'الدين غير موجود' });
+
+    // Save original amount for reference
+    if (!debt.originalAmount) {
+      debt.originalAmount = debt.amount;
+    }
+
+    if (amount !== undefined && amount !== null) {
+      const newAmount = Number(amount);
+      if (isNaN(newAmount) || newAmount < 0) {
+        return res.status(400).json({ message: 'المبلغ غير صالح' });
+      }
+      debt.amount = newAmount;
+      if (newAmount === 0) {
+        debt.status = 'paid';
+        debt.paidAt = new Date();
+      }
+    }
+    if (description !== undefined) {
+      debt.description = description;
+    }
+
+    targetFinancial.markModified('debts');
+    await targetFinancial.save();
+
+    // Also sync the corresponding appointment's debt field if possible
+    if (debt.patientId) {
+      const doctorIds = clinic.doctors?.filter(d => d.status === 'active').map(d => d.doctorId) || [];
+      const relatedApts = await Appointment.find({
+        patient: debt.patientId,
+        doctorId: { $in: doctorIds },
+        isPaid: false,
+        status: { $in: ['confirmed', 'completed'] }
+      }).sort({ appointmentDateTime: 1 });
+
+      // Recalculate appointment debts from Financial.debts
+      const allPendingDebts = (targetFinancial.debts || [])
+        .filter(d => d.patientId?.toString() === debt.patientId.toString() && d.status === 'pending');
+      const totalPendingDebt = allPendingDebts.reduce((s, d) => s + d.amount, 0);
+
+      // Distribute total pending debt across unpaid appointments
+      let remainingDebt = totalPendingDebt;
+      for (const apt of relatedApts) {
+        const aptTotal = (apt.doctorFee || 0) + (apt.clinicFee || apt.appointmentFee || 0);
+        const aptPaid = apt.paymentAmount || 0;
+        const aptOwes = aptTotal - aptPaid;
+        if (aptOwes <= 0) {
+          apt.debt = 0;
+          apt.debtStatus = 'none';
+          apt.isPaid = true;
+          await apt.save();
+          continue;
+        }
+        if (remainingDebt >= aptOwes) {
+          apt.debt = aptOwes;
+          apt.debtStatus = aptPaid > 0 ? 'partial' : 'full';
+          remainingDebt -= aptOwes;
+        } else if (remainingDebt > 0) {
+          apt.debt = remainingDebt;
+          apt.debtStatus = 'partial';
+          remainingDebt = 0;
+        } else {
+          apt.debt = 0;
+          apt.debtStatus = 'none';
+          apt.isPaid = true;
+        }
+        await apt.save();
+      }
+    }
+
+    res.status(200).json({ success: true, message: 'تم تعديل الدين بنجاح' });
+  } catch (error) {
+    console.error('Error editing debt:', error);
+    res.status(500).json({ message: 'فشل في تعديل الدين', error: error.message });
+  }
+};
+
+// Delete a debt entry completely
+exports.deleteDebt = async (req, res) => {
+  try {
+    const accountantId = req.user._id;
+    const clinic = await getClinicForAccountant(accountantId);
+    if (!clinic) return res.status(404).json({ message: 'لم يتم العثور على عيادة' });
+
+    const { debtId } = req.params;
+    const clinicOwnerId = clinic.ownerId;
+
+    let financial = await Financial.findOne({ doctorId: clinicOwnerId });
+    let debt = financial?.debts?.id(debtId);
+    let targetFinancial = financial;
+
+    if (!debt) {
+      const doctorIds = clinic.doctors?.filter(d => d.status === 'active').map(d => d.doctorId) || [];
+      for (const docId of doctorIds) {
+        const docFin = await Financial.findOne({ doctorId: docId });
+        if (docFin) {
+          const found = docFin.debts.id(debtId);
+          if (found) {
+            debt = found;
+            targetFinancial = docFin;
+            break;
+          }
+        }
+      }
+    }
+
+    if (!debt) return res.status(404).json({ message: 'الدين غير موجود' });
+
+    const patientId = debt.patientId?.toString();
+
+    targetFinancial.debts.pull(debtId);
+    await targetFinancial.save();
+
+    // Also clear debt from related unpaid appointments
+    if (patientId) {
+      const doctorIds = clinic.doctors?.filter(d => d.status === 'active').map(d => d.doctorId) || [];
+      // Recalculate remaining debts for this patient
+      const allFinancials = await Financial.find({ doctorId: { $in: [clinicOwnerId, ...doctorIds] } });
+      let totalRemainingDebt = 0;
+      for (const fin of allFinancials) {
+        totalRemainingDebt += (fin.debts || [])
+          .filter(d => d.patientId?.toString() === patientId && d.status === 'pending')
+          .reduce((s, d) => s + d.amount, 0);
+      }
+
+      // If no more pending debts, mark all unpaid appointments as paid
+      if (totalRemainingDebt <= 0) {
+        await Appointment.updateMany(
+          { patient: patientId, doctorId: { $in: doctorIds }, isPaid: false, status: { $in: ['confirmed', 'completed'] } },
+          { $set: { debt: 0, debtStatus: 'none', isPaid: true } }
+        );
+      }
+    }
+
+    res.status(200).json({ success: true, message: 'تم حذف الدين بنجاح' });
+  } catch (error) {
+    console.error('Error deleting debt:', error);
+    res.status(500).json({ message: 'فشل في حذف الدين', error: error.message });
+  }
+};
+
+// ==================== EDIT APPOINTMENT FINANCIALS ====================
+
+// Edit appointment financial fields (fee, debt, payment)
+exports.editAppointmentFinancials = async (req, res) => {
+  try {
+    const accountantId = req.user._id;
+    const clinic = await getClinicForAccountant(accountantId);
+    if (!clinic) return res.status(404).json({ message: 'لم يتم العثور على عيادة' });
+
+    const { appointmentId } = req.params;
+    const { appointmentFee, clinicFee, doctorFee, paymentAmount, isPaid, debt } = req.body;
+
+    const doctorIds = clinic.doctors.filter(d => d.status === 'active').map(d => d.doctorId.toString());
+    const appointment = await Appointment.findById(appointmentId);
+    if (!appointment) return res.status(404).json({ message: 'الموعد غير موجود' });
+    if (!doctorIds.includes(appointment.doctorId.toString())) {
+      return res.status(403).json({ message: 'الموعد ليس لطبيب في هذه العيادة' });
+    }
+
+    // Track old values for financial adjustments
+    const oldPaymentAmount = appointment.paymentAmount || 0;
+
+    // Update fields that are provided
+    if (appointmentFee !== undefined) appointment.appointmentFee = Number(appointmentFee);
+    if (clinicFee !== undefined) appointment.clinicFee = Number(clinicFee);
+    if (doctorFee !== undefined) appointment.doctorFee = Number(doctorFee);
+    if (paymentAmount !== undefined) appointment.paymentAmount = Number(paymentAmount);
+
+    // Recalculate debt
+    const totalFee = (appointment.doctorFee || 0) + (appointment.clinicFee || appointment.appointmentFee || 0);
+    const paid = appointment.paymentAmount || 0;
+    const remaining = Math.max(0, totalFee - paid);
+
+    if (isPaid !== undefined) {
+      appointment.isPaid = isPaid;
+    } else {
+      appointment.isPaid = remaining <= 0;
+    }
+
+    if (debt !== undefined) {
+      appointment.debt = Number(debt);
+    } else {
+      appointment.debt = remaining;
+    }
+
+    appointment.debtStatus = appointment.debt > 0 ? (paid > 0 ? 'partial' : 'full') : 'none';
+    if (appointment.isPaid && !appointment.paidAt) {
+      appointment.paidAt = new Date();
+    }
+
+    await appointment.save();
+
+    // Sync Financial.debts for this patient
+    const clinicOwnerId = clinic.ownerId;
+    let financial = await Financial.findOne({ doctorId: clinicOwnerId });
+    if (financial) {
+      const patientId = appointment.patient.toString();
+      // Find existing pending debts for this patient
+      const patientDebts = financial.debts.filter(d =>
+        d.patientId?.toString() === patientId && d.status === 'pending'
+      );
+
+      if (remaining > 0) {
+        if (patientDebts.length > 0) {
+          // Update the first pending debt to match
+          patientDebts[0].amount = remaining;
+          // Mark extras as paid
+          for (let i = 1; i < patientDebts.length; i++) {
+            patientDebts[i].amount = 0;
+            patientDebts[i].status = 'paid';
+            patientDebts[i].paidAt = new Date();
+          }
+        } else {
+          // No pending debt exists, create one
+          financial.debts.push({
+            patientId: appointment.patient,
+            doctorId: appointment.doctorId,
+            amount: remaining,
+            description: `دين موعد - ${appointment.reason || 'كشف'}`,
+            date: new Date(),
+            status: 'pending'
+          });
+        }
+      } else {
+        // No remaining debt — mark all patient debts as paid
+        for (const d of patientDebts) {
+          d.amount = 0;
+          d.status = 'paid';
+          d.paidAt = new Date();
+        }
+      }
+
+      // Adjust totalEarnings if payment changed
+      const paymentDiff = (appointment.paymentAmount || 0) - oldPaymentAmount;
+      if (paymentDiff !== 0) {
+        financial.totalEarnings = (financial.totalEarnings || 0) + paymentDiff;
+      }
+
+      financial.markModified('debts');
+      await financial.save();
+    }
+
+    const populatedAppointment = await Appointment.findById(appointmentId)
+      .populate('patient', 'fullName mobileNumber')
+      .populate('doctorId', 'fullName specialty');
+
+    res.status(200).json({
+      success: true,
+      message: 'تم تعديل البيانات المالية للموعد بنجاح',
+      appointment: populatedAppointment
+    });
+  } catch (error) {
+    console.error('Error editing appointment financials:', error);
+    res.status(500).json({ message: 'فشل في تعديل البيانات المالية', error: error.message });
+  }
+};
+
+// ==================== DELETE PATIENT ====================
+
+// Delete a patient permanently from the clinic
+exports.deletePatient = async (req, res) => {
+  try {
+    const accountantId = req.user._id;
+    const clinic = await getClinicForAccountant(accountantId);
+    if (!clinic) return res.status(404).json({ message: 'لم يتم العثور على عيادة' });
+
+    const { patientId } = req.params;
+
+    // Verify patient belongs to this clinic's doctors
+    const doctorIds = clinic.doctors.filter(d => d.status === 'active').map(d => d.doctorId);
+    const doctors = await User.find({ _id: { $in: doctorIds } });
+    let patientFound = false;
+    for (const doc of doctors) {
+      if ((doc.patients || []).map(String).includes(patientId)) {
+        patientFound = true;
+        break;
+      }
+    }
+
+    if (!patientFound) {
+      return res.status(404).json({ message: 'المريض غير موجود في هذه العيادة' });
+    }
+
+    // Check for unpaid debts
+    const clinicOwnerId = clinic.ownerId;
+    const financial = await Financial.findOne({ doctorId: clinicOwnerId });
+    const pendingDebts = (financial?.debts || []).filter(d =>
+      d.patientId?.toString() === patientId && d.status === 'pending'
+    );
+    const totalPendingDebt = pendingDebts.reduce((s, d) => s + d.amount, 0);
+
+    if (totalPendingDebt > 0) {
+      return res.status(400).json({
+        message: `لا يمكن حذف المريض - عليه دين معلق بقيمة ₪${totalPendingDebt}. يجب تسوية الدين أولاً أو حذفه.`,
+        pendingDebt: totalPendingDebt
+      });
+    }
+
+    // 1. Remove patient from all clinic doctors' patient lists
+    for (const doc of doctors) {
+      const idx = (doc.patients || []).map(String).indexOf(patientId);
+      if (idx !== -1) {
+        doc.patients.splice(idx, 1);
+        await doc.save({ validateBeforeSave: false });
+      }
+    }
+
+    // 2. Cancel all future appointments
+    const now = new Date();
+    await Appointment.updateMany(
+      {
+        patient: patientId,
+        doctorId: { $in: doctorIds },
+        appointmentDateTime: { $gte: now },
+        status: { $in: ['pending', 'confirmed'] }
+      },
+      { $set: { status: 'cancelled', isPaid: true, debt: 0, debtStatus: 'none' } }
+    );
+
+    // 3. Clean up Financial.debts (mark all as paid/removed)
+    if (financial) {
+      const patientFinDebts = financial.debts.filter(d =>
+        d.patientId?.toString() === patientId
+      );
+      for (const d of patientFinDebts) {
+        if (d.status === 'pending') {
+          d.status = 'paid';
+          d.amount = 0;
+          d.paidAt = new Date();
+        }
+      }
+      financial.markModified('debts');
+      await financial.save();
+    }
+
+    // 4. Delete the patient User account entirely
+    await User.findByIdAndDelete(patientId);
+
+    // 5. Delete related medical records
+    const MedicalRecord = require('../models/MedicalRecord');
+    await MedicalRecord.deleteMany({ patient: patientId });
+
+    // 6. Delete related lab requests
+    const LabRequest = require('../models/LabRequest');
+    await LabRequest.deleteMany({ patientId: patientId });
+
+    res.status(200).json({
+      success: true,
+      message: 'تم حذف المريض نهائياً من العيادة'
+    });
+  } catch (error) {
+    console.error('Error deleting patient:', error);
+    res.status(500).json({ message: 'فشل في حذف المريض', error: error.message });
   }
 };

@@ -895,8 +895,18 @@ exports.setDoctorFeeAndDebt = async (req, res) => {
     // Total debt = doctor fee + clinic fee (appointmentFee is the clinic's كشفية)
     const clinicFeeAmount = appointment.clinicFee || appointment.appointmentFee || 0;
     const totalDebt = feeAmount + clinicFeeAmount;
-    appointment.debt = totalDebt;
-    appointment.debtStatus = 'full';
+    // Account for any payment already made
+    const alreadyPaid = appointment.paymentAmount || 0;
+    const remainingDebt = Math.max(0, totalDebt - alreadyPaid);
+    appointment.debt = remainingDebt;
+    if (remainingDebt <= 0) {
+      appointment.debtStatus = 'none';
+      appointment.isPaid = true;
+    } else if (alreadyPaid > 0) {
+      appointment.debtStatus = 'partial';
+    } else {
+      appointment.debtStatus = 'full';
+    }
     await appointment.save();
 
     // Create debt in financial record
