@@ -522,6 +522,7 @@ const getWhatsAppStatus = () => {
 };
 
 // Force reconnect WhatsApp (admin function) - clears session for re-pairing
+// Returns a promise that resolves once the new QR code is ready (or times out)
 const forceReconnectWhatsApp = async () => {
   console.log('🔄 Force disconnecting WhatsApp...');
   
@@ -554,8 +555,22 @@ const forceReconnectWhatsApp = async () => {
   
   console.log('✅ WhatsApp session cleared. Re-initializing for QR scan...');
   
-  // Auto re-initialize to generate new QR code
-  setTimeout(() => initializeWhatsApp(), 1000);
+  // Re-initialize and WAIT for the QR code to arrive (up to 20 seconds)
+  await initializeWhatsApp();
+  
+  for (let i = 0; i < 20; i++) {
+    if (qrCodeData) {
+      console.log('📱 QR code is ready after force reconnect');
+      return;
+    }
+    if (isReady) {
+      console.log('✅ WhatsApp reconnected without needing QR');
+      return;
+    }
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+  
+  console.log('⚠️ QR code not received within timeout, but socket is initializing');
 };
 
 module.exports = {

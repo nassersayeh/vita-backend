@@ -253,8 +253,11 @@ app.post('/api/whatsapp/reconnect', async (req, res) => {
     const status = getWhatsAppStatus();
     res.json({
       success: true,
-      message: 'WhatsApp session cleared. Enter your phone number to pair.',
-      whatsapp: status
+      message: status.qrCode 
+        ? 'QR code generated. Scan with WhatsApp to connect.'
+        : 'WhatsApp session cleared. Waiting for QR code...',
+      whatsapp: status,
+      qrCode: status.qrCode || null
     });
   } catch (error) {
     console.error('Force reconnect error:', error);
