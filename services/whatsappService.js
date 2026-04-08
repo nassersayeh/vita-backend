@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const mongoose = require('mongoose');
 const WhatsAppSession = require('../models/WhatsAppSession');
 
 // System WhatsApp socket instance (in-memory, per serverless invocation)
@@ -537,23 +538,34 @@ const formatPhoneNumber = (mobileNumber) => {
 
 // Send WhatsApp message
 const sendWhatsAppMessage = async (mobileNumber, message) => {
-  // If not ready in memory, try to reconnect from MongoDB credentials
+  // On Vercel: queue the message in MongoDB for the bridge to send
+  if (process.env.VERCEL) {
+    // Check if WhatsApp is connected first
+    const dbSession = await getSessionStatusFromDB(SYSTEM_SESSION_ID);
+    if (!dbSession || dbSession.status !== 'connected') {
+      throw new Error('WhatsApp client is not ready. Please connect WhatsApp first.');
+    }
+    
+    // Queue message in MongoDB
+    const WhatsAppMessage = mongoose.models.WhatsAppMessage || mongoose.model('WhatsAppMessage', new mongoose.Schema({
+      to: String,
+      message: String,
+      status: { type: String, enum: ['pending', 'sent', 'failed'], default: 'pending' },
+      error: String,
+      sentAt: Date,
+      createdAt: { type: Date, default: Date.now }
+    }));
+    
+    const phoneNumber = formatPhoneNumber(mobileNumber);
+    await WhatsAppMessage.create({ to: phoneNumber, message, status: 'pending' });
+    
+    console.log(`📱 Message queued for +${phoneNumber} (will be sent by bridge)`);
+    return { success: true, phone: phoneNumber, queued: true };
+  }
+  
+  // Local: send directly
   if (!isReady || !sock) {
-    if (process.env.VERCEL) {
-      const dbSession = await getSessionStatusFromDB(SYSTEM_SESSION_ID);
-      if (dbSession && dbSession.creds && dbSession.status === 'connected') {
-        console.log('📱 Attempting to reconnect WhatsApp from MongoDB credentials...');
-        await initializeWhatsApp();
-        // Wait up to 10 seconds for connection
-        for (let i = 0; i < 10; i++) {
-          if (isReady) break;
-          await new Promise(resolve => setTimeout(resolve, 1000));
-        }
-      }
-    }
-    if (!isReady || !sock) {
-      throw new Error('WhatsApp client is not ready. Please scan the QR code first.');
-    }
+    throw new Error('WhatsApp client is not ready. Please scan the QR code first.');
   }
 
   try {
@@ -753,18 +765,48 @@ const forceReconnectWhatsApp = async () => {
   qrCodeData = null;
   pairingCodeData = null;
   
-  // Clear auth - both MongoDB and filesystem
-  try {
-    await WhatsAppSession.findOneAndUpdate(
-      { sessionId: SYSTEM_SESSION_ID },
-      { creds: null, keys: {}, status: 'disconnected', qrCode: null, disconnectedAt: new Date() },
-      { upsert: true }
-    );
-  } catch (e) {
-    console.error('Error clearing session:', e.message);
+  if (process.env.VERCEL) {
+    // On Vercel: signal the whatsapp-bridge to reconnect via MongoDB
+    try {
+      await WhatsAppSession.findOneAndUpdate(
+        { sessionId: SYSTEM_SESSION_ID },
+        { 
+          creds: null, 
+          keys: {}, 
+          status: 'force_reconnect', 
+          qrCode: null, 
+          disconnectedAt: new Date(),
+          lastActivity: new Date()
+        },
+        { upsert: true }
+      );
+      console.log('✅ Force reconnect signal sent to WhatsApp bridge via MongoDB');
+    } catch (e) {
+      console.error('Error signaling reconnect:', e.message);
+    }
+    
+    // Wait up to 15 seconds for bridge to pick up and generate QR
+    for (let i = 0; i < 15; i++) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      try {
+        const session = await WhatsAppSession.findOne({ sessionId: SYSTEM_SESSION_ID });
+        if (session?.qrCode) {
+          console.log('📱 QR code received from bridge!');
+          return { qrCode: session.qrCode };
+        }
+        if (session?.status === 'connected') {
+          console.log('✅ Bridge reconnected!');
+          return { ready: true };
+        }
+      } catch (e) {}
+    }
+    
+    return { timeout: true, message: 'Waiting for WhatsApp bridge to generate QR code. Check status in a few seconds.' };
   }
   
-  const authPath = process.env.VERCEL ? '/tmp/baileys_auth' : path.join(__dirname, '..', 'baileys_auth');
+  // Local: run directly
+  // Clear auth files
+  const authPath = path.join(__dirname, '..', 'baileys_auth');
   if (fs.existsSync(authPath)) {
     console.log('🗑️ Clearing WhatsApp auth files...');
     try {
@@ -775,12 +817,20 @@ const forceReconnectWhatsApp = async () => {
     } catch (e) {}
   }
   
+  // Clear MongoDB too
+  try {
+    await WhatsAppSession.findOneAndUpdate(
+      { sessionId: SYSTEM_SESSION_ID },
+      { creds: null, keys: {}, status: 'disconnected', qrCode: null, disconnectedAt: new Date() },
+      { upsert: true }
+    );
+  } catch (e) {}
+  
   console.log('✅ WhatsApp session cleared. Re-initializing...');
   
   await initializeWhatsApp();
   
-  // Wait for QR code (up to 15 seconds - Vercel has ~10s timeout on free)
-  for (let i = 0; i < 15; i++) {
+  for (let i = 0; i < 20; i++) {
     if (qrCodeData) {
       console.log('📱 QR code is ready after force reconnect');
       return { qrCode: qrCodeData };
