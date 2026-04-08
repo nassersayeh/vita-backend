@@ -208,8 +208,9 @@ const initializeWhatsApp = async (pairingPhoneNumber = null) => {
       useMultiFileAuthState
     } = await import('@whiskeysockets/baileys');
 
-    // Use multi file auth state (creates a directory)
-    const { state, saveCreds } = await useMultiFileAuthState('./baileys_auth');
+    // Use multi file auth state - on Vercel use /tmp (only writable dir)
+    const authDir = process.env.VERCEL ? '/tmp/baileys_auth' : './baileys_auth';
+    const { state, saveCreds } = await useMultiFileAuthState(authDir);
 
     // Check if we have existing credentials (already paired before)
     const hasCredentials = state.creds && state.creds.me;
@@ -249,7 +250,7 @@ const initializeWhatsApp = async (pairingPhoneNumber = null) => {
           // 405/401 means session rejected - clear auth and wait for new pairing
           console.log('⚠️ WhatsApp session rejected (', statusCode, '). Clearing auth for fresh pairing.');
           // Clear auth files
-          const authPath = path.join(__dirname, '..', 'baileys_auth');
+          const authPath = process.env.VERCEL ? '/tmp/baileys_auth' : path.join(__dirname, '..', 'baileys_auth');
           if (fs.existsSync(authPath)) {
             try {
               const files = fs.readdirSync(authPath);
@@ -332,7 +333,7 @@ const requestWhatsAppPairingCode = async (phoneNumber) => {
   pairingCodeData = null;
 
   // Clear auth files for fresh pairing
-  const authPath = path.join(__dirname, '..', 'baileys_auth');
+  const authPath = process.env.VERCEL ? '/tmp/baileys_auth' : path.join(__dirname, '..', 'baileys_auth');
   if (fs.existsSync(authPath)) {
     try {
       const files = fs.readdirSync(authPath);
@@ -539,7 +540,7 @@ const forceReconnectWhatsApp = async () => {
   pairingCodeData = null;
   
   // Clear auth files to force fresh pairing
-  const authPath = path.join(__dirname, '..', 'baileys_auth');
+  const authPath = process.env.VERCEL ? '/tmp/baileys_auth' : path.join(__dirname, '..', 'baileys_auth');
   if (fs.existsSync(authPath)) {
     console.log('🗑️ Clearing WhatsApp auth files for fresh connection...');
     try {
