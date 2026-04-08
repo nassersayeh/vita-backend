@@ -18,7 +18,7 @@ router.get('/pharmacy/:pharmacyId/whatsapp/status', authMiddleware, async (req, 
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    const status = getPharmacyWhatsAppStatus(pharmacyId);
+    const status = await getPharmacyWhatsAppStatus(pharmacyId);
     const pharmacy = await User.findById(pharmacyId).select('whatsappSession');
     if (pharmacy && pharmacy.whatsappSession) {
       status.phoneNumber = pharmacy.whatsappSession.phoneNumber;

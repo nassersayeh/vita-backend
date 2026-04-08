@@ -697,7 +697,7 @@ exports.giftPoints = async (req, res) => {
         
         // Send WhatsApp message
         const { getWhatsAppStatus } = require('../services/whatsappService');
-        const whatsappStatus = getWhatsAppStatus();
+        const whatsappStatus = await getWhatsAppStatus();
         console.log(`Checking WhatsApp for user ${userId}: status=${JSON.stringify(whatsappStatus)}, mobileNumber=${user.mobileNumber}`);
         if (whatsappStatus.ready && whatsappStatus.initialized && user.mobileNumber) {
           try {

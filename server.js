@@ -71,7 +71,7 @@ try {
 } catch (err) {
   console.warn('⚠️ WhatsApp service not available:', err.message);
   initializeWhatsApp = async () => {};
-  getWhatsAppStatus = () => ({ ready: false });
+  getWhatsAppStatus = async () => ({ ready: false });
   forceReconnectWhatsApp = async () => {};
   requestWhatsAppPairingCode = async () => null;
 }
@@ -198,7 +198,6 @@ app.use('/api/prescriptions-enhanced', prescriptionsEnhancedRoutes);
 app.use('/api/pharmacy-inventory', pharmacyInventoryRoutes);
 app.use('/api/pharmacy-financial', pharmacyFinancialRoutes);
 app.use('/api/pharmacy-employees', pharmacyEmployeeRoutes);
-app.use('/api/addresses', require('./routes/addressRoutes'));
 app.use('/api/pharmacy-suppliers', pharmacySupplierRoutes);
 app.use('/api/medical-records', medicalRecordRoutes);
 app.use('/api/pharmacy', pharmacyCustomerRoutes);
@@ -238,26 +237,31 @@ if (serviceAccount) {
 }
 
 // WhatsApp status endpoint (to check if QR scan is needed)
-app.get('/api/whatsapp/status', (req, res) => {
-  const status = getWhatsAppStatus();
-  res.json({
-    success: true,
-    whatsapp: status
-  });
+app.get('/api/whatsapp/status', async (req, res) => {
+  try {
+    const status = await getWhatsAppStatus();
+    res.json({
+      success: true,
+      whatsapp: status
+    });
+  } catch (error) {
+    console.error('WhatsApp status error:', error);
+    res.status(500).json({
+      success: false,
+      whatsapp: { ready: false, initialized: false }
+    });
+  }
 });
 
 // Force reconnect WhatsApp (admin endpoint)
 app.post('/api/whatsapp/reconnect', async (req, res) => {
   try {
     await forceReconnectWhatsApp();
-    const status = getWhatsAppStatus();
+    const status = await getWhatsAppStatus();
     res.json({
       success: true,
-      message: status.qrCode 
-        ? 'QR code generated. Scan with WhatsApp to connect.'
-        : 'WhatsApp session cleared. Waiting for QR code...',
-      whatsapp: status,
-      qrCode: status.qrCode || null
+      message: 'WhatsApp session cleared. Enter your phone number to pair.',
+      whatsapp: status
     });
   } catch (error) {
     console.error('Force reconnect error:', error);
