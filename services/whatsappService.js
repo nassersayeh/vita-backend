@@ -872,7 +872,16 @@ module.exports = {
   getWhatsAppStatus,
   forceReconnectWhatsApp,
   requestWhatsAppPairingCode,
-  isWhatsAppReady: () => isReady,
+  isWhatsAppReady: async () => {
+    if (isReady) return true;
+    // On Vercel: check MongoDB for bridge status
+    try {
+      const dbSession = await getSessionStatusFromDB(SYSTEM_SESSION_ID);
+      return dbSession?.status === 'connected';
+    } catch (e) {
+      return false;
+    }
+  },
   // Pharmacy multi-client exports
   initializePharmacyWhatsApp,
   sendPharmacyWhatsAppMessage,

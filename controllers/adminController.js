@@ -715,7 +715,7 @@ exports.giftPoints = async (req, res) => {
             // Don't fail the whole operation if WhatsApp fails
           }
         } else {
-          console.log(`Skipping WhatsApp for user ${userId}: isReady=${isWhatsAppReady()}, hasMobile=${!!user.mobileNumber}`);
+          console.log(`Skipping WhatsApp for user ${userId}: isReady=${await isWhatsAppReady()}, hasMobile=${!!user.mobileNumber}`);
         }
         
         results.success.push(userId);

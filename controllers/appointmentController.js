@@ -60,7 +60,7 @@ const formatAppointmentDate = (date, lang = 'en') => {
 
 // Helper function to send appointment WhatsApp notifications (bilingual)
 const sendAppointmentWhatsAppNotifications = async (appointment, doctor, patient) => {
-  if (!isWhatsAppReady()) {
+  if (!(await isWhatsAppReady())) {
     console.log('WhatsApp not ready, skipping notifications');
     return;
   }
@@ -386,7 +386,7 @@ exports.updateAppointment = async (req, res) => {
       });
 
       // Send WhatsApp notification for status update (bilingual)
-      if (isWhatsAppReady() && user?.mobileNumber) {
+      if ((await isWhatsAppReady()) && user?.mobileNumber) {
         const userLang = user.language || 'en';
         const appointmentDateFormatted = formatAppointmentDate(appointment.appointmentDateTime, userLang);
         
@@ -446,7 +446,7 @@ exports.deleteAppointment = async (req, res) => {
     });
 
     // Send WhatsApp notification to doctor about cancellation (bilingual)
-    if (isWhatsAppReady() && doctorAccount?.mobileNumber) {
+    if ((await isWhatsAppReady()) && doctorAccount?.mobileNumber) {
       const doctorLang = doctorAccount.language || 'en';
       const appointmentDateFormatted = formatAppointmentDate(appointment.appointmentDateTime, doctorLang);
       

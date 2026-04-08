@@ -206,7 +206,7 @@ exports.enable2FA = async (req, res) => {
     }
 
     // Check if we should use WhatsApp or Email
-    const useWhatsApp = TWO_FA_METHOD === 'whatsapp' && isWhatsAppReady() && user.mobileNumber;
+    const useWhatsApp = TWO_FA_METHOD === 'whatsapp' && (await isWhatsAppReady()) && user.mobileNumber;
     
     if (useWhatsApp) {
       // Use WhatsApp

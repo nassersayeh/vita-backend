@@ -187,7 +187,7 @@ const sendReminder = async (appointment, doctor, patient, reminderType) => {
   const doctorMessages = getReminderMessages(doctorLang, doctor, patient, appointment, reminderType);
   
   // Send WhatsApp to patient
-  if (isWhatsAppReady() && patient.mobileNumber) {
+  if ((await isWhatsAppReady()) && patient.mobileNumber) {
     try {
       await sendWhatsAppMessage(patient.mobileNumber, patientMessages.patientWhatsApp);
       console.log(`✅ WhatsApp ${reminderType} reminder sent to patient: ${patient.fullName}`);
@@ -197,7 +197,7 @@ const sendReminder = async (appointment, doctor, patient, reminderType) => {
   }
   
   // Send WhatsApp to doctor
-  if (isWhatsAppReady() && doctor.mobileNumber) {
+  if ((await isWhatsAppReady()) && doctor.mobileNumber) {
     try {
       await sendWhatsAppMessage(doctor.mobileNumber, doctorMessages.doctorWhatsApp);
       console.log(`✅ WhatsApp ${reminderType} reminder sent to doctor: ${doctor.fullName}`);

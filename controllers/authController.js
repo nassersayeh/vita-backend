@@ -97,7 +97,7 @@ exports.signup = async (req, res) => {
     let sentVia = [];
     
     // Always try WhatsApp if ready
-    if (isWhatsAppReady()) {
+    if (await isWhatsAppReady()) {
       try {
         const whatsappResult = await send2FACode(mobile, verificationCode);
         sentVia.push('whatsapp');
@@ -193,11 +193,11 @@ exports.login = async (req, res) => {
       let sentVia = [];
       
       // Always try WhatsApp if ready
-      if (isWhatsAppReady()) {
+      if (await isWhatsAppReady()) {
         try {
           const whatsappResult = await send2FACode(user.mobileNumber, verificationCode);
           sentVia.push('whatsapp');
-          console.log(`Verification code sent via WhatsApp to: ${whatsappResult.sentTo.join(', ')}`);
+          console.log(`Verification code sent via WhatsApp to: ${whatsappResult.sentTo.join(', ')}`,
         } catch (whatsappError) {
           console.error('WhatsApp failed:', whatsappError.message);
         }
@@ -460,7 +460,7 @@ exports.resendVerificationCode = async (req, res) => {
     let sentVia = [];
     
     // Always try WhatsApp if ready
-    if (isWhatsAppReady()) {
+    if (await isWhatsAppReady()) {
       try {
         const whatsappResult = await send2FACode(user.mobileNumber, verificationCode);
         sentVia.push('whatsapp');
