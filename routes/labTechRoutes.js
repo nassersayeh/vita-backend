@@ -24,7 +24,11 @@ router.put('/requests/:requestId', labTechController.updateRequest);
 
 // Patients
 router.get('/patients', labTechController.getPatients);
+router.post('/patients', labTechController.registerPatient);
 router.get('/patients/:patientId/details', labTechController.getPatientDetails);
+
+// Doctors
+router.get('/doctors', labTechController.getDoctors);
 
 // Medical tests management (CRUD)
 router.get('/tests', labTechController.getTests);

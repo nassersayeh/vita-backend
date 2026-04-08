@@ -628,8 +628,8 @@ exports.requestLabTest = async (req, res) => {
 
     const labRequest = new LabRequest({
       patientId,
-      doctorId: doctorId || clinic.doctors[0]?.doctorId,
-      labId: labId || clinic.doctors[0]?.doctorId,
+      doctorId: doctorId || null,
+      labId: labId || null,
       testIds,
       notes,
       totalCost,

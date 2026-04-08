@@ -2,6 +2,7 @@ const LabRequest = require('../models/LabRequest');
 const MedicalTest = require('../models/MedicalTest');
 const User = require('../models/User');
 const Clinic = require('../models/Clinic');
+const bcrypt = require('bcryptjs');
 
 // Get clinic for this lab tech
 const getClinicForLabTech = async (labTechId) => {
@@ -128,6 +129,7 @@ exports.getRequests = async (req, res) => {
       .populate('patientId', 'fullName mobileNumber profileImage birthdate sex')
       .populate('doctorId', 'fullName specialty')
       .populate('testIds', 'name type category price normalRange unit')
+      .populate('requestedBy', 'fullName')
       .sort({ requestDate: -1 })
       .limit(limit * 1)
       .skip((page - 1) * limit);
@@ -151,7 +153,7 @@ exports.getRequests = async (req, res) => {
 exports.updateRequest = async (req, res) => {
   try {
     const { requestId } = req.params;
-    const { status, results, notes } = req.body;
+    const { status, results, notes, testUpdates } = req.body;
 
     const request = await LabRequest.findById(requestId);
     if (!request) {
@@ -174,10 +176,31 @@ exports.updateRequest = async (req, res) => {
 
     await request.save();
 
+    // Persist normalRange/unit to MedicalTest documents if provided
+    if (Array.isArray(testUpdates) && testUpdates.length > 0) {
+      const bulkOps = testUpdates
+        .filter(tu => tu.testId && (tu.normalRange || tu.unit))
+        .map(tu => ({
+          updateOne: {
+            filter: { _id: tu.testId },
+            update: {
+              $set: {
+                ...(tu.normalRange ? { normalRange: tu.normalRange } : {}),
+                ...(tu.unit ? { unit: tu.unit } : {}),
+              }
+            }
+          }
+        }));
+      if (bulkOps.length > 0) {
+        await MedicalTest.bulkWrite(bulkOps);
+      }
+    }
+
     const updatedRequest = await LabRequest.findById(requestId)
       .populate('patientId', 'fullName mobileNumber')
       .populate('doctorId', 'fullName specialty')
-      .populate('testIds', 'name type category price normalRange unit');
+      .populate('testIds', 'name type category price normalRange unit')
+      .populate('requestedBy', 'fullName');
 
     res.status(200).json({
       success: true,
@@ -393,5 +416,185 @@ exports.getPatientDetails = async (req, res) => {
   } catch (error) {
     console.error('Error fetching patient details:', error);
     res.status(500).json({ message: 'فشل في جلب بيانات المريض', error: error.message });
+  }
+};
+
+// Register a new patient (same as accountant)
+exports.registerPatient = async (req, res) => {
+  try {
+    const labTechId = req.user._id;
+    const clinic = await getClinicForLabTech(labTechId);
+    if (!clinic) {
+      return res.status(404).json({ message: 'لم يتم العثور على عيادة مرتبطة بحسابك' });
+    }
+
+    const { fullName, mobileNumber, idNumber, birthdate, sex, address, country, city, doctorId, password,
+      maritalStatus,
+      emergencyContactName, emergencyContactRelation, emergencyPhone,
+      hasChronicDiseases, chronicDiseasesText,
+      hasSurgeries, surgeriesText,
+      hasFamilyDiseases, familyDiseasesText,
+      hasDrugAllergies, drugAllergiesText,
+      hasFoodAllergies, foodAllergiesText,
+      height, weight, bloodPressure, heartRate, temperature, bloodSugar,
+      smoking, previousDiseases, disabilities
+    } = req.body;
+
+    if (!fullName || !mobileNumber || !idNumber) {
+      return res.status(400).json({ message: 'يرجى ملء جميع الحقول المطلوبة' });
+    }
+
+    // Verify doctor is in the clinic if specified
+    if (doctorId) {
+      const doctorEntry = clinic.doctors.find(d =>
+        d.doctorId.toString() === doctorId && d.status === 'active'
+      );
+      if (!doctorEntry) {
+        return res.status(403).json({ message: 'الطبيب غير موجود في هذه العيادة' });
+      }
+    }
+
+    // Check if patient exists
+    let patient = await User.findOne({ mobileNumber });
+    if (!patient) {
+      patient = await User.findOne({ idNumber });
+    }
+
+    if (patient) {
+      // Patient exists — update medical fields
+      const medicalFields = {
+        maritalStatus, emergencyContactName, emergencyContactRelation, emergencyPhone,
+        hasChronicDiseases, chronicDiseasesText, hasSurgeries, surgeriesText,
+        hasFamilyDiseases, familyDiseasesText, hasDrugAllergies, drugAllergiesText,
+        hasFoodAllergies, foodAllergiesText, bloodPressure, heartRate, temperature, bloodSugar,
+        smoking, previousDiseases, disabilities
+      };
+      const updates = {};
+      for (const [key, value] of Object.entries(medicalFields)) {
+        if (value !== undefined && value !== null) {
+          updates[key] = value;
+        }
+      }
+      if (height) updates.height = Number(height);
+      if (weight) updates.weight = Number(weight);
+      if (birthdate) updates.birthdate = birthdate;
+      if (sex) updates.sex = sex;
+      if (address) updates.address = address;
+      if (Object.keys(updates).length > 0) {
+        await User.findByIdAndUpdate(patient._id, { $set: updates });
+      }
+
+      // Add to doctor(s)
+      if (doctorId) {
+        const doctor = await User.findById(doctorId);
+        if (doctor && !doctor.patients.includes(patient._id)) {
+          doctor.patients.push(patient._id);
+          await doctor.save({ validateBeforeSave: false });
+        }
+      } else {
+        const activeDoctorIds = clinic.doctors.filter(d => d.status === 'active').map(d => d.doctorId);
+        for (const docId of activeDoctorIds) {
+          const doc = await User.findById(docId);
+          if (doc && !doc.patients.includes(patient._id)) {
+            doc.patients.push(patient._id);
+            await doc.save({ validateBeforeSave: false });
+          }
+        }
+      }
+      return res.status(200).json({
+        success: true,
+        message: 'المريض موجود بالفعل وتم ربطه بالطبيب',
+        patient: { _id: patient._id, fullName: patient.fullName, mobileNumber: patient.mobileNumber, idNumber: patient.idNumber },
+        isExisting: true
+      });
+    }
+
+    // Create new patient
+    const clinicOwner = await User.findById(clinic.ownerId);
+    const hashedPassword = await bcrypt.hash(password || mobileNumber, 10);
+
+    const newPatient = new User({
+      fullName, mobileNumber, idNumber,
+      password: hashedPassword,
+      role: 'User',
+      birthdate, sex,
+      address: address || clinicOwner?.address || '',
+      country: country || clinicOwner?.country || 'Palestine',
+      city: city || clinicOwner?.city || '',
+      isPhoneVerified: true,
+      activationStatus: 'active',
+      maritalStatus: maritalStatus || '',
+      emergencyContactName: emergencyContactName || '',
+      emergencyContactRelation: emergencyContactRelation || '',
+      emergencyPhone: emergencyPhone || '',
+      hasChronicDiseases: hasChronicDiseases || false,
+      chronicDiseasesText: chronicDiseasesText || '',
+      hasSurgeries: hasSurgeries || false,
+      surgeriesText: surgeriesText || '',
+      hasFamilyDiseases: hasFamilyDiseases || false,
+      familyDiseasesText: familyDiseasesText || '',
+      hasDrugAllergies: hasDrugAllergies || false,
+      drugAllergiesText: drugAllergiesText || '',
+      hasFoodAllergies: hasFoodAllergies || false,
+      foodAllergiesText: foodAllergiesText || '',
+      height: height ? Number(height) : null,
+      weight: weight ? Number(weight) : null,
+      bloodPressure: bloodPressure || '',
+      heartRate: heartRate || '',
+      temperature: temperature || '',
+      bloodSugar: bloodSugar || '',
+      smoking: smoking || false,
+      previousDiseases: previousDiseases || '',
+      disabilities: disabilities || '',
+    });
+
+    await newPatient.save();
+
+    // Add patient to doctor(s)
+    if (doctorId) {
+      const doctor = await User.findById(doctorId);
+      if (doctor && !doctor.patients.includes(newPatient._id)) {
+        doctor.patients.push(newPatient._id);
+        await doctor.save({ validateBeforeSave: false });
+      }
+    } else {
+      const activeDoctorIds = clinic.doctors.filter(d => d.status === 'active').map(d => d.doctorId);
+      for (const docId of activeDoctorIds) {
+        const doc = await User.findById(docId);
+        if (doc && !doc.patients.includes(newPatient._id)) {
+          doc.patients.push(newPatient._id);
+          await doc.save({ validateBeforeSave: false });
+        }
+      }
+    }
+
+    res.status(201).json({
+      success: true,
+      message: 'تم تسجيل المريض بنجاح',
+      patient: { _id: newPatient._id, fullName: newPatient.fullName, mobileNumber: newPatient.mobileNumber, idNumber: newPatient.idNumber },
+      isExisting: false
+    });
+  } catch (error) {
+    console.error('Error registering patient (lab tech):', error);
+    res.status(500).json({ message: 'فشل في تسجيل المريض', error: error.message });
+  }
+};
+
+// Get clinic doctors (for lab tech)
+exports.getDoctors = async (req, res) => {
+  try {
+    const labTechId = req.user._id;
+    const clinic = await getClinicForLabTech(labTechId);
+    if (!clinic) {
+      return res.status(404).json({ message: 'لم يتم العثور على عيادة مرتبطة بحسابك' });
+    }
+
+    const doctorIds = clinic.doctors.filter(d => d.status === 'active').map(d => d.doctorId);
+    const doctors = await User.find({ _id: { $in: doctorIds } }).select('fullName specialty profileImage');
+
+    res.status(200).json({ success: true, doctors });
+  } catch (error) {
+    console.error('Error fetching doctors for lab tech:', error);
+    res.status(500).json({ message: 'فشل في جلب قائمة الأطباء', error: error.message });
   }
 };
