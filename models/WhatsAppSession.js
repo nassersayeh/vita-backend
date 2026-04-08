@@ -21,8 +21,13 @@ const whatsAppSessionSchema = new mongoose.Schema({
   // Connection status
   status: {
     type: String,
-    enum: ['connected', 'disconnected', 'connecting', 'logged_out'],
+    enum: ['connected', 'disconnected', 'connecting', 'logged_out', 'waiting_qr'],
     default: 'disconnected'
+  },
+  // QR code data (stored so other serverless instances can read it)
+  qrCode: {
+    type: String,
+    default: null
   },
   // Phone number connected
   phoneNumber: {

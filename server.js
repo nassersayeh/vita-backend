@@ -256,11 +256,17 @@ app.get('/api/whatsapp/status', async (req, res) => {
 // Force reconnect WhatsApp (admin endpoint)
 app.post('/api/whatsapp/reconnect', async (req, res) => {
   try {
-    await forceReconnectWhatsApp();
+    const result = await forceReconnectWhatsApp();
     const status = await getWhatsAppStatus();
+    // Also include QR code directly from reconnect result
+    if (result?.qrCode && !status.qrCode) {
+      status.qrCode = result.qrCode;
+      status.needsQrScan = true;
+    }
     res.json({
       success: true,
-      message: 'WhatsApp session cleared. Enter your phone number to pair.',
+      message: 'WhatsApp session cleared. Scan the QR code to connect.',
+      qrCode: result?.qrCode || status.qrCode || null,
       whatsapp: status
     });
   } catch (error) {
