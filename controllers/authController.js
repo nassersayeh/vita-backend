@@ -197,7 +197,7 @@ exports.login = async (req, res) => {
         try {
           const whatsappResult = await send2FACode(user.mobileNumber, verificationCode);
           sentVia.push('whatsapp');
-          console.log(`Verification code sent via WhatsApp to: ${whatsappResult.sentTo.join(', ')}`,
+          console.log(`Verification code sent via WhatsApp to: ${whatsappResult.sentTo.join(', ')}`);
         } catch (whatsappError) {
           console.error('WhatsApp failed:', whatsappError.message);
         }
