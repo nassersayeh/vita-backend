@@ -236,7 +236,7 @@ if (serviceAccount) {
   console.warn('⚠️ Firebase Admin not initialized - no service account');
 }
 
-// WhatsApp status endpoint (to check if QR scan is needed)
+// WhatsApp status  (to check if QR scan is needed)
 app.get('/api/whatsapp/status', async (req, res) => {
   try {
     const status = await getWhatsAppStatus();
