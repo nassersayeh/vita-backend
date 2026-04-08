@@ -522,7 +522,6 @@ const getWhatsAppStatus = () => {
   };
 };
 
-// Force reconnect WhatsApp (admin function) - clears session for re-pairing
 // Returns a promise that resolves once the new QR code is ready (or times out)
 const forceReconnectWhatsApp = async () => {
   console.log('🔄 Force disconnecting WhatsApp...');
