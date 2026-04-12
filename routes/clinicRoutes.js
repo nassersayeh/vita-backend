@@ -75,6 +75,12 @@ router.get('/prescriptions', clinicController.getAllPrescriptions);
 // Get financial summary
 router.get('/financial', clinicController.getFinancialSummary);
 
+// Edit appointment financial data
+router.put('/financial/appointment/:appointmentId', clinicController.editAppointmentFinancial);
+
+// Delete appointment and all related financial data
+router.delete('/financial/appointment/:appointmentId', clinicController.deleteAppointment);
+
 // ==================== STAFF MANAGEMENT ====================
 // Add a staff member (Nurse, Accountant, LabTech)
 router.post('/staff', clinicController.addStaff);

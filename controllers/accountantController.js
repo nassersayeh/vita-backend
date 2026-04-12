@@ -614,25 +614,28 @@ exports.requestLabTest = async (req, res) => {
 
     const { patientId, doctorId, testIds, notes } = req.body;
 
-    if (!patientId || !testIds || testIds.length === 0) {
-      return res.status(400).json({ message: 'يجب تحديد المريض والفحوصات المطلوبة' });
+    if (!patientId || !doctorId || !testIds || testIds.length === 0) {
+      return res.status(400).json({ message: 'يجب تحديد المريض والطبيب والفحوصات المطلوبة' });
     }
 
     // Find lab tech in clinic staff
     const labTechStaff = clinic.staff.find(s => s.role === 'LabTech' && s.status === 'active');
     const labId = labTechStaff ? labTechStaff.userId : null;
 
-    // Calculate total cost
+    // Verify tests exist
     const tests = await MedicalTest.find({ _id: { $in: testIds }, isActive: true });
-    const totalCost = tests.reduce((sum, t) => sum + (t.price || 0), 0);
 
+    // Accountant does NOT set prices - only lab tech sets prices when processing
     const labRequest = new LabRequest({
       patientId,
-      doctorId: doctorId || null,
+      doctorId,
       labId: labId || null,
       testIds,
       notes,
-      totalCost,
+      totalCost: 0,
+      originalCost: 0,
+      discount: 0,
+      discountAmount: 0,
       requestedBy: accountantId,
       clinicId: clinic._id,
       approvalStatus: 'approved'
@@ -640,36 +643,12 @@ exports.requestLabTest = async (req, res) => {
 
     await labRequest.save();
 
-    // Add lab test cost as DEBT to the patient in CLINIC OWNER's Financial
-    if (totalCost > 0) {
-      try {
-        const clinicOwnerId = clinic.ownerId;
-        let financial = await Financial.findOne({ doctorId: clinicOwnerId });
-        if (!financial) {
-          financial = new Financial({ doctorId: clinicOwnerId, totalEarnings: 0, totalExpenses: 0 });
-        }
-        const testNames = tests.map(t => t.name).join(', ');
-        financial.debts.push({
-          patientId,
-          doctorId: doctorId || clinic.doctors[0]?.doctorId,
-          amount: totalCost,
-          originalAmount: totalCost,
-          description: `فحوصات مخبرية - ${testNames}`,
-          date: new Date(),
-          status: 'pending'
-        });
-        await financial.save();
-        console.log(`Accountant added lab test debt of ${totalCost} ILS for patient ${patientId}`);
-      } catch (debtErr) {
-        console.error('Error adding lab test debt from accountant:', debtErr);
-      }
-    }
+    // No debt is created here - debt is added only when lab tech marks request as completed
 
     res.status(201).json({
       success: true,
       message: 'تم طلب الفحوصات بنجاح',
-      labRequest,
-      totalCost
+      labRequest
     });
   } catch (error) {
     console.error('Error requesting lab test:', error);
@@ -953,27 +932,28 @@ exports.getPatientReceipt = async (req, res) => {
     const { startDate, endDate } = req.query;
 
     const doctorIds = clinic.doctors.filter(d => d.status === 'active').map(d => d.doctorId);
+    const clinicOwnerId = clinic.ownerId;
 
-    const query = {
+    // ======== 1) Appointments paid in date range ========
+    const aptQuery = {
       doctorId: { $in: doctorIds },
       patient: patientId,
       isPaid: true
     };
-
     if (startDate || endDate) {
-      query.paidAt = {};
-      if (startDate) query.paidAt.$gte = new Date(startDate);
-      if (endDate) query.paidAt.$lte = new Date(endDate);
+      aptQuery.paidAt = {};
+      if (startDate) aptQuery.paidAt.$gte = new Date(startDate);
+      if (endDate) aptQuery.paidAt.$lte = new Date(endDate);
     }
 
-    const appointments = await Appointment.find(query)
+    const appointments = await Appointment.find(aptQuery)
       .populate('patient', 'fullName mobileNumber idNumber')
       .populate('doctorId', 'fullName specialty')
       .sort({ paidAt: -1 });
 
-    // Lab tests
+    // ======== 2) Lab requests paid in date range ========
     const labQuery = {
-      doctorId: { $in: doctorIds },
+      clinicId: clinic._id,
       patientId,
       isPaid: true
     };
@@ -982,81 +962,351 @@ exports.getPatientReceipt = async (req, res) => {
       if (startDate) labQuery.paidAt.$gte = new Date(startDate);
       if (endDate) labQuery.paidAt.$lte = new Date(endDate);
     }
+    const labRequestsByClinic = await LabRequest.find(labQuery).populate('testIds', 'name price');
+    const labQueryByDoc = {
+      doctorId: { $in: doctorIds },
+      patientId,
+      isPaid: true
+    };
+    if (startDate || endDate) {
+      labQueryByDoc.paidAt = {};
+      if (startDate) labQueryByDoc.paidAt.$gte = new Date(startDate);
+      if (endDate) labQueryByDoc.paidAt.$lte = new Date(endDate);
+    }
+    const labRequestsByDoc = await LabRequest.find(labQueryByDoc).populate('testIds', 'name price');
+    const labRequestMap = new Map();
+    for (const lr of [...labRequestsByClinic, ...labRequestsByDoc]) {
+      labRequestMap.set(lr._id.toString(), lr);
+    }
+    const labRequests = Array.from(labRequestMap.values());
 
-    const labRequests = await LabRequest.find(labQuery)
-      .populate('testIds', 'name price');
+    // ======== 3) ALL lab requests for this patient (to look up test details from debts) ========
+    const allPatientLabRequests = await LabRequest.find({
+      patientId,
+      $or: [
+        { clinicId: clinic._id },
+        { doctorId: { $in: doctorIds } }
+      ]
+    }).populate('testIds', 'name price');
 
-    const items = [];
+    // ======== 4) Financial transactions (ONLY clinic owner's) ========
+    const clinicFinancial = await Financial.findOne({ doctorId: clinicOwnerId });
 
-    for (const apt of appointments) {
-      items.push({
-        type: 'كشف طبي',
-        description: apt.reason || 'كشف',
-        doctor: apt.doctorId?.fullName || '',
-        date: apt.paidAt,
-        amount: apt.paymentAmount
-      });
+    let clinicTransactions = [];
+    if (clinicFinancial) {
+      clinicTransactions = (clinicFinancial.transactions || [])
+        .filter(t => t.patientId?.toString() === patientId);
+      if (startDate) clinicTransactions = clinicTransactions.filter(t => t.date && new Date(t.date) >= new Date(startDate));
+      if (endDate) clinicTransactions = clinicTransactions.filter(t => t.date && new Date(t.date) <= new Date(endDate));
     }
 
-    for (const lab of labRequests) {
-      const testNames = (lab.testIds || []).map(t => t.name).join(', ');
-      items.push({
-        type: 'فحوصات مخبرية',
-        description: testNames,
-        doctor: '',
-        date: lab.paidAt,
-        amount: lab.paidAmount || lab.totalCost || 0
-      });
-    }
-
-    const patient = await User.findById(patientId, 'fullName mobileNumber idNumber');
-    const totalPaid = items.reduce((sum, item) => sum + item.amount, 0);
-
-    // Get patient debt info from clinic owner AND all clinic doctors
-    const clinicOwnerId = clinic.ownerId;
+    // ======== 5) Collect all debts (pending + paid today) ========
     const allFinancialIds = [clinicOwnerId, ...doctorIds];
     const allFinancials = await Financial.find({ doctorId: { $in: allFinancialIds } });
-    
     let patientDebts = [];
-    let patientTransactions = [];
+    let paidDebtsToday = [];
     for (const fin of allFinancials) {
       const finDebts = (fin.debts || []).filter(d =>
         d.patientId?.toString() === patientId && d.status === 'pending'
       );
       patientDebts = patientDebts.concat(finDebts);
-      
-      const finTransactions = (fin.transactions || [])
-        .filter(t => t.patientId?.toString() === patientId);
-      patientTransactions = patientTransactions.concat(finTransactions);
+
+      // Debts paid today — these tell us WHAT services were paid for
+      const paidToday = (fin.debts || []).filter(d => {
+        if (d.patientId?.toString() !== patientId) return false;
+        if (d.status !== 'paid') return false;
+        if (!d.paidAt) return false;
+        const paidDate = new Date(d.paidAt);
+        if (startDate && paidDate < new Date(startDate)) return false;
+        if (endDate && paidDate > new Date(endDate)) return false;
+        return true;
+      });
+      paidDebtsToday = paidDebtsToday.concat(paidToday);
     }
     const totalDebt = patientDebts.reduce((sum, d) => sum + (d.amount || 0), 0);
 
-    // Get latest payments from transactions
-    patientTransactions.sort((a, b) => new Date(b.date) - new Date(a.date));
-    patientTransactions = patientTransactions.slice(0, 20);
+    // ======== 6) Build items ========
+    const items = [];
+    const coveredAptIds = new Set();
 
-    for (const txn of patientTransactions) {
-      // avoid duplicating appointment items already added
-      const alreadyExists = items.some(item =>
-        item.amount === txn.amount && item.date && txn.date &&
-        Math.abs(new Date(item.date) - new Date(txn.date)) < 60000
-      );
-      if (!alreadyExists) {
+    // 6a) Appointments paid in range
+    for (const apt of appointments) {
+      const totalFee = (apt.doctorFee || 0) + (apt.clinicFee || apt.appointmentFee || 0);
+      items.push({
+        category: 'كشف طبي',
+        serviceName: apt.reason || 'كشف طبي',
+        servicePrice: totalFee || apt.paymentAmount || 0,
+        paidAmount: apt.paymentAmount || 0,
+        discount: 0,
+        discountAmount: 0,
+        doctor: apt.doctorId?.fullName || '',
+        date: apt.paidAt,
+        paymentMethod: apt.paymentMethod || ''
+      });
+      coveredAptIds.add(apt._id.toString());
+    }
+
+    // 6b) Lab requests paid in range (directly via markTestAsPaid or approveLabRequest)
+    const coveredLabRequestIds = new Set();
+    for (const lab of labRequests) {
+      const tests = lab.testIds || [];
+      const discount = lab.discount || 0;
+      if (tests.length > 0) {
+        const labPaid = lab.paidAmount || lab.totalCost || 0;
+        const totalOriginal = tests.reduce((s, t) => s + (t.price || 0), 0);
+        for (let i = 0; i < tests.length; i++) {
+          const test = tests[i];
+          const testPrice = test.price || 0;
+          let testPaid;
+          if (totalOriginal > 0) {
+            testPaid = Math.round((testPrice / totalOriginal) * labPaid);
+          } else {
+            testPaid = Math.round(labPaid / tests.length);
+          }
+          if (i === tests.length - 1) {
+            const sumSoFar = tests.slice(0, -1).reduce((s, t2) => {
+              return s + Math.round(((t2.price || 0) / totalOriginal) * labPaid);
+            }, 0);
+            testPaid = labPaid - sumSoFar;
+          }
+          const testDiscount = discount > 0 ? Math.round(testPrice * discount / 100) : 0;
+          items.push({
+            category: 'فحص مخبري',
+            serviceName: test.name || 'فحص',
+            servicePrice: testPrice,
+            paidAmount: testPaid,
+            discount: discount,
+            discountAmount: testDiscount,
+            doctor: '',
+            date: lab.paidAt,
+            paymentMethod: ''
+          });
+        }
+      } else {
         items.push({
-          type: 'دفعة',
-          service: txn.description || 'دفعة',
-          description: txn.description || 'دفعة',
-          date: txn.date,
-          amount: txn.amount
+          category: 'فحوصات مخبرية',
+          serviceName: lab.testName || 'فحوصات',
+          servicePrice: lab.originalCost || lab.totalCost || 0,
+          paidAmount: lab.paidAmount || lab.totalCost || 0,
+          discount: discount,
+          discountAmount: discount > 0 ? Math.round((lab.originalCost || lab.totalCost || 0) * discount / 100) : 0,
+          doctor: '',
+          date: lab.paidAt,
+          paymentMethod: ''
         });
       }
+      coveredLabRequestIds.add(lab._id.toString());
+    }
+
+    // 6c) Debts paid today → break down into detailed service items
+    //     This covers the case where insertPayment pays debts but doesn't mark LabRequests as isPaid
+
+    // Find insertPayment transactions to get bulk discount info
+    const insertPaymentTxns = clinicTransactions.filter(t =>
+      t.totalDebtBeforeDiscount > 0 || t.description === 'دفعة من مريض' || (t.description || '').includes('دفعة مريض')
+    );
+    // Build a function to find the discount % that applies to a debt based on paidAt time
+    const getDiscountForDebt = (debtPaidAt) => {
+      if (!debtPaidAt || insertPaymentTxns.length === 0) return { discountPercent: 0, discountAmount: 0 };
+      // Find the insertPayment transaction closest in time to this debt's paidAt
+      const debtTime = new Date(debtPaidAt).getTime();
+      let bestMatch = null;
+      let bestDiff = Infinity;
+      for (const txn of insertPaymentTxns) {
+        const txnTime = new Date(txn.date).getTime();
+        const diff = Math.abs(txnTime - debtTime);
+        if (diff < bestDiff && diff < 60000) { // within 1 minute
+          bestDiff = diff;
+          bestMatch = txn;
+        }
+      }
+      if (bestMatch && bestMatch.discountPercent > 0) {
+        return { discountPercent: bestMatch.discountPercent, totalDebtBeforeDiscount: bestMatch.totalDebtBeforeDiscount || 0 };
+      }
+      return { discountPercent: 0, totalDebtBeforeDiscount: 0 };
+    };
+
+    const coveredDebtDescs = new Set();
+    for (const debt of paidDebtsToday) {
+      const desc = debt.description || '';
+      const originalAmount = debt.originalAmount || debt.amount || 0;
+      const debtDate = debt.paidAt || debt.date;
+      // Get the discount info from the matching insertPayment transaction
+      const { discountPercent: bulkDiscountPct } = getDiscountForDebt(debtDate);
+      const debtDiscountAmount = bulkDiscountPct > 0 ? Math.round(originalAmount * bulkDiscountPct / 100) : 0;
+      const debtPaidAmount = originalAmount - debtDiscountAmount;
+
+      // Check: is this debt for an appointment we already listed?
+      const isAptDebt = desc.includes('كشفية') || desc.includes('دين موعد') || desc.match(/^موعد /);
+      if (isAptDebt) {
+        // Check if any appointment item already covers a similar amount
+        const alreadyCovered = items.some(it =>
+          it.category === 'كشف طبي' &&
+          Math.abs(new Date(it.date || 0) - new Date(debtDate || 0)) < 120000
+        );
+        if (alreadyCovered) continue;
+        // Show as appointment
+        let serviceName = desc.replace('كشفية العيادة - ', '').replace('دين موعد - ', '').replace('موعد - ', '');
+        items.push({
+          category: 'كشف طبي',
+          serviceName: serviceName || 'كشف طبي',
+          servicePrice: originalAmount,
+          paidAmount: debtPaidAmount,
+          discount: bulkDiscountPct, discountAmount: debtDiscountAmount,
+          doctor: '', date: debtDate, paymentMethod: ''
+        });
+        coveredDebtDescs.add(desc);
+        continue;
+      }
+
+      // Check: is this debt for lab tests?
+      const isLabDebt = desc.includes('فحوصات مخبرية') || desc.includes('فحص مخبري');
+      if (isLabDebt) {
+        // Try to find the actual LabRequest to get individual test names & prices
+        // Extract test names from debt description like "فحوصات مخبرية - CBC, RFT" or "فحوصات مخبرية (CBC, RFT)"
+        const testNamesStr = desc
+          .replace(/فحوصات مخبرية\s*[-–]\s*/, '')
+          .replace(/فحوصات مخبرية\s*\(/, '')
+          .replace(/\)/, '')
+          .replace(/\s*-\s*خصم \d+%/, '')
+          .trim();
+
+        // Try to match with an actual LabRequest by test names
+        let matchedLab = null;
+        for (const lr of allPatientLabRequests) {
+          if (coveredLabRequestIds.has(lr._id.toString())) continue;
+          const lrTestNames = (lr.testIds || []).map(t => t.name).join(', ');
+          if (lrTestNames === testNamesStr || desc.includes(lrTestNames)) {
+            matchedLab = lr;
+            break;
+          }
+        }
+
+        if (matchedLab && matchedLab.testIds && matchedLab.testIds.length > 0) {
+          // We found the actual lab request — show individual tests!
+          const tests = matchedLab.testIds;
+          // Use bulk discount from insertPayment, or lab's own discount if no bulk discount
+          const effectiveDiscountPct = bulkDiscountPct > 0 ? bulkDiscountPct : (matchedLab.discount || 0);
+          const totalOriginal = tests.reduce((s, t) => s + (t.price || 0), 0);
+          const effectivePaid = debtPaidAmount; // What was actually paid for this debt after discount
+          for (let i = 0; i < tests.length; i++) {
+            const test = tests[i];
+            const testPrice = test.price || 0;
+            let testPaid;
+            if (totalOriginal > 0) {
+              testPaid = Math.round((testPrice / totalOriginal) * effectivePaid);
+            } else {
+              testPaid = Math.round(effectivePaid / tests.length);
+            }
+            if (i === tests.length - 1) {
+              const sumSoFar = tests.slice(0, -1).reduce((s, t2) => {
+                return s + Math.round(((t2.price || 0) / totalOriginal) * effectivePaid);
+              }, 0);
+              testPaid = effectivePaid - sumSoFar;
+            }
+            const testDiscount = effectiveDiscountPct > 0 ? Math.round(testPrice * effectiveDiscountPct / 100) : 0;
+            items.push({
+              category: 'فحص مخبري',
+              serviceName: test.name || 'فحص',
+              servicePrice: testPrice,
+              paidAmount: testPaid,
+              discount: effectiveDiscountPct,
+              discountAmount: testDiscount,
+              doctor: '',
+              date: debtDate,
+              paymentMethod: ''
+            });
+          }
+          coveredLabRequestIds.add(matchedLab._id.toString());
+        } else {
+          // Couldn't find the LabRequest — show test names from debt description
+          // Split comma-separated test names
+          const testNames = testNamesStr.split(',').map(n => n.trim()).filter(Boolean);
+          if (testNames.length > 1) {
+            const perTestPrice = Math.round(originalAmount / testNames.length);
+            const perTestPaid = Math.round(debtPaidAmount / testNames.length);
+            for (let i = 0; i < testNames.length; i++) {
+              const price = i === testNames.length - 1 ? originalAmount - perTestPrice * (testNames.length - 1) : perTestPrice;
+              const paid = i === testNames.length - 1 ? debtPaidAmount - perTestPaid * (testNames.length - 1) : perTestPaid;
+              const disc = bulkDiscountPct > 0 ? Math.round(price * bulkDiscountPct / 100) : 0;
+              items.push({
+                category: 'فحص مخبري',
+                serviceName: testNames[i],
+                servicePrice: price,
+                paidAmount: paid,
+                discount: bulkDiscountPct, discountAmount: disc,
+                doctor: '', date: debtDate, paymentMethod: ''
+              });
+            }
+          } else {
+            items.push({
+              category: 'فحوصات مخبرية',
+              serviceName: testNamesStr || 'فحوصات مخبرية',
+              servicePrice: originalAmount,
+              paidAmount: debtPaidAmount,
+              discount: bulkDiscountPct, discountAmount: debtDiscountAmount,
+              doctor: '', date: debtDate, paymentMethod: ''
+            });
+          }
+        }
+        coveredDebtDescs.add(desc);
+        continue;
+      }
+
+      // Generic debt — show as-is
+      coveredDebtDescs.add(desc);
+      items.push({
+        category: 'دفعة على الحساب',
+        serviceName: desc || 'دفعة',
+        servicePrice: originalAmount,
+        paidAmount: debtPaidAmount,
+        discount: bulkDiscountPct, discountAmount: debtDiscountAmount,
+        doctor: '', date: debtDate, paymentMethod: ''
+      });
+    }
+
+    // 6d) Financial transactions — only show ones NOT already covered
+    for (const txn of clinicTransactions) {
+      const desc = txn.description || '';
+      // Always skip internal entries
+      if (desc.includes('حصة الطبيب')) continue;
+      if (txn.appointmentId && coveredAptIds.has(txn.appointmentId.toString())) continue;
+      if (desc.includes('دفع موعد')) continue;
+      if (desc.includes('دفع فحوصات مخبرية') || desc.includes('دفع فحوصات')) continue;
+      if (desc.includes('إتمام موعد')) continue;
+      // Skip insertPayment bulk transactions — debts already broken down above with discounts
+      if (txn.totalDebtBeforeDiscount || desc === 'دفعة من مريض' || desc.includes('دفعة مريض') || desc === 'دفعة من مريض') {
+        continue;
+      }
+      // Check if this is a custom description payment that we haven't seen
+      // If items already cover the amount, skip
+      const alreadyCoveredByItems = items.some(it =>
+        Math.abs((it.paidAmount || 0) - (txn.amount || 0)) < 1 &&
+        it.date && txn.date &&
+        Math.abs(new Date(it.date) - new Date(txn.date)) < 120000
+      );
+      if (alreadyCoveredByItems) continue;
+
+      items.push({
+        category: 'دفعة على الحساب',
+        serviceName: desc || 'دفعة',
+        servicePrice: txn.amount || 0,
+        paidAmount: txn.amount || 0,
+        discount: 0, discountAmount: 0,
+        doctor: '', date: txn.date,
+        paymentMethod: txn.paymentMethod || ''
+      });
     }
 
     // Sort all items by date descending
     items.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
 
-    // Recalculate total
-    const total = items.reduce((sum, item) => sum + (item.amount || 0), 0);
+    // Calculate totals
+    const totalServicePrice = items.reduce((sum, item) => sum + (item.servicePrice || 0), 0);
+    const totalPaid = items.reduce((sum, item) => sum + (item.paidAmount || 0), 0);
+    const totalDiscountAmount = items.reduce((sum, item) => sum + (item.discountAmount || 0), 0);
+
+    const patient = await User.findById(patientId, 'fullName mobileNumber idNumber');
 
     res.status(200).json({
       success: true,
@@ -1071,13 +1321,19 @@ exports.getPatientReceipt = async (req, res) => {
           idNumber: patient.idNumber
         } : null,
         items: items.map(item => ({
-          service: item.type + (item.description ? ' - ' + item.description : ''),
-          description: item.description,
+          category: item.category,
+          serviceName: item.serviceName,
+          servicePrice: item.servicePrice,
+          paidAmount: item.paidAmount,
+          discount: item.discount || 0,
+          discountAmount: item.discountAmount || 0,
           doctor: item.doctor || '',
           date: item.date,
-          amount: item.amount
+          paymentMethod: item.paymentMethod || ''
         })),
-        total,
+        totalServicePrice,
+        totalDiscountAmount,
+        total: totalPaid,
         totalDebt,
         debts: patientDebts.map(d => ({
           description: d.description,
@@ -1091,6 +1347,400 @@ exports.getPatientReceipt = async (req, res) => {
   } catch (error) {
     console.error('Error generating receipt:', error);
     res.status(500).json({ message: 'فشل في إنشاء الإيصال', error: error.message });
+  }
+};
+
+// Get detail for a SINGLE invoice/transaction by its _id
+exports.getInvoiceDetail = async (req, res) => {
+  try {
+    const accountantId = req.user._id;
+    const clinic = await getClinicForAccountant(accountantId);
+    if (!clinic) {
+      return res.status(404).json({ message: 'لم يتم العثور على عيادة' });
+    }
+
+    const { transactionId } = req.params;
+    const clinicOwnerId = clinic.ownerId;
+    const doctorIds = clinic.doctors.filter(d => d.status === 'active').map(d => d.doctorId);
+
+    const financial = await Financial.findOne({ doctorId: clinicOwnerId });
+    if (!financial) {
+      return res.status(404).json({ message: 'لا توجد بيانات مالية' });
+    }
+
+    const txn = (financial.transactions || []).find(t => t._id.toString() === transactionId);
+    if (!txn) {
+      return res.status(404).json({ message: 'الفاتورة غير موجودة' });
+    }
+
+    const patientId = txn.patientId?.toString();
+    const desc = txn.description || '';
+    const txnDate = new Date(txn.date);
+    const items = [];
+
+    // ===== CASE 1: insertPayment (has totalDebtBeforeDiscount) =====
+    if (txn.totalDebtBeforeDiscount) {
+      const bulkDiscountPct = txn.discountPercent || 0;
+      const bulkDiscountTotal = txn.discount || 0;
+      // Find debts that were paid around the same time as this transaction (within 10 seconds)
+      const allFinancialIds = [clinicOwnerId, ...doctorIds];
+      const allFinancials = await Financial.find({ doctorId: { $in: allFinancialIds } });
+      let paidDebts = [];
+      for (const fin of allFinancials) {
+        const matched = (fin.debts || []).filter(d => {
+          if (d.patientId?.toString() !== patientId) return false;
+          if (d.status !== 'paid') return false;
+          if (!d.paidAt) return false;
+          return Math.abs(new Date(d.paidAt) - txnDate) < 10000; // within 10 seconds
+        });
+        paidDebts = paidDebts.concat(matched);
+      }
+
+      // Also find appointments that were marked as paid at the same time
+      const paidAppointments = await Appointment.find({
+        patient: patientId,
+        doctorId: { $in: [...doctorIds, clinicOwnerId] },
+        isPaid: true,
+        paidAt: { $gte: new Date(txnDate - 10000), $lte: new Date(txnDate.getTime() + 10000) }
+      }).populate('doctorId', 'fullName specialty');
+
+      // Get all patient lab requests for matching debt descriptions
+      const allPatientLabRequests = await LabRequest.find({
+        patientId,
+        $or: [
+          { clinicId: clinic._id },
+          { doctorId: { $in: doctorIds } }
+        ]
+      }).populate('testIds', 'name price');
+
+      const coveredLabIds = new Set();
+
+      // Process paid debts into items
+      for (const debt of paidDebts) {
+        const debtDesc = debt.description || '';
+        const originalAmount = debt.originalAmount || debt.amount || 0;
+        // Calculate per-debt discount from the bulk discount
+        const debtDiscountAmt = bulkDiscountPct > 0 ? Math.round(originalAmount * bulkDiscountPct / 100) : 0;
+        const debtPaidAmt = originalAmount - debtDiscountAmt;
+
+        // Is this an appointment debt?
+        const isAptDebt = debtDesc.includes('كشفية') || debtDesc.includes('دين موعد') || debtDesc.match(/^موعد /);
+        if (isAptDebt) {
+          // Try to find matching appointment
+          const matchingApt = paidAppointments.find(a =>
+            Math.abs(new Date(a.paidAt) - new Date(debt.paidAt)) < 10000
+          );
+          items.push({
+            category: 'كشف طبي',
+            serviceName: matchingApt?.reason || debtDesc.replace('كشفية العيادة - ', '').replace('دين موعد - ', '').replace('موعد - ', '') || 'كشف طبي',
+            servicePrice: originalAmount,
+            paidAmount: debtPaidAmt,
+            discount: bulkDiscountPct, discountAmount: debtDiscountAmt,
+            doctor: matchingApt?.doctorId?.fullName || '',
+            date: debt.paidAt
+          });
+          continue;
+        }
+
+        // Is this a lab test debt?
+        const isLabDebt = debtDesc.includes('فحوصات مخبرية') || debtDesc.includes('فحص مخبري');
+        if (isLabDebt) {
+          // Extract test names from description
+          const testNamesStr = debtDesc
+            .replace(/فحوصات مخبرية\s*[-–]\s*/, '')
+            .replace(/فحوصات مخبرية\s*\(/, '')
+            .replace(/\)/, '')
+            .replace(/\s*-\s*خصم \d+%/, '')
+            .trim();
+
+          // Try to match with actual LabRequest
+          let matchedLab = null;
+          for (const lr of allPatientLabRequests) {
+            if (coveredLabIds.has(lr._id.toString())) continue;
+            const lrTestNames = (lr.testIds || []).map(t => t.name).join(', ');
+            if (lrTestNames === testNamesStr || debtDesc.includes(lrTestNames)) {
+              matchedLab = lr;
+              break;
+            }
+          }
+
+          if (matchedLab && matchedLab.testIds && matchedLab.testIds.length > 0) {
+            const tests = matchedLab.testIds;
+            const effectiveDiscountPct = bulkDiscountPct > 0 ? bulkDiscountPct : (matchedLab.discount || 0);
+            const totalOriginal = tests.reduce((s, t) => s + (t.price || 0), 0);
+            const effectivePaid = debtPaidAmt; // after discount
+            for (let i = 0; i < tests.length; i++) {
+              const test = tests[i];
+              const testPrice = test.price || 0;
+              let testPaid;
+              if (totalOriginal > 0) {
+                testPaid = Math.round((testPrice / totalOriginal) * effectivePaid);
+              } else {
+                testPaid = Math.round(effectivePaid / tests.length);
+              }
+              if (i === tests.length - 1) {
+                const sumSoFar = tests.slice(0, -1).reduce((s, t2) => {
+                  return s + Math.round(((t2.price || 0) / totalOriginal) * effectivePaid);
+                }, 0);
+                testPaid = effectivePaid - sumSoFar;
+              }
+              const testDiscount = effectiveDiscountPct > 0 ? Math.round(testPrice * effectiveDiscountPct / 100) : 0;
+              items.push({
+                category: 'فحص مخبري',
+                serviceName: test.name || 'فحص',
+                servicePrice: testPrice,
+                paidAmount: testPaid,
+                discount: effectiveDiscountPct, discountAmount: testDiscount,
+                doctor: '', date: debt.paidAt
+              });
+            }
+            coveredLabIds.add(matchedLab._id.toString());
+          } else {
+            // Parse test names from description
+            const testNames = testNamesStr.split(',').map(n => n.trim()).filter(Boolean);
+            if (testNames.length > 1) {
+              const perTestPrice = Math.round(originalAmount / testNames.length);
+              const perTestPaid = Math.round(debtPaidAmt / testNames.length);
+              for (let i = 0; i < testNames.length; i++) {
+                const price = i === testNames.length - 1 ? originalAmount - perTestPrice * (testNames.length - 1) : perTestPrice;
+                const paid = i === testNames.length - 1 ? debtPaidAmt - perTestPaid * (testNames.length - 1) : perTestPaid;
+                const disc = bulkDiscountPct > 0 ? Math.round(price * bulkDiscountPct / 100) : 0;
+                items.push({
+                  category: 'فحص مخبري',
+                  serviceName: testNames[i],
+                  servicePrice: price, paidAmount: paid,
+                  discount: bulkDiscountPct, discountAmount: disc,
+                  doctor: '', date: debt.paidAt
+                });
+              }
+            } else {
+              items.push({
+                category: 'فحوصات مخبرية',
+                serviceName: testNamesStr || 'فحوصات مخبرية',
+                servicePrice: originalAmount, paidAmount: debtPaidAmt,
+                discount: bulkDiscountPct, discountAmount: debtDiscountAmt,
+                doctor: '', date: debt.paidAt
+              });
+            }
+          }
+          continue;
+        }
+
+        // Generic debt
+        items.push({
+          category: 'دفعة على الحساب',
+          serviceName: debtDesc || 'دفعة',
+          servicePrice: originalAmount, paidAmount: debtPaidAmt,
+          discount: bulkDiscountPct, discountAmount: debtDiscountAmt,
+          doctor: '', date: debt.paidAt
+        });
+      }
+
+      // If no debts found but we have paid appointments, add them
+      if (paidDebts.length === 0 && paidAppointments.length > 0) {
+        for (const apt of paidAppointments) {
+          const totalFee = (apt.doctorFee || 0) + (apt.clinicFee || apt.appointmentFee || 0);
+          items.push({
+            category: 'كشف طبي',
+            serviceName: apt.reason || 'كشف طبي',
+            servicePrice: totalFee || apt.paymentAmount || 0,
+            paidAmount: apt.paymentAmount || 0,
+            discount: 0, discountAmount: 0,
+            doctor: apt.doctorId?.fullName || '',
+            date: apt.paidAt
+          });
+        }
+      }
+    }
+    // ===== CASE 2: markAsPaid or completeAppointment (has appointmentId) =====
+    else if (txn.appointmentId) {
+      const appointment = await Appointment.findById(txn.appointmentId)
+        .populate('doctorId', 'fullName specialty');
+      if (appointment) {
+        const totalFee = (appointment.doctorFee || 0) + (appointment.clinicFee || appointment.appointmentFee || 0);
+        items.push({
+          category: 'كشف طبي',
+          serviceName: appointment.reason || 'كشف طبي',
+          servicePrice: totalFee || appointment.paymentAmount || 0,
+          paidAmount: txn.amount || appointment.paymentAmount || 0,
+          discount: 0, discountAmount: 0,
+          doctor: appointment.doctorId?.fullName || '',
+          date: txn.date
+        });
+        // If there's a breakdown in description (إتمام موعد), show clinic vs doctor fees
+        if (desc.includes('إتمام موعد') && appointment.doctorFee > 0 && appointment.clinicFee > 0) {
+          // Already shown as single line with total, no need to split further
+        }
+      } else {
+        items.push({
+          category: 'كشف طبي',
+          serviceName: desc || 'كشف طبي',
+          servicePrice: txn.amount || 0,
+          paidAmount: txn.amount || 0,
+          discount: 0, discountAmount: 0,
+          doctor: '', date: txn.date
+        });
+      }
+    }
+    // ===== CASE 3: دفع فحوصات مخبرية (markTestAsPaid or approveLabRequest with payment) =====
+    else if (desc.includes('دفع فحوصات مخبرية')) {
+      // Extract test names from description like "دفع فحوصات مخبرية (CBC, RFT)"
+      const testNamesMatch = desc.match(/دفع فحوصات مخبرية\s*\(([^)]+)\)/);
+      const testNamesStr = testNamesMatch ? testNamesMatch[1] : '';
+
+      // Try to find matching LabRequest
+      const allPatientLabRequests = await LabRequest.find({
+        patientId,
+        $or: [
+          { clinicId: clinic._id },
+          { doctorId: { $in: doctorIds } }
+        ]
+      }).populate('testIds', 'name price');
+
+      let matchedLab = null;
+      if (testNamesStr) {
+        for (const lr of allPatientLabRequests) {
+          const lrTestNames = (lr.testIds || []).map(t => t.name).join(', ');
+          if (lrTestNames === testNamesStr || desc.includes(lrTestNames)) {
+            // Additional check: paid amount should be close
+            if (lr.paidAt && Math.abs(new Date(lr.paidAt) - txnDate) < 60000) {
+              matchedLab = lr;
+              break;
+            }
+          }
+        }
+        // If no time match found, try just by test names
+        if (!matchedLab) {
+          for (const lr of allPatientLabRequests) {
+            const lrTestNames = (lr.testIds || []).map(t => t.name).join(', ');
+            if (lrTestNames === testNamesStr || desc.includes(lrTestNames)) {
+              matchedLab = lr;
+              break;
+            }
+          }
+        }
+      }
+
+      if (matchedLab && matchedLab.testIds && matchedLab.testIds.length > 0) {
+        const tests = matchedLab.testIds;
+        const discount = matchedLab.discount || 0;
+        const totalOriginal = tests.reduce((s, t) => s + (t.price || 0), 0);
+        const labPaid = txn.amount || matchedLab.paidAmount || matchedLab.totalCost || 0;
+        for (let i = 0; i < tests.length; i++) {
+          const test = tests[i];
+          const testPrice = test.price || 0;
+          let testPaid;
+          if (totalOriginal > 0) {
+            testPaid = Math.round((testPrice / totalOriginal) * labPaid);
+          } else {
+            testPaid = Math.round(labPaid / tests.length);
+          }
+          if (i === tests.length - 1) {
+            const sumSoFar = tests.slice(0, -1).reduce((s, t2) => {
+              return s + Math.round(((t2.price || 0) / totalOriginal) * labPaid);
+            }, 0);
+            testPaid = labPaid - sumSoFar;
+          }
+          const testDiscount = discount > 0 ? Math.round(testPrice * discount / 100) : 0;
+          items.push({
+            category: 'فحص مخبري',
+            serviceName: test.name || 'فحص',
+            servicePrice: testPrice,
+            paidAmount: testPaid,
+            discount, discountAmount: testDiscount,
+            doctor: '', date: txn.date
+          });
+        }
+      } else {
+        // Couldn't find LabRequest, parse from description
+        const testNames = testNamesStr ? testNamesStr.split(',').map(n => n.trim()).filter(Boolean) : [];
+        if (testNames.length > 1) {
+          const perTestPrice = Math.round((txn.amount || 0) / testNames.length);
+          for (let i = 0; i < testNames.length; i++) {
+            const amt = i === testNames.length - 1 ? (txn.amount || 0) - perTestPrice * (testNames.length - 1) : perTestPrice;
+            items.push({
+              category: 'فحص مخبري',
+              serviceName: testNames[i],
+              servicePrice: amt, paidAmount: amt,
+              discount: 0, discountAmount: 0,
+              doctor: '', date: txn.date
+            });
+          }
+        } else {
+          items.push({
+            category: 'فحوصات مخبرية',
+            serviceName: testNamesStr || 'فحوصات مخبرية',
+            servicePrice: txn.amount || 0,
+            paidAmount: txn.amount || 0,
+            discount: 0, discountAmount: 0,
+            doctor: '', date: txn.date
+          });
+        }
+      }
+    }
+    // ===== CASE 4: Generic / other transaction =====
+    else {
+      items.push({
+        category: desc.includes('موعد') ? 'كشف طبي' : 'دفعة',
+        serviceName: desc || 'دفعة',
+        servicePrice: txn.amount || 0,
+        paidAmount: txn.amount || 0,
+        discount: 0, discountAmount: 0,
+        doctor: '', date: txn.date
+      });
+    }
+
+    // Calculate totals
+    const totalServicePrice = items.reduce((sum, item) => sum + (item.servicePrice || 0), 0);
+    const totalPaid = items.reduce((sum, item) => sum + (item.paidAmount || 0), 0);
+    const totalDiscountAmount = items.reduce((sum, item) => sum + (item.discountAmount || 0), 0)
+      + (txn.discount || 0);
+
+    // Get patient's current debt
+    const allFinancialIds = [clinicOwnerId, ...doctorIds];
+    const allFinancials = await Financial.find({ doctorId: { $in: allFinancialIds } });
+    let totalDebt = 0;
+    let debts = [];
+    for (const fin of allFinancials) {
+      const finDebts = (fin.debts || []).filter(d =>
+        d.patientId?.toString() === patientId && d.status === 'pending'
+      );
+      for (const d of finDebts) {
+        totalDebt += d.amount || 0;
+        debts.push({ description: d.description, amount: d.amount, date: d.date });
+      }
+    }
+
+    const patient = await User.findById(patientId, 'fullName mobileNumber idNumber');
+
+    res.status(200).json({
+      success: true,
+      receipt: {
+        items: items.map(item => ({
+          category: item.category,
+          serviceName: item.serviceName,
+          servicePrice: item.servicePrice,
+          paidAmount: item.paidAmount,
+          discount: item.discount || 0,
+          discountAmount: item.discountAmount || 0,
+          doctor: item.doctor || '',
+          date: item.date
+        })),
+        totalServicePrice,
+        totalDiscountAmount,
+        total: totalPaid,
+        totalDebt,
+        debts,
+        patient: patient ? {
+          fullName: patient.fullName,
+          mobileNumber: patient.mobileNumber,
+          idNumber: patient.idNumber
+        } : null
+      }
+    });
+  } catch (error) {
+    console.error('Error getting invoice detail:', error);
+    res.status(500).json({ message: 'فشل في جلب تفاصيل الفاتورة', error: error.message });
   }
 };
 
@@ -1583,7 +2233,6 @@ exports.approveLabRequest = async (req, res) => {
     }
 
     const { requestId } = req.params;
-    const { paymentAmount, paymentMethod } = req.body;
 
     const labRequest = await LabRequest.findById(requestId)
       .populate('testIds', 'name price');
@@ -1596,75 +2245,21 @@ exports.approveLabRequest = async (req, res) => {
       return res.status(403).json({ message: 'ليس لديك صلاحية على هذا الطلب' });
     }
 
-    const totalCost = labRequest.totalCost || labRequest.testIds.reduce((sum, t) => sum + (t.price || 0), 0);
-
-    // Approve the lab request (do NOT mark as paid yet - patient hasn't paid)
+    // Approve the lab request and forward to lab - no pricing here
     labRequest.approvalStatus = 'approved';
     labRequest.approvedBy = accountantId;
     labRequest.approvedAt = new Date();
-    labRequest.totalCost = totalCost;
-    // Only mark as paid if payment was explicitly provided
-    if (paymentAmount && Number(paymentAmount) > 0) {
-      labRequest.isPaid = true;
-      labRequest.paidAmount = Number(paymentAmount);
-      labRequest.paidAt = new Date();
-      labRequest.paidBy = accountantId;
-    }
 
     await labRequest.save();
 
-    // Add lab test cost as DEBT to the patient in CLINIC OWNER's Financial
-    const clinicOwnerId = clinic.ownerId;
-    try {
-      let financial = await Financial.findOne({ doctorId: clinicOwnerId });
-      if (!financial) {
-        financial = new Financial({ doctorId: clinicOwnerId, totalEarnings: 0, totalExpenses: 0 });
-      }
-
-      const testNames = labRequest.testIds.map(t => t.name).join(', ');
-      financial.debts.push({
-        patientId: labRequest.patientId,
-        amount: totalCost,
-        description: `فحوصات مخبرية (${testNames})`,
-        date: new Date(),
-        status: 'pending'
-      });
-      financial.markModified('debts');
-
-      // If payment was provided, also record the income and clear the debt
-      if (paymentAmount && Number(paymentAmount) > 0) {
-        const paid = Number(paymentAmount);
-        financial.transactions.push({
-          amount: paid,
-          description: `دفع فحوصات مخبرية (${testNames})`,
-          date: new Date(),
-          patientId: labRequest.patientId,
-          paymentMethod: paymentMethod || 'Cash'
-        });
-        financial.totalEarnings = (financial.totalEarnings || 0) + paid;
-
-        // Clear the debt we just added if paid
-        const newDebt = financial.debts[financial.debts.length - 1];
-        if (paid >= totalCost) {
-          newDebt.amount = 0;
-          newDebt.status = 'paid';
-        } else {
-          newDebt.amount = totalCost - paid;
-        }
-        financial.markModified('debts');
-      }
-
-      await financial.save();
-    } catch (finErr) {
-      console.error('Error updating financial:', finErr);
-    }
+    // No debt is created here - debt is added only when lab tech marks request as completed
 
     const populated = await LabRequest.findById(requestId)
       .populate('patientId', 'fullName mobileNumber')
       .populate('doctorId', 'fullName specialty')
       .populate('testIds', 'name price');
 
-    res.status(200).json({ success: true, message: 'تم الموافقة على الطلب وتسجيل الدفع', labRequest: populated });
+    res.status(200).json({ success: true, message: 'تم الموافقة على الطلب وتحويله للمختبر', labRequest: populated });
   } catch (error) {
     console.error('Error approving lab request:', error);
     res.status(500).json({ message: 'فشل في الموافقة على الطلب', error: error.message });
@@ -2546,6 +3141,41 @@ exports.payDebt = async (req, res) => {
     
     debtOwnerFinancial.markModified('debts');
     await debtOwnerFinancial.save();
+
+    // Sync linked LabRequest if this debt is from a lab test
+    try {
+      let labReq = null;
+      if (debt.labRequestId) {
+        labReq = await LabRequest.findById(debt.labRequestId);
+      }
+      // Fallback: search by patient + description
+      if (!labReq && debt.description && debt.description.includes('فحوصات مخبرية')) {
+        labReq = await LabRequest.findOne({
+          patientId: debt.patientId,
+          status: 'completed',
+          isPaid: false
+        }).sort({ completedDate: -1 });
+        // Link for future
+        if (labReq) {
+          debt.labRequestId = labReq._id;
+          debtOwnerFinancial.markModified('debts');
+          await debtOwnerFinancial.save();
+        }
+      }
+      if (labReq) {
+        labReq.paidAmount = (labReq.paidAmount || 0) + paymentAmount;
+        if (debt.status === 'paid') {
+          labReq.isPaid = true;
+          labReq.paidAt = new Date();
+        }
+        // Update totalCost to match remaining debt
+        labReq.totalCost = debt.amount;
+        await labReq.save();
+        console.log(`✅ Synced LabRequest ${labReq._id} on debt payment (paidAmount+${paymentAmount}, totalCost=${debt.amount})`);
+      }
+    } catch (labErr) {
+      console.error('Error syncing LabRequest on debt payment:', labErr);
+    }
 
     // Add payment as a transaction on clinic owner's Financial
     financial.transactions.push({
@@ -3643,6 +4273,40 @@ exports.editDebt = async (req, res) => {
     targetFinancial.markModified('debts');
     await targetFinancial.save();
 
+    // Sync linked LabRequest if this debt is from a lab test
+    try {
+      let labReq = null;
+      if (debt.labRequestId) {
+        labReq = await LabRequest.findById(debt.labRequestId);
+      }
+      // Fallback: search by patient + description containing 'فحوصات مخبرية'
+      if (!labReq && debt.description && debt.description.includes('فحوصات مخبرية')) {
+        labReq = await LabRequest.findOne({
+          patientId: debt.patientId,
+          status: 'completed',
+          totalCost: debt.originalAmount || { $gt: 0 }
+        }).sort({ completedDate: -1 });
+        // Link for future syncs
+        if (labReq) {
+          debt.labRequestId = labReq._id;
+          targetFinancial.markModified('debts');
+          await targetFinancial.save();
+        }
+      }
+      if (labReq) {
+        labReq.totalCost = debt.amount;
+        if (debt.status === 'paid') {
+          labReq.isPaid = true;
+          labReq.paidAmount = debt.originalAmount || debt.amount;
+          labReq.paidAt = new Date();
+        }
+        await labReq.save();
+        console.log(`✅ Synced LabRequest ${labReq._id} totalCost to ${debt.amount}`);
+      }
+    } catch (labErr) {
+      console.error('Error syncing LabRequest on debt edit:', labErr);
+    }
+
     // Also sync the corresponding appointment's debt field if possible
     if (debt.patientId) {
       const doctorIds = clinic.doctors?.filter(d => d.status === 'active').map(d => d.doctorId) || [];
@@ -3727,9 +4391,38 @@ exports.deleteDebt = async (req, res) => {
     if (!debt) return res.status(404).json({ message: 'الدين غير موجود' });
 
     const patientId = debt.patientId?.toString();
+    const linkedLabRequestId = debt.labRequestId;
+    const debtDescription = debt.description;
+    const debtOriginalAmount = debt.originalAmount;
 
     targetFinancial.debts.pull(debtId);
     await targetFinancial.save();
+
+    // Sync linked LabRequest if this debt was from a lab test
+    try {
+      let labReq = null;
+      if (linkedLabRequestId) {
+        labReq = await LabRequest.findById(linkedLabRequestId);
+      }
+      // Fallback: search by patient + description
+      if (!labReq && debtDescription && debtDescription.includes('فحوصات مخبرية') && patientId) {
+        labReq = await LabRequest.findOne({
+          patientId,
+          status: 'completed',
+          totalCost: debtOriginalAmount || { $gt: 0 }
+        }).sort({ completedDate: -1 });
+      }
+      if (labReq) {
+        labReq.totalCost = 0;
+        labReq.isPaid = true;
+        labReq.paidAmount = labReq.originalCost || 0;
+        labReq.paidAt = new Date();
+        await labReq.save();
+        console.log(`✅ Synced LabRequest ${labReq._id} on debt delete (totalCost=0)`);
+      }
+    } catch (labErr) {
+      console.error('Error syncing LabRequest on debt delete:', labErr);
+    }
 
     // Also clear debt from related unpaid appointments
     if (patientId) {

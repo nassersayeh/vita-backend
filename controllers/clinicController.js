@@ -788,6 +788,12 @@ exports.getFinancialSummary = async (req, res) => {
       .filter(d => d.status === 'active')
       .map(d => d.doctorId);
     
+    // Build clinicPercentage map
+    const clinicPercentageMap = {};
+    for (const doc of clinic.doctors.filter(d => d.status === 'active')) {
+      clinicPercentageMap[doc.doctorId.toString()] = doc.clinicPercentage || 0;
+    }
+    
     if (filterDoctorId) {
       if (!doctorIds.some(id => id.toString() === filterDoctorId)) {
         return res.status(403).json({ message: 'Doctor not in your clinic' });
@@ -799,94 +805,139 @@ exports.getFinancialSummary = async (req, res) => {
     const financialQuery = { doctorId: { $in: [...doctorIds, clinicOwnerId] } };
     const financials = await Financial.find(financialQuery);
     
-    // Get appointment revenue
-    const appointmentQuery = { doctorId: { $in: doctorIds }, status: 'completed' };
+    // Get completed appointments with details for each doctor
+    const appointmentQuery = { doctorId: { $in: doctorIds }, status: { $in: ['confirmed', 'completed'] } };
     if (startDate || endDate) {
       appointmentQuery.appointmentDateTime = {};
       if (startDate) appointmentQuery.appointmentDateTime.$gte = new Date(startDate);
       if (endDate) appointmentQuery.appointmentDateTime.$lte = new Date(endDate);
     }
     
-    const appointmentRevenue = await Appointment.aggregate([
-      { $match: appointmentQuery },
-      { $group: { 
-        _id: '$doctorId', 
-        revenue: { $sum: '$paymentAmount' },
-        appointmentCount: { $sum: 1 }
-      }}
-    ]).catch(() => []);
+    const allAppointments = await Appointment.find(appointmentQuery)
+      .populate('patient', 'fullName mobileNumber')
+      .sort({ appointmentDateTime: -1 })
+      .lean();
     
-    const revenueMap = {};
-    appointmentRevenue.forEach(r => {
-      revenueMap[r._id.toString()] = { revenue: r.revenue, count: r.appointmentCount };
-    });
+    // Group appointments by doctor
+    const appointmentsByDoctor = {};
+    for (const apt of allAppointments) {
+      const did = apt.doctorId.toString();
+      if (!appointmentsByDoctor[did]) appointmentsByDoctor[did] = [];
+      appointmentsByDoctor[did].push({
+        _id: apt._id,
+        patientName: apt.patient?.fullName || 'Unknown',
+        patientPhone: apt.patient?.mobileNumber || '',
+        date: apt.appointmentDateTime,
+        totalFee: (apt.doctorFee || 0) + (apt.clinicFee || apt.appointmentFee || 0),
+        doctorFee: apt.doctorFee || 0,
+        clinicFee: apt.clinicFee || apt.appointmentFee || 0,
+        paymentAmount: apt.paymentAmount || 0,
+        debt: apt.debt || 0,
+        isPaid: apt.isPaid || false,
+        status: apt.status,
+        visitType: apt.visitType || apt.type || '',
+      });
+    }
     
     // Calculate aggregated stats
-    let totalIncome = 0;
+    // The clinic owner's Financial is the SOURCE OF TRUTH for total income
+    // Doctor financials track their individual shares
     let totalExpenses = 0;
     let totalDebts = 0;
     
     const doctorFinancialsMap = {};
     
+    // First get the clinic owner's record for the real totals
+    let clinicTotalIncome = 0;
+    let clinicExpenses = 0;
+    let clinicDebts = 0;
+    const ownerFinancial = financials.find(f => f.doctorId.toString() === clinicOwnerId.toString());
+    if (ownerFinancial) {
+      clinicTotalIncome = ownerFinancial.totalEarnings || 0;
+      clinicExpenses = (ownerFinancial.expenses || []).reduce((sum, e) => sum + (e.amount || 0), 0);
+      clinicDebts = (ownerFinancial.debts || [])
+        .filter(d => d.status !== 'paid')
+        .reduce((sum, d) => sum + (d.amount || 0), 0);
+    }
+    totalExpenses += clinicExpenses;
+    totalDebts += clinicDebts;
+    
+    // Now process doctor financials (NOT the clinic owner)
     for (const financial of financials) {
       const doctorIdStr = financial.doctorId.toString();
       const isClinicOwner = doctorIdStr === clinicOwnerId.toString();
+      
+      // Skip clinic owner - we don't show it as a row
+      if (isClinicOwner) continue;
+      
       const doctor = await User.findById(financial.doctorId, 'fullName specialty');
       
-      // Use 'transactions' (the actual field in Financial model), not 'income'
-      const transactionIncome = (financial.transactions || []).reduce((sum, t) => sum + (t.amount || 0), 0);
+      const transactionIncome = financial.totalEarnings || 0;
       const expenses = (financial.expenses || []).reduce((sum, e) => sum + (e.amount || 0), 0);
       const debts = (financial.debts || [])
         .filter(d => d.status !== 'paid')
         .reduce((sum, d) => sum + (d.amount || 0), 0);
       
-      // Include appointment revenue in income (clinic owner won't have appointments)
-      const apptRev = revenueMap[doctorIdStr] || { revenue: 0, count: 0 };
-      const income = transactionIncome + apptRev.revenue;
+      const docAppointments = appointmentsByDoctor[doctorIdStr] || [];
+      const appointmentCount = docAppointments.length;
+      const appointmentRevenue = docAppointments.reduce((s, a) => s + a.paymentAmount, 0);
       
-      totalIncome += income;
+      const income = transactionIncome;
+      const clinicPct = clinicPercentageMap[doctorIdStr] || 0;
+      
       totalExpenses += expenses;
       totalDebts += debts;
       
       doctorFinancialsMap[doctorIdStr] = {
         doctorId: financial.doctorId,
-        doctorName: isClinicOwner ? (clinic.name || doctor?.fullName || 'Clinic') : (doctor?.fullName || 'Unknown'),
-        specialty: isClinicOwner ? 'clinic' : (doctor?.specialty || ''),
-        isClinicOwner,
+        doctorName: doctor?.fullName || 'Unknown',
+        specialty: doctor?.specialty || '',
+        isClinicOwner: false,
         income,
         expenses,
         debts,
         netIncome: income - expenses,
-        appointmentRevenue: apptRev.revenue,
-        appointmentCount: apptRev.count
+        appointmentRevenue,
+        appointmentCount,
+        clinicPercentage: clinicPct,
+        doctorPercentage: 100 - clinicPct,
+        appointments: docAppointments,
       };
     }
     
-    // Add doctors who have appointment revenue but no Financial record
-    for (const rev of appointmentRevenue) {
-      const doctorIdStr = rev._id.toString();
+    // Add doctors who have appointments but no Financial record
+    for (const did of doctorIds) {
+      const doctorIdStr = did.toString();
       if (!doctorFinancialsMap[doctorIdStr]) {
-        const doctor = await User.findById(rev._id, 'fullName specialty');
-        totalIncome += rev.revenue;
+        const doctor = await User.findById(did, 'fullName specialty');
+        const docAppointments = appointmentsByDoctor[doctorIdStr] || [];
+        const appointmentRevenue = docAppointments.reduce((s, a) => s + a.paymentAmount, 0);
+        const clinicPct = clinicPercentageMap[doctorIdStr] || 0;
         
         doctorFinancialsMap[doctorIdStr] = {
-          doctorId: rev._id,
+          doctorId: did,
           doctorName: doctor?.fullName || 'Unknown',
           specialty: doctor?.specialty || '',
-          income: rev.revenue,
+          income: appointmentRevenue,
           expenses: 0,
           debts: 0,
-          netIncome: rev.revenue,
-          appointmentRevenue: rev.revenue,
-          appointmentCount: rev.appointmentCount
+          netIncome: appointmentRevenue,
+          appointmentRevenue,
+          appointmentCount: docAppointments.length,
+          clinicPercentage: clinicPct,
+          doctorPercentage: 100 - clinicPct,
+          appointments: docAppointments,
         };
       }
     }
     
     const doctorFinancials = Object.values(doctorFinancialsMap);
     
-    const totalAppointmentRevenue = appointmentRevenue.reduce((sum, r) => sum + r.revenue, 0);
-    const totalAppointments = appointmentRevenue.reduce((sum, r) => sum + r.appointmentCount, 0);
+    const totalAppointmentRevenue = allAppointments.reduce((sum, a) => sum + (a.paymentAmount || 0), 0);
+    const totalAppointments = allAppointments.length;
+    
+    // Use clinic owner's Financial as the source of truth for total income
+    const totalIncome = clinicTotalIncome;
     
     res.status(200).json({
       success: true,
@@ -896,7 +947,9 @@ exports.getFinancialSummary = async (req, res) => {
         totalDebts,
         netIncome: totalIncome - totalExpenses,
         totalAppointmentRevenue,
-        totalAppointments
+        totalAppointments,
+        clinicDebts,
+        clinicExpenses,
       },
       doctorFinancials
     });
@@ -1346,6 +1399,151 @@ exports.getAllLabRequests = async (req, res) => {
   } catch (error) {
     console.error('Error fetching lab requests:', error);
     res.status(500).json({ message: 'Failed to fetch lab requests', error: error.message });
+  }
+};
+
+// ==================== EDIT APPOINTMENT FINANCIAL ====================
+// Edit appointment financial data (fee, payment, debt) and sync Financial records
+exports.editAppointmentFinancial = async (req, res) => {
+  try {
+    const clinicOwnerId = req.user._id;
+    const { appointmentId } = req.params;
+    const { appointmentFee, paymentAmount, clinicFee, doctorFee } = req.body;
+
+    const clinic = await Clinic.findOne({ ownerId: clinicOwnerId });
+    if (!clinic) return res.status(404).json({ message: 'Clinic not found' });
+
+    const doctorIds = clinic.doctors.filter(d => d.status === 'active').map(d => d.doctorId.toString());
+
+    const appointment = await Appointment.findById(appointmentId);
+    if (!appointment) return res.status(404).json({ message: 'Appointment not found' });
+    if (!doctorIds.includes(appointment.doctorId.toString())) {
+      return res.status(403).json({ message: 'Appointment doctor not in your clinic' });
+    }
+
+    const oldPaymentAmount = appointment.paymentAmount || 0;
+    const newFee = appointmentFee !== undefined ? Number(appointmentFee) : (appointment.appointmentFee || 0);
+    const newPayment = paymentAmount !== undefined ? Number(paymentAmount) : oldPaymentAmount;
+    const newClinicFee = clinicFee !== undefined ? Number(clinicFee) : (appointment.clinicFee || 0);
+    const newDoctorFee = doctorFee !== undefined ? Number(doctorFee) : (appointment.doctorFee || 0);
+    const totalFee = newDoctorFee + newClinicFee;
+    const newDebt = Math.max(0, totalFee - newPayment);
+
+    // Update appointment
+    appointment.appointmentFee = newFee;
+    appointment.paymentAmount = newPayment;
+    appointment.clinicFee = newClinicFee;
+    appointment.doctorFee = newDoctorFee;
+    appointment.debt = newDebt;
+    appointment.isPaid = newDebt <= 0 && newPayment > 0;
+    appointment.debtStatus = newDebt <= 0 ? 'none' : (newPayment > 0 ? 'partial' : 'full');
+    await appointment.save();
+
+    // Sync Financial transaction for this doctor
+    const doctorFinancial = await Financial.findOne({ doctorId: appointment.doctorId });
+    if (doctorFinancial) {
+      const txn = doctorFinancial.transactions.find(
+        t => t.appointmentId && t.appointmentId.toString() === appointmentId
+      );
+      if (txn) {
+        const diff = newPayment - txn.amount;
+        txn.amount = newPayment;
+        txn.lastEditedBy = clinicOwnerId;
+        txn.lastEditedAt = new Date();
+        doctorFinancial.totalEarnings = (doctorFinancial.totalEarnings || 0) + diff;
+      }
+      await doctorFinancial.save();
+    }
+
+    // Also sync clinic owner financial (if there's a transaction for this appointment)
+    const ownerFinancial = await Financial.findOne({ doctorId: clinicOwnerId });
+    if (ownerFinancial) {
+      const ownerTxn = ownerFinancial.transactions.find(
+        t => t.appointmentId && t.appointmentId.toString() === appointmentId
+      );
+      if (ownerTxn) {
+        const diff = newPayment - ownerTxn.amount;
+        ownerTxn.amount = newPayment;
+        ownerTxn.lastEditedBy = clinicOwnerId;
+        ownerTxn.lastEditedAt = new Date();
+        ownerFinancial.totalEarnings = (ownerFinancial.totalEarnings || 0) + diff;
+        await ownerFinancial.save();
+      }
+    }
+
+    const populatedAppointment = await Appointment.findById(appointment._id)
+      .populate('patient', 'fullName mobileNumber')
+      .populate('doctorId', 'fullName specialty');
+
+    res.status(200).json({ success: true, message: 'تم تعديل البيانات المالية', appointment: populatedAppointment });
+  } catch (error) {
+    console.error('Error editing appointment financial:', error);
+    res.status(500).json({ message: 'Failed to edit appointment financial', error: error.message });
+  }
+};
+
+// ==================== DELETE APPOINTMENT ====================
+// Delete appointment completely and remove all related financial records
+exports.deleteAppointment = async (req, res) => {
+  try {
+    const clinicOwnerId = req.user._id;
+    const { appointmentId } = req.params;
+
+    const clinic = await Clinic.findOne({ ownerId: clinicOwnerId });
+    if (!clinic) return res.status(404).json({ message: 'Clinic not found' });
+
+    const doctorIds = clinic.doctors.filter(d => d.status === 'active').map(d => d.doctorId.toString());
+
+    const appointment = await Appointment.findById(appointmentId);
+    if (!appointment) return res.status(404).json({ message: 'Appointment not found' });
+    if (!doctorIds.includes(appointment.doctorId.toString())) {
+      return res.status(403).json({ message: 'Appointment doctor not in your clinic' });
+    }
+
+    // 1. Remove transaction from doctor's Financial
+    const doctorFinancial = await Financial.findOne({ doctorId: appointment.doctorId });
+    if (doctorFinancial) {
+      const txnIndex = doctorFinancial.transactions.findIndex(
+        t => t.appointmentId && t.appointmentId.toString() === appointmentId
+      );
+      if (txnIndex !== -1) {
+        const txnAmount = doctorFinancial.transactions[txnIndex].amount || 0;
+        doctorFinancial.transactions.splice(txnIndex, 1);
+        doctorFinancial.totalEarnings = Math.max(0, (doctorFinancial.totalEarnings || 0) - txnAmount);
+        await doctorFinancial.save();
+      }
+    }
+
+    // 2. Remove transaction from clinic owner's Financial (if any)
+    const ownerFinancial = await Financial.findOne({ doctorId: clinicOwnerId });
+    if (ownerFinancial) {
+      const ownerTxnIndex = ownerFinancial.transactions.findIndex(
+        t => t.appointmentId && t.appointmentId.toString() === appointmentId
+      );
+      if (ownerTxnIndex !== -1) {
+        const txnAmount = ownerFinancial.transactions[ownerTxnIndex].amount || 0;
+        ownerFinancial.transactions.splice(ownerTxnIndex, 1);
+        ownerFinancial.totalEarnings = Math.max(0, (ownerFinancial.totalEarnings || 0) - txnAmount);
+      }
+
+      // 3. Remove any debt related to this patient+doctor combo
+      const debtIndex = ownerFinancial.debts.findIndex(
+        d => d.patientId && d.patientId.toString() === appointment.patient.toString() &&
+             d.doctorId && d.doctorId.toString() === appointment.doctorId.toString()
+      );
+      if (debtIndex !== -1) {
+        ownerFinancial.debts.splice(debtIndex, 1);
+      }
+      await ownerFinancial.save();
+    }
+
+    // 4. Delete the appointment itself
+    await Appointment.findByIdAndDelete(appointmentId);
+
+    res.status(200).json({ success: true, message: 'تم حذف الموعد وجميع البيانات المالية المرتبطة' });
+  } catch (error) {
+    console.error('Error deleting appointment:', error);
+    res.status(500).json({ message: 'Failed to delete appointment', error: error.message });
   }
 };
 

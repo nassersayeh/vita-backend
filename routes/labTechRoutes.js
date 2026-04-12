@@ -20,7 +20,9 @@ router.get('/stats', labTechController.getDashboardStats);
 
 // Lab requests
 router.get('/requests', labTechController.getRequests);
+router.post('/requests', labTechController.requestLabTest);
 router.put('/requests/:requestId', labTechController.updateRequest);
+router.delete('/requests/:requestId', labTechController.deleteRequest);
 
 // Patients
 router.get('/patients', labTechController.getPatients);

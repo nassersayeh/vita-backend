@@ -48,6 +48,7 @@ const financialSchema = new mongoose.Schema({
       patientId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
       doctorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // Doctor who created the debt (for revenue split)
       orderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Order' },
+      labRequestId: { type: mongoose.Schema.Types.ObjectId, ref: 'LabRequest' }, // Link to lab request if debt is from lab test
       amount: { type: Number, required: true },
       originalAmount: { type: Number }, // Original amount before any payment (preserved when debt is paid)
       description: { type: String, default: 'دين يدوي' },

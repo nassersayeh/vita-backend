@@ -100,6 +100,7 @@ router.get('/staff', accountantController.getStaffList);
 // Invoices
 router.post('/invoices', accountantController.createInvoice);
 router.get('/invoices', accountantController.getInvoices);
+router.get('/invoices/:transactionId/detail', accountantController.getInvoiceDetail);
 
 // Doctor clinic percentages
 router.get('/doctors/percentages', accountantController.getDoctorsWithPercentages);

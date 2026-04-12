@@ -2,6 +2,7 @@ const LabRequest = require('../models/LabRequest');
 const MedicalTest = require('../models/MedicalTest');
 const User = require('../models/User');
 const Clinic = require('../models/Clinic');
+const Financial = require('../models/Financial');
 const bcrypt = require('bcryptjs');
 
 // Get clinic for this lab tech
@@ -46,6 +47,20 @@ exports.getDashboardStats = async (req, res) => {
 
     const testCount = await MedicalTest.countDocuments({ isActive: true });
 
+    // Fetch clinic owner info for report header
+    let clinicOwnerInfo = {};
+    if (clinic) {
+      const owner = await User.findById(clinic.ownerId).select('fullName mobileNumber address email');
+      if (owner) {
+        clinicOwnerInfo = {
+          ownerName: owner.fullName || '',
+          clinicPhone: owner.mobileNumber || '',
+          clinicAddress: owner.address || '',
+          clinicEmail: owner.email || '',
+        };
+      }
+    }
+
     // Revenue calculations from completed lab requests
     const [monthlyRevenueResult, totalRevenueResult, paidMonthlyResult, paidTotalResult] = await Promise.all([
       // Monthly revenue (completed this month)
@@ -86,6 +101,7 @@ exports.getDashboardStats = async (req, res) => {
         todayRequests,
         totalTests: testCount,
         clinicName: clinic?.name || '',
+        ...clinicOwnerInfo,
         // Revenue data
         monthlyRevenue,
         totalRevenue,
@@ -152,10 +168,11 @@ exports.getRequests = async (req, res) => {
 // Update lab request status and results
 exports.updateRequest = async (req, res) => {
   try {
+    const labTechId = req.user._id;
     const { requestId } = req.params;
-    const { status, results, notes, testUpdates } = req.body;
+    const { status, results, notes, testUpdates, testPrices, discount } = req.body;
 
-    const request = await LabRequest.findById(requestId);
+    const request = await LabRequest.findById(requestId).populate('testIds', 'name price');
     if (!request) {
       return res.status(404).json({ message: 'طلب الفحص غير موجود' });
     }
@@ -173,6 +190,60 @@ exports.updateRequest = async (req, res) => {
       }
     }
     if (status === 'completed') request.completedDate = new Date();
+
+    // When lab tech marks as completed, set pricing and create debt
+    if (status === 'completed') {
+      // testPrices is an optional object: { testId: customPrice, ... }
+      // If not provided, use default prices from MedicalTest
+      const pricesMap = testPrices || {};
+      let originalCost = 0;
+      (request.testIds || []).forEach(test => {
+        const testId = test._id?.toString() || test.toString();
+        const price = pricesMap[testId] !== undefined ? Number(pricesMap[testId]) : (test.price || 0);
+        originalCost += price;
+      });
+
+      const discountPercent = Math.min(Math.max(Number(discount) || 0, 0), 100);
+      const discountAmount = Math.round(originalCost * discountPercent / 100 * 100) / 100;
+      const totalCost = Math.round((originalCost - discountAmount) * 100) / 100;
+
+      request.originalCost = originalCost;
+      request.discount = discountPercent;
+      request.discountAmount = discountAmount;
+      request.totalCost = totalCost;
+
+      // Add lab test cost as DEBT to the patient in CLINIC OWNER's Financial
+      if (totalCost > 0) {
+        try {
+          const clinic = await getClinicForLabTech(labTechId);
+          if (clinic) {
+            const clinicOwnerId = clinic.ownerId;
+            let financial = await Financial.findOne({ doctorId: clinicOwnerId });
+            if (!financial) {
+              financial = new Financial({ doctorId: clinicOwnerId, totalEarnings: 0, totalExpenses: 0 });
+            }
+            const testNames = (request.testIds || []).map(t => t.name).join(', ');
+            const debtDescription = discountPercent > 0
+              ? `فحوصات مخبرية (${testNames}) - خصم ${discountPercent}%`
+              : `فحوصات مخبرية - ${testNames}`;
+            financial.debts.push({
+              patientId: request.patientId,
+              doctorId: request.doctorId,
+              labRequestId: request._id,
+              amount: totalCost,
+              originalAmount: originalCost,
+              description: debtDescription,
+              date: new Date(),
+              status: 'pending'
+            });
+            await financial.save();
+            console.log(`Lab tech added lab test debt of ${totalCost} ILS for patient ${request.patientId}`);
+          }
+        } catch (debtErr) {
+          console.error('Error adding lab test debt from lab tech:', debtErr);
+        }
+      }
+    }
 
     await request.save();
 
@@ -596,5 +667,104 @@ exports.getDoctors = async (req, res) => {
   } catch (error) {
     console.error('Error fetching doctors for lab tech:', error);
     res.status(500).json({ message: 'فشل في جلب قائمة الأطباء', error: error.message });
+  }
+};
+
+// Request lab test (lab tech initiated)
+exports.requestLabTest = async (req, res) => {
+  try {
+    const labTechId = req.user._id;
+    const clinic = await getClinicForLabTech(labTechId);
+    if (!clinic) {
+      return res.status(404).json({ message: 'لم يتم العثور على عيادة' });
+    }
+
+    const { patientId, doctorId, testIds, notes, discount } = req.body;
+
+    if (!patientId || !testIds || testIds.length === 0) {
+      return res.status(400).json({ message: 'يجب تحديد المريض والفحوصات المطلوبة' });
+    }
+
+    // Calculate total cost with optional discount
+    const tests = await MedicalTest.find({ _id: { $in: testIds }, isActive: true });
+    const originalCost = tests.reduce((sum, t) => sum + (t.price || 0), 0);
+    const discountPercent = Math.min(Math.max(Number(discount) || 0, 0), 100);
+    const discountAmount = Math.round(originalCost * discountPercent / 100 * 100) / 100;
+    const totalCost = Math.round((originalCost - discountAmount) * 100) / 100;
+
+    const labRequest = new LabRequest({
+      patientId,
+      doctorId: doctorId || null,
+      labId: labTechId,
+      testIds,
+      notes,
+      totalCost,
+      originalCost,
+      discount: discountPercent,
+      discountAmount,
+      requestedBy: labTechId,
+      clinicId: clinic._id,
+      approvalStatus: 'approved'
+    });
+
+    await labRequest.save();
+
+    // No debt is created here - debt is added only when lab tech marks request as completed (via updateRequest)
+
+    res.status(201).json({
+      success: true,
+      message: 'تم طلب الفحوصات بنجاح',
+      labRequest,
+      totalCost
+    });
+  } catch (error) {
+    console.error('Error requesting lab test (lab tech):', error);
+    res.status(500).json({ message: 'فشل في طلب الفحوصات', error: error.message });
+  }
+};
+
+// Delete lab request
+exports.deleteRequest = async (req, res) => {
+  try {
+    const labTechId = req.user._id;
+    const clinic = await getClinicForLabTech(labTechId);
+    if (!clinic) {
+      return res.status(404).json({ message: 'لم يتم العثور على عيادة' });
+    }
+
+    const { requestId } = req.params;
+    const labRequest = await LabRequest.findById(requestId);
+    if (!labRequest) {
+      return res.status(404).json({ message: 'طلب الفحص غير موجود' });
+    }
+
+    // Remove related debt from financial if exists
+    if (labRequest.totalCost > 0) {
+      try {
+        const clinicOwnerId = clinic.ownerId;
+        const financial = await Financial.findOne({ doctorId: clinicOwnerId });
+        if (financial) {
+          const debtIndex = financial.debts.findIndex(
+            d => d.patientId?.toString() === labRequest.patientId?.toString()
+              && d.amount === labRequest.totalCost
+              && d.description && d.description.includes('فحوصات مخبرية')
+              && d.status === 'pending'
+          );
+          if (debtIndex !== -1) {
+            financial.debts.splice(debtIndex, 1);
+            await financial.save();
+          }
+        }
+      } catch (debtErr) {
+        console.error('Error removing debt for deleted lab request:', debtErr);
+      }
+    }
+
+    await LabRequest.findByIdAndDelete(requestId);
+
+    res.status(200).json({ success: true, message: 'تم حذف الطلب بنجاح' });
+  } catch (error) {
+    console.error('Error deleting lab request:', error);
+    res.status(500).json({ message: 'فشل في حذف الطلب', error: error.message });
   }
 };

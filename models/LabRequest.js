@@ -20,6 +20,10 @@ const LabRequestSchema = new mongoose.Schema({
     attachments: [{ type: String }] // file paths for images/documents
   }],
   totalCost: { type: Number, default: 0 },
+  // Discount applied by accountant
+  discount: { type: Number, default: 0, min: 0, max: 100 }, // Discount percentage
+  discountAmount: { type: Number, default: 0 }, // Actual discount amount in currency
+  originalCost: { type: Number, default: 0 }, // Cost before discount
   // Approval flow - for clinic-managed doctors, accountant must approve before lab sees it
   approvalStatus: {
     type: String,
