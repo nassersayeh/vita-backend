@@ -1,7 +1,105 @@
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
 const InsuranceCompany = require('../models/InsuranceCompany');
+const DoctorClaim = require('../models/DoctorClaim');
+const Claim = require('../models/Claim');
+
+// Login for insurance company
+router.post('/login', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+    
+    const company = await InsuranceCompany.findOne({ username, status: 'active' });
+    if (!company) {
+      return res.status(400).json({ message: 'Invalid credentials' });
+    }
+    
+    const isMatch = await bcrypt.compare(password, company.password);
+    if (!isMatch) {
+      return res.status(400).json({ message: 'Invalid credentials' });
+    }
+    
+    const token = jwt.sign(
+      { companyId: company._id, role: 'insurance' },
+      process.env.JWT_SECRET || 'your-secret-key',
+      { expiresIn: '7d' }
+    );
+    
+    res.json({
+      message: 'Login successful',
+      account: {
+        id: company._id,
+        name: company.name,
+        nameAr: company.nameAr,
+        role: 'insurance'
+      },
+      token
+    });
+  } catch (error) {
+    console.error('Insurance company login error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Get all claims for the logged-in insurance company (doctor + pharmacy claims)
+router.get('/:id/all-claims', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, page = 1, limit = 50 } = req.query;
+    
+    let doctorQuery = { insuranceCompanyId: id };
+    let pharmacyQuery = { insuranceCompanyId: id };
+    
+    if (status) {
+      doctorQuery.status = status;
+      pharmacyQuery.status = status;
+    }
+    
+    // Doctor claims
+    let doctorClaims = await DoctorClaim.find(doctorQuery)
+      .populate('doctorId', 'fullName specialty')
+      .populate('patientId', 'fullName')
+      .sort({ createdAt: -1 })
+      .lean();
+    
+    doctorClaims = doctorClaims.map(c => ({
+      ...c,
+      claimType: 'doctor',
+      source: c.displayName || 'Doctor'
+    }));
+    
+    // Pharmacy claims
+    let pharmacyClaims = await Claim.find(pharmacyQuery)
+      .populate('pharmacyId', 'fullName')
+      .populate('customerId', 'name phone')
+      .sort({ createdAt: -1 })
+      .lean();
+    
+    pharmacyClaims = pharmacyClaims.map(c => ({
+      ...c,
+      claimType: 'pharmacy',
+      source: c.pharmacyId?.fullName || 'Pharmacy'
+    }));
+    
+    const allClaims = [...doctorClaims, ...pharmacyClaims]
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    
+    const startIndex = (parseInt(page) - 1) * parseInt(limit);
+    const paginatedClaims = allClaims.slice(startIndex, startIndex + parseInt(limit));
+    
+    res.json({
+      claims: paginatedClaims,
+      total: allClaims.length,
+      page: parseInt(page),
+      totalPages: Math.ceil(allClaims.length / parseInt(limit))
+    });
+  } catch (error) {
+    console.error('Error fetching insurance company claims:', error);
+    res.status(500).json({ message: 'Error fetching claims', error: error.message });
+  }
+});
 
 // Get all insurance companies
 router.get('/', async (req, res) => {

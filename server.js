@@ -47,6 +47,8 @@ const medicalRecordRoutes = require('./routes/medicalRecord');
 const pharmacyCustomerRoutes = require('./routes/pharmacyCustomerRoutes');
 const insuranceCompanyRoutes = require('./routes/insuranceCompanyRoutes');
 const claimRoutes = require('./routes/claimRoutes');
+const doctorClaimRoutes = require('./routes/doctorClaimRoutes');
+const oversightRoutes = require('./routes/oversightRoutes');
 const aiRoutes = require('./routes/aiRoutes');
 
 // Firebase admin
@@ -203,6 +205,8 @@ app.use('/api/medical-records', medicalRecordRoutes);
 app.use('/api/pharmacy', pharmacyCustomerRoutes);
 app.use('/api/insurance-companies', insuranceCompanyRoutes);
 app.use('/api/claims', claimRoutes);
+app.use('/api/doctor-claims', doctorClaimRoutes);
+app.use('/api/oversight', oversightRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/notifications', require('./routes/notifications'));
 

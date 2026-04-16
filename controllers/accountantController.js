@@ -90,14 +90,13 @@ exports.getDashboardStats = async (req, res) => {
       { $group: { _id: null, total: { $sum: '$debt' } } }
     ]).catch(() => []);
 
-    // Get debts from Financial model for clinic owner AND all doctors
+    // Get debts from Financial model - clinic owner is the single source of truth for debts
     const clinicOwnerId = clinic.ownerId;
     let financialDebts = 0;
     try {
-      const allFinancialIds = [clinicOwnerId, ...doctorIds];
-      const allFinancials = await Financial.find({ doctorId: { $in: allFinancialIds } });
-      for (const fin of allFinancials) {
-        financialDebts += (fin.debts || [])
+      const ownerFinancialForDebts = await Financial.findOne({ doctorId: clinicOwnerId });
+      if (ownerFinancialForDebts) {
+        financialDebts = (ownerFinancialForDebts.debts || [])
           .filter(d => d.status === 'pending')
           .reduce((sum, d) => sum + (d.amount || 0), 0);
       }
@@ -2782,17 +2781,9 @@ exports.getPatientsWithDebt = async (req, res) => {
       }
     }
 
-    // Get financial data for debts from clinic owner AND all clinic doctors
-    const allFinancialIds = [clinicOwnerId, ...doctorIds];
-    const allFinancials = await Financial.find({ doctorId: { $in: allFinancialIds } });
-    
-    // Merge all debts from all financial records (clinic owner + all doctors)
-    let debts = [];
-    for (const fin of allFinancials) {
-      if (fin.debts && fin.debts.length > 0) {
-        debts = debts.concat(fin.debts);
-      }
-    }
+    // Get financial data for debts - clinic owner is the single source of truth
+    const ownerFinancial = await Financial.findOne({ doctorId: clinicOwnerId });
+    let debts = ownerFinancial?.debts || [];
 
     // Also get appointment-based debts from all clinic doctors
     const allDoctorIds = [...doctorIds];
@@ -2854,20 +2845,8 @@ exports.getFinancialData = async (req, res) => {
       financial = { transactions: [], expenses: [], debts: [], totalEarnings: 0, totalExpenses: 0 };
     }
 
-    // Also get debts from all clinic doctors' Financial records
-    const doctorFinancials = await Financial.find({ 
-      doctorId: { $in: doctorIds },
-    }).populate('debts.patientId', 'fullName mobileNumber');
-    
-    // Merge debts from doctors into the main financial object
+    // Clinic owner's Financial is the single source of truth for debts
     const financialObj = financial.toObject ? financial.toObject() : { ...financial };
-    for (const docFin of doctorFinancials) {
-      if (docFin.doctorId.toString() === clinicOwnerId.toString()) continue; // skip owner, already included
-      const docDebts = (docFin.debts || []).filter(d => d.status === 'pending');
-      if (docDebts.length > 0) {
-        financialObj.debts = [...(financialObj.debts || []), ...docDebts.map(d => d.toObject ? d.toObject() : d)];
-      }
-    }
 
     // Calculate actual income from paid appointments (current month) across ALL clinic doctors
     const now = new Date();

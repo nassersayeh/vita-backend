@@ -226,18 +226,32 @@ exports.updateRequest = async (req, res) => {
             const debtDescription = discountPercent > 0
               ? `فحوصات مخبرية (${testNames}) - خصم ${discountPercent}%`
               : `فحوصات مخبرية - ${testNames}`;
-            financial.debts.push({
-              patientId: request.patientId,
-              doctorId: request.doctorId,
-              labRequestId: request._id,
-              amount: totalCost,
-              originalAmount: originalCost,
-              description: debtDescription,
-              date: new Date(),
-              status: 'pending'
-            });
+
+            // Check if debt for this lab request already exists (avoid duplicates on re-save)
+            const existingDebt = financial.debts.find(d =>
+              d.labRequestId && d.labRequestId.toString() === request._id.toString() && d.status === 'pending'
+            );
+
+            if (existingDebt) {
+              // Update existing debt amount and description
+              existingDebt.amount = totalCost;
+              existingDebt.originalAmount = originalCost;
+              existingDebt.description = debtDescription;
+              financial.markModified('debts');
+            } else {
+              financial.debts.push({
+                patientId: request.patientId,
+                doctorId: request.doctorId,
+                labRequestId: request._id,
+                amount: totalCost,
+                originalAmount: originalCost,
+                description: debtDescription,
+                date: new Date(),
+                status: 'pending'
+              });
+            }
             await financial.save();
-            console.log(`Lab tech added lab test debt of ${totalCost} ILS for patient ${request.patientId}`);
+            console.log(`Lab tech ${existingDebt ? 'updated' : 'added'} lab test debt of ${totalCost} ILS for patient ${request.patientId}`);
           }
         } catch (debtErr) {
           console.error('Error adding lab test debt from lab tech:', debtErr);

@@ -702,26 +702,77 @@ exports.completeAppointment = async (req, res) => {
     appointment.debtStatus = 'none';
     await appointment.save();
 
-    // Update doctor's financial record
+    // Update financial records
     if (fee > 0) {
       try {
         const Financial = require('../models/Financial');
-        let financial = await Financial.findOne({ doctorId: appointment.doctorId });
-        if (!financial) {
-          financial = new Financial({ doctorId: appointment.doctorId, totalEarnings: 0, totalExpenses: 0 });
+
+        // 1. Record on clinic OWNER's financial (source of truth)
+        let ownerFinancial = await Financial.findOne({ doctorId: clinicOwnerId });
+        if (!ownerFinancial) {
+          ownerFinancial = new Financial({ doctorId: clinicOwnerId, totalEarnings: 0, totalExpenses: 0 });
         }
-        financial.transactions.push({
-          amount: fee,
-          description: `كشفية موعد - ${clinic.name}`,
-          date: new Date(),
-          patientId: appointment.patient,
-          appointmentId: appointment._id,
-          paymentMethod: 'Cash',
-        });
-        financial.totalEarnings = (financial.totalEarnings || 0) + fee;
-        await financial.save();
+        const existingOwnerTxn = ownerFinancial.transactions.find(t =>
+          t.appointmentId && t.appointmentId.toString() === appointment._id.toString()
+        );
+        if (!existingOwnerTxn) {
+          ownerFinancial.transactions.push({
+            amount: fee,
+            description: `كشفية موعد - ${clinic.name}`,
+            date: new Date(),
+            patientId: appointment.patient,
+            appointmentId: appointment._id,
+            paymentMethod: 'Cash',
+          });
+          ownerFinancial.totalEarnings = (ownerFinancial.totalEarnings || 0) + fee;
+
+          // Clear patient debt for this appointment
+          const patientId = appointment.patient.toString();
+          const patientDebts = ownerFinancial.debts.filter(d =>
+            d.patientId?.toString() === patientId && d.status === 'pending'
+          );
+          let paymentPool = fee;
+          patientDebts.sort((a, b) => new Date(a.date) - new Date(b.date));
+          for (const debt of patientDebts) {
+            if (paymentPool <= 0) break;
+            if (paymentPool >= debt.amount) {
+              paymentPool -= debt.amount;
+              debt.amount = 0;
+              debt.status = 'paid';
+              debt.paidAt = new Date();
+            } else {
+              debt.amount -= paymentPool;
+              paymentPool = 0;
+            }
+          }
+          ownerFinancial.markModified('debts');
+          await ownerFinancial.save();
+        }
+
+        // 2. Also record on doctor's own financial
+        if (appointment.doctorId.toString() !== clinicOwnerId.toString()) {
+          let financial = await Financial.findOne({ doctorId: appointment.doctorId });
+          if (!financial) {
+            financial = new Financial({ doctorId: appointment.doctorId, totalEarnings: 0, totalExpenses: 0 });
+          }
+          const existingDocTxn = financial.transactions.find(t =>
+            t.appointmentId && t.appointmentId.toString() === appointment._id.toString()
+          );
+          if (!existingDocTxn) {
+            financial.transactions.push({
+              amount: fee,
+              description: `كشفية موعد - ${clinic.name}`,
+              date: new Date(),
+              patientId: appointment.patient,
+              appointmentId: appointment._id,
+              paymentMethod: 'Cash',
+            });
+            financial.totalEarnings = (financial.totalEarnings || 0) + fee;
+            await financial.save();
+          }
+        }
       } catch (finErr) {
-        console.error('Error updating doctor financial:', finErr);
+        console.error('Error updating financial:', finErr);
       }
     }
 
@@ -853,7 +904,8 @@ exports.getFinancialSummary = async (req, res) => {
     let clinicDebts = 0;
     const ownerFinancial = financials.find(f => f.doctorId.toString() === clinicOwnerId.toString());
     if (ownerFinancial) {
-      clinicTotalIncome = ownerFinancial.totalEarnings || 0;
+      // حساب الإيرادات الحقيقية من مجموع المعاملات (بدل totalEarnings اللي ممكن يكون غلط)
+      clinicTotalIncome = (ownerFinancial.transactions || []).reduce((sum, t) => sum + (t.amount || 0), 0);
       clinicExpenses = (ownerFinancial.expenses || []).reduce((sum, e) => sum + (e.amount || 0), 0);
       clinicDebts = (ownerFinancial.debts || [])
         .filter(d => d.status !== 'paid')
@@ -872,7 +924,7 @@ exports.getFinancialSummary = async (req, res) => {
       
       const doctor = await User.findById(financial.doctorId, 'fullName specialty');
       
-      const transactionIncome = financial.totalEarnings || 0;
+      const transactionIncome = (financial.transactions || []).reduce((sum, t) => sum + (t.amount || 0), 0);
       const expenses = (financial.expenses || []).reduce((sum, e) => sum + (e.amount || 0), 0);
       const debts = (financial.debts || [])
         .filter(d => d.status !== 'paid')

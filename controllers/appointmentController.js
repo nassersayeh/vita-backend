@@ -941,6 +941,7 @@ exports.setDoctorFeeAndDebt = async (req, res) => {
         // Add new debt
         financial.debts.push({
           patientId: appointment.patient._id || appointment.patient,
+          doctorId: appointment.doctorId._id || appointment.doctorId,
           amount: feeAmount,
           description: `رسوم الطبيب - ${appointment.patient?.fullName || 'مريض'} - ${appointmentId}`,
           date: new Date(),
@@ -1015,65 +1016,111 @@ exports.markAppointmentAsPaid = async (req, res) => {
 
     await appointment.save();
 
-    // Process debt payments
+    // Process debt payments - search in clinic owner's financial (where debts are stored)
     if (debtPayments && Array.isArray(debtPayments)) {
-      for (const debtPayment of debtPayments) {
-        try {
-          const financial = await Financial.findOne({ doctorId: appointment.doctorId._id });
-          if (financial) {
-            const debt = financial.debts.id(debtPayment.debtId);
+      try {
+        let debtFinancialOwnerId = appointment.doctorId._id;
+        if (appointment.clinicId) {
+          const Clinic = require('../models/Clinic');
+          const clinic = await Clinic.findById(appointment.clinicId);
+          if (clinic && clinic.ownerId) {
+            debtFinancialOwnerId = clinic.ownerId;
+          }
+        }
+
+        const debtFinancial = await Financial.findOne({ doctorId: debtFinancialOwnerId });
+        if (debtFinancial) {
+          for (const debtPayment of debtPayments) {
+            const debt = debtFinancial.debts.id(debtPayment.debtId);
             if (debt && debt.status !== 'paid') {
-              const paymentAmount = Number(debtPayment.amount);
-              const remainingAmount = debt.amount - paymentAmount;
+              const dpAmount = Number(debtPayment.amount);
+              const remainingAmount = debt.amount - dpAmount;
               
               if (remainingAmount <= 0) {
                 debt.status = 'paid';
+                debt.paidAt = new Date();
                 debt.amount = 0;
               } else {
                 debt.amount = remainingAmount;
               }
 
               // Add debt payment transaction
-              financial.transactions.push({
-                amount: paymentAmount,
+              debtFinancial.transactions.push({
+                amount: dpAmount,
                 description: `Debt payment during appointment - ${debt.description}`,
                 date: new Date(),
-                patientId: debt.patientId._id || debt.patientId, // Ensure it's an ObjectId
+                patientId: debt.patientId._id || debt.patientId,
                 paymentMethod: 'Cash',
               });
-
-              financial.totalEarnings += paymentAmount;
-              await financial.save();
+              debtFinancial.totalEarnings = (debtFinancial.totalEarnings || 0) + dpAmount;
             }
           }
-        } catch (debtError) {
-          console.error('Error processing debt payment:', debtError);
+          debtFinancial.markModified('debts');
+          await debtFinancial.save();
         }
+      } catch (debtError) {
+        console.error('Error processing debt payment:', debtError);
       }
     }
 
-    // Add appointment payment to doctor's financial record
+    // Add appointment payment to clinic owner's financial record (source of truth)
     try {
-      let financial = await Financial.findOne({ doctorId: appointment.doctorId._id });
-      
+      let financialOwnerId = appointment.doctorId._id;
+      if (appointment.clinicId) {
+        const Clinic = require('../models/Clinic');
+        const clinic = await Clinic.findById(appointment.clinicId);
+        if (clinic && clinic.ownerId) {
+          financialOwnerId = clinic.ownerId;
+        }
+      }
+
+      let financial = await Financial.findOne({ doctorId: financialOwnerId });
       if (!financial) {
-        financial = new Financial({ doctorId: appointment.doctorId._id });
+        financial = new Financial({ doctorId: financialOwnerId });
         await financial.save();
       }
 
       // Add the appointment payment as a transaction
       if (totalPayment > 0) {
-        financial.transactions.push({
-          amount: totalPayment,
-          description: `Appointment payment - ${appointment.reason || 'Consultation'}`,
-          date: new Date(),
-          patientId: appointment.patient,
-          appointmentId: appointment._id,
-          paymentMethod: 'Cash',
-        });
+        // Check if transaction for this appointment already exists
+        const existingTxn = financial.transactions.find(t => 
+          t.appointmentId && t.appointmentId.toString() === appointment._id.toString()
+        );
+        if (!existingTxn) {
+          financial.transactions.push({
+            amount: totalPayment,
+            description: `Appointment payment - ${appointment.reason || 'Consultation'}`,
+            date: new Date(),
+            patientId: appointment.patient,
+            appointmentId: appointment._id,
+            paymentMethod: 'Cash',
+          });
+          financial.totalEarnings = (financial.totalEarnings || 0) + totalPayment;
+          await financial.save();
+        }
+      }
 
-        financial.totalEarnings += totalPayment;
-        await financial.save();
+      // Also add to doctor's own financial if different from clinic owner
+      if (financialOwnerId.toString() !== appointment.doctorId._id.toString() && totalPayment > 0) {
+        let doctorFinancial = await Financial.findOne({ doctorId: appointment.doctorId._id });
+        if (!doctorFinancial) {
+          doctorFinancial = new Financial({ doctorId: appointment.doctorId._id });
+        }
+        const existingDocTxn = doctorFinancial.transactions.find(t => 
+          t.appointmentId && t.appointmentId.toString() === appointment._id.toString()
+        );
+        if (!existingDocTxn) {
+          doctorFinancial.transactions.push({
+            amount: totalPayment,
+            description: `Appointment payment - ${appointment.reason || 'Consultation'}`,
+            date: new Date(),
+            patientId: appointment.patient,
+            appointmentId: appointment._id,
+            paymentMethod: 'Cash',
+          });
+          doctorFinancial.totalEarnings = (doctorFinancial.totalEarnings || 0) + totalPayment;
+          await doctorFinancial.save();
+        }
       }
     } catch (financialError) {
       console.error('Error updating financial record:', financialError);
@@ -1116,27 +1163,60 @@ exports.autoMarkAppointmentsAsPaid = async (req, res) => {
           appointment.autoMarkedAsPaid = true;
         await appointment.save();
 
-        // Add payment to doctor's financial record
+        // Add payment to clinic owner's financial record (source of truth) + doctor's
         try {
-          let financial = await Financial.findOne({ doctorId: appointment.doctorId._id });
-          
-          if (!financial) {
-            financial = new Financial({ doctorId: appointment.doctorId._id });
-            await financial.save();
+          let financialOwnerId = appointment.doctorId._id;
+          if (appointment.clinicId) {
+            const Clinic = require('../models/Clinic');
+            const clinic = await Clinic.findById(appointment.clinicId);
+            if (clinic && clinic.ownerId) {
+              financialOwnerId = clinic.ownerId;
+            }
           }
 
-          // Add the payment as a transaction
-          financial.transactions.push({
-            amount: amount,
-            description: `Auto-marked appointment payment - ${appointment.reason || 'Consultation'}`,
-            date: new Date(),
-            patientId: appointment.patient,
-            appointmentId: appointment._id,
-            paymentMethod: 'Cash',
-          });
+          // Record on clinic owner
+          let ownerFinancial = await Financial.findOne({ doctorId: financialOwnerId });
+          if (!ownerFinancial) {
+            ownerFinancial = new Financial({ doctorId: financialOwnerId });
+          }
+          const existingOwnerTxn = ownerFinancial.transactions.find(t =>
+            t.appointmentId && t.appointmentId.toString() === appointment._id.toString()
+          );
+          if (!existingOwnerTxn) {
+            ownerFinancial.transactions.push({
+              amount: amount,
+              description: `Auto-marked appointment payment - ${appointment.reason || 'Consultation'}`,
+              date: new Date(),
+              patientId: appointment.patient,
+              appointmentId: appointment._id,
+              paymentMethod: 'Cash',
+            });
+            ownerFinancial.totalEarnings = (ownerFinancial.totalEarnings || 0) + amount;
+            await ownerFinancial.save();
+          }
 
-          financial.totalEarnings += amount;
-          await financial.save();
+          // Also record on doctor's own financial if different
+          if (financialOwnerId.toString() !== appointment.doctorId._id.toString()) {
+            let financial = await Financial.findOne({ doctorId: appointment.doctorId._id });
+            if (!financial) {
+              financial = new Financial({ doctorId: appointment.doctorId._id });
+            }
+            const existingDocTxn = financial.transactions.find(t =>
+              t.appointmentId && t.appointmentId.toString() === appointment._id.toString()
+            );
+            if (!existingDocTxn) {
+              financial.transactions.push({
+                amount: amount,
+                description: `Auto-marked appointment payment - ${appointment.reason || 'Consultation'}`,
+                date: new Date(),
+                patientId: appointment.patient,
+                appointmentId: appointment._id,
+                paymentMethod: 'Cash',
+              });
+              financial.totalEarnings = (financial.totalEarnings || 0) + amount;
+              await financial.save();
+            }
+          }
         } catch (financialError) {
           console.error('Error updating financial record for auto-marked appointment:', financialError);
           // Continue with other appointments even if one fails
