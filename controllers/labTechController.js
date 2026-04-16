@@ -268,7 +268,7 @@ exports.updateRequest = async (req, res) => {
     }
 
     const updatedRequest = await LabRequest.findById(requestId)
-      .populate('patientId', 'fullName mobileNumber')
+      .populate('patientId', 'fullName mobileNumber profileImage birthdate sex')
       .populate('doctorId', 'fullName specialty')
       .populate('testIds', 'name type category price normalRange unit')
       .populate('requestedBy', 'fullName');
@@ -663,7 +663,15 @@ exports.getDoctors = async (req, res) => {
     const doctorIds = clinic.doctors.filter(d => d.status === 'active').map(d => d.doctorId);
     const doctors = await User.find({ _id: { $in: doctorIds } }).select('fullName specialty profileImage');
 
-    res.status(200).json({ success: true, doctors });
+    // Add clinic itself as an option (for walk-in patients without a specific doctor)
+    const clinicOption = {
+      _id: clinic.ownerId,
+      fullName: clinic.name,
+      specialty: 'المستوصف',
+      isClinic: true
+    };
+
+    res.status(200).json({ success: true, doctors: [clinicOption, ...doctors] });
   } catch (error) {
     console.error('Error fetching doctors for lab tech:', error);
     res.status(500).json({ message: 'فشل في جلب قائمة الأطباء', error: error.message });
