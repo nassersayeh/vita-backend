@@ -57,4 +57,35 @@ router.get('/revenue/:year/:month', adminController.getRevenueByMonth);
 // Gift points to users
 router.post('/gift-points', adminController.giftPoints);
 
+// Insurance companies and oversight accounts for admin
+router.get('/insurance-accounts', async (req, res) => {
+  try {
+    const InsuranceCompany = require('../models/InsuranceCompany');
+    const OversightAccount = require('../models/OversightAccount');
+    const [companies, oversight] = await Promise.all([
+      InsuranceCompany.find({}).select('-password').sort({ createdAt: -1 }),
+      OversightAccount.find({}).select('-password').sort({ createdAt: -1 }),
+    ]);
+    res.json({ companies, oversight });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
+router.delete('/insurance-accounts/:type/:id', async (req, res) => {
+  try {
+    const { type, id } = req.params;
+    if (type === 'company') {
+      const InsuranceCompany = require('../models/InsuranceCompany');
+      await InsuranceCompany.findByIdAndDelete(id);
+    } else {
+      const OversightAccount = require('../models/OversightAccount');
+      await OversightAccount.findByIdAndDelete(id);
+    }
+    res.json({ message: 'Deleted successfully' });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
 module.exports = router;

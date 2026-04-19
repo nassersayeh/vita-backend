@@ -35,8 +35,8 @@ exports.signup = async (req, res) => {
       return res.status(400).json({ message: 'Please fill all required fields.' });
     }
     
-    // Validate email for non-User roles
-    if (role !== 'User' && !normalizedEmail) {
+    // Validate email for non-User/non-Pharmacy roles
+    if (role !== 'User' && role !== 'Pharmacy' && !normalizedEmail) {
       return res.status(400).json({ message: 'Email is required for this role.' });
     }
     
@@ -92,6 +92,49 @@ exports.signup = async (req, res) => {
       }] : undefined,
     });
     await newUser.save();
+    
+    // For Pharmacy role, skip verification - go straight to pending approval
+    if (role === 'Pharmacy') {
+      newUser.isPhoneVerified = true;
+      newUser.phoneVerificationCode = undefined;
+      newUser.phoneVerificationCodeExpiration = undefined;
+      await newUser.save({ validateBeforeSave: false });
+      
+      // Auto-generate token so pharmacy can login immediately
+      const token = jwt.sign(
+        { userId: newUser._id, role: newUser.role },
+        process.env.JWT_SECRET || 'your-secret-key',
+        { expiresIn: '7d' }
+      );
+      
+      return res.status(201).json({ 
+        success: true, 
+        message: 'Account created. Waiting for admin approval.',
+        requiresVerification: false,
+        autoLogin: true,
+        user: {
+          id: newUser._id,
+          _id: newUser._id,
+          fullName: newUser.fullName,
+          mobile: newUser.mobileNumber,
+          mobileNumber: newUser.mobileNumber,
+          email: newUser.email,
+          role: newUser.role,
+          country: newUser.country,
+          city: newUser.city,
+          address: newUser.address,
+          idNumber: newUser.idNumber,
+          birthdate: newUser.birthdate,
+          sex: newUser.sex,
+          profileImage: newUser.profileImage,
+          points: 0,
+          language: newUser.language || 'en',
+          activationStatus: newUser.activationStatus,
+          isPaid: newUser.isPaid,
+        },
+        token,
+      });
+    }
     
     // Send verification code via multiple channels
     let sentVia = [];
@@ -175,7 +218,76 @@ exports.login = async (req, res) => {
   try {
     const { mobile, password } = req.body;
     const user = await User.findOne({ mobileNumber: mobile });
-    if (!user) return res.status(400).json({ message: 'Invalid mobile number or password.' });
+    
+    // If not found in Users, check InsuranceCompany and OversightAccount
+    if (!user) {
+      const InsuranceCompany = require('../models/InsuranceCompany');
+      const OversightAccount = require('../models/OversightAccount');
+      
+      // Check insurance companies
+      const insuranceCompany = await InsuranceCompany.findOne({ phone: mobile, status: 'active' });
+      if (insuranceCompany) {
+        const isMatch = await bcrypt.compare(password, insuranceCompany.password);
+        if (!isMatch) return res.status(400).json({ message: 'Invalid mobile number or password.' });
+        
+        const token = jwt.sign(
+          { companyId: insuranceCompany._id, role: 'insurance_company' },
+          process.env.JWT_SECRET || 'your-secret-key',
+          { expiresIn: '7d' }
+        );
+        
+        return res.json({
+          message: 'Login successful',
+          user: {
+            id: insuranceCompany._id,
+            _id: insuranceCompany._id,
+            fullName: insuranceCompany.name,
+            nameAr: insuranceCompany.nameAr,
+            mobile: insuranceCompany.phone,
+            mobileNumber: insuranceCompany.phone,
+            role: 'insurance_company',
+            profileImage: null,
+            points: 0,
+          },
+          token,
+          redirectTo: '/insurance-claims',
+        });
+      }
+      
+      // Check oversight/union accounts
+      const oversightAccount = await OversightAccount.findOne({ phone: mobile });
+      if (oversightAccount) {
+        const isMatch = await bcrypt.compare(password, oversightAccount.password);
+        if (!isMatch) return res.status(400).json({ message: 'Invalid mobile number or password.' });
+        
+        const token = jwt.sign(
+          { accountId: oversightAccount._id, role: 'oversight' },
+          process.env.JWT_SECRET || 'your-secret-key',
+          { expiresIn: '7d' }
+        );
+        
+        return res.json({
+          message: 'Login successful',
+          user: {
+            id: oversightAccount._id,
+            _id: oversightAccount._id,
+            fullName: oversightAccount.name,
+            nameAr: oversightAccount.nameAr,
+            mobile: oversightAccount.phone,
+            mobileNumber: oversightAccount.phone,
+            role: 'oversight',
+            type: oversightAccount.type,
+            profileImage: null,
+            points: 0,
+          },
+          token,
+          redirectTo: '/pharmacist-union',
+        });
+      }
+      
+      return res.status(400).json({ message: 'Invalid mobile number or password.' });
+    }
+    
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) return res.status(400).json({ message: 'Invalid mobile number or password.' });
     
@@ -292,7 +404,9 @@ exports.login = async (req, res) => {
         language: updatedUser.language || 'en',
         specialty: updatedUser.specialty || '',
         managedByClinic: updatedUser.managedByClinic || false,
-        clinicId: updatedUser.clinicId || null
+        clinicId: updatedUser.clinicId || null,
+        activationStatus: updatedUser.activationStatus,
+        isPaid: updatedUser.isPaid,
       },
       token,
       dailyPointsEarned

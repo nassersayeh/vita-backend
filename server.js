@@ -50,6 +50,7 @@ const claimRoutes = require('./routes/claimRoutes');
 const doctorClaimRoutes = require('./routes/doctorClaimRoutes');
 const oversightRoutes = require('./routes/oversightRoutes');
 const aiRoutes = require('./routes/aiRoutes');
+const insuranceClaimsRoutes = require('./routes/insuranceClaimsAPI');
 
 // Firebase admin
 const admin = require('firebase-admin');
@@ -208,6 +209,7 @@ app.use('/api/claims', claimRoutes);
 app.use('/api/doctor-claims', doctorClaimRoutes);
 app.use('/api/oversight', oversightRoutes);
 app.use('/api/ai', aiRoutes);
+app.use('/api/insurance-claims', insuranceClaimsRoutes);
 app.use('/api/notifications', require('./routes/notifications'));
 
 // Clinic routes

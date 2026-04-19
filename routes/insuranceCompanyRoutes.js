@@ -9,9 +9,18 @@ const Claim = require('../models/Claim');
 // Login for insurance company
 router.post('/login', async (req, res) => {
   try {
-    const { username, password } = req.body;
+    const { username, password, mobile } = req.body;
     
-    const company = await InsuranceCompany.findOne({ username, status: 'active' });
+    let query = { status: 'active' };
+    if (mobile) {
+      query.phone = mobile;
+    } else if (username) {
+      query.username = username;
+    } else {
+      return res.status(400).json({ message: 'Username or mobile required' });
+    }
+    
+    const company = await InsuranceCompany.findOne(query);
     if (!company) {
       return res.status(400).json({ message: 'Invalid credentials' });
     }
@@ -33,6 +42,7 @@ router.post('/login', async (req, res) => {
         id: company._id,
         name: company.name,
         nameAr: company.nameAr,
+        phone: company.phone,
         role: 'insurance'
       },
       token

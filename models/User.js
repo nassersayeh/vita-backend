@@ -19,11 +19,11 @@ const WorkplaceSchema = new mongoose.Schema({
 
 const UserSchema = new mongoose.Schema({
   fullName: { type: String, required: true },
-  username: { type: String, required: false, unique: true, sparse: true, maxlength: 14 },
+  username: { type: String, required: false, unique: true, sparse: true, maxlength: 30 },
   password: { type: String, required: true },
   email: { 
     type: String, 
-    required: function() { return this.role !== 'User'; }, 
+    required: function() { return this.role !== 'User' && this.role !== 'Pharmacy'; }, 
     unique: true, 
     sparse: true 
   }, // Updated with sparse: true

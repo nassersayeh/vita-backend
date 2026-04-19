@@ -10,9 +10,18 @@ const InsuranceCompany = require('../models/InsuranceCompany');
 // Login for oversight accounts
 router.post('/login', async (req, res) => {
   try {
-    const { username, password } = req.body;
+    const { username, password, mobile } = req.body;
     
-    const account = await OversightAccount.findOne({ username, status: 'active' });
+    let query = { status: 'active' };
+    if (mobile) {
+      query.phone = mobile;
+    } else if (username) {
+      query.username = username;
+    } else {
+      return res.status(400).json({ message: 'Username or mobile required' });
+    }
+    
+    const account = await OversightAccount.findOne(query);
     if (!account) {
       return res.status(400).json({ message: 'Invalid credentials' });
     }
