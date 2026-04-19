@@ -24,7 +24,7 @@ router.get('/union/all-claims', async (req, res) => {
   try {
     const { status, insuranceCompany, pharmacyName, page = 1, limit = 50 } = req.query;
     
-    const filter = {};
+    const filter = { status: { $ne: 'draft' } };
     if (status) filter.status = status;
     if (insuranceCompany) filter.insuranceCompany = insuranceCompany;
     if (pharmacyName) filter.pharmacyName = { $regex: pharmacyName, $options: 'i' };
@@ -41,8 +41,8 @@ router.get('/union/all-claims', async (req, res) => {
       InsuranceClaim.countDocuments(filter)
     ]);
     
-    // Aggregate stats (unfiltered)
-    const allClaims = await InsuranceClaim.find({}).select('-attachmentData');
+    // Aggregate stats (exclude drafts)
+    const allClaims = await InsuranceClaim.find({ status: { $ne: 'draft' } }).select('-attachmentData');
     const stats = {
       totalClaims: allClaims.length,
       totalValue: allClaims.reduce((sum, c) => sum + (c.claimsValue || 0), 0),
@@ -113,7 +113,7 @@ router.get('/company/:companyName/claims', async (req, res) => {
     const { companyName } = req.params;
     const { status, page = 1, limit = 50 } = req.query;
     
-    const filter = { insuranceCompany: decodeURIComponent(companyName) };
+    const filter = { insuranceCompany: decodeURIComponent(companyName), status: { $ne: 'draft' } };
     if (status) filter.status = status;
     
     const skip = (parseInt(page) - 1) * parseInt(limit);
@@ -129,7 +129,7 @@ router.get('/company/:companyName/claims', async (req, res) => {
     ]);
     
     // Stats
-    const allClaims = await InsuranceClaim.find({ insuranceCompany: decodeURIComponent(companyName) }).select('-attachmentData');
+    const allClaims = await InsuranceClaim.find({ insuranceCompany: decodeURIComponent(companyName), status: { $ne: 'draft' } }).select('-attachmentData');
     const stats = {
       total: allClaims.length,
       totalValue: allClaims.reduce((sum, c) => sum + (c.claimsValue || 0), 0),
@@ -253,8 +253,9 @@ router.post('/:pharmacyId', claimUpload.single('attachment'), async (req, res) =
       claimsCount,
       claimsValue,
       notes,
-      status: 'pending',
-      statusHistory: [{ status: 'pending', changedBy: pharmacy?.fullName || 'Pharmacy', reason: 'تم إنشاء المطالبة' }]
+      status: 'draft',
+      servicePaymentStatus: 'unpaid',
+      statusHistory: [{ status: 'draft', changedBy: pharmacy?.fullName || 'Pharmacy', reason: 'تم إنشاء مسودة المطالبة' }]
     };
 
     if (req.file) {
@@ -273,14 +274,81 @@ router.post('/:pharmacyId', claimUpload.single('attachment'), async (req, res) =
   }
 });
 
-// Delete a claim (only if still pending)
+// Pay for draft claims and send them (simulate payment)
+router.post('/:pharmacyId/pay-drafts', async (req, res) => {
+  try {
+    const { pharmacyId } = req.params;
+    const { cardNumber, cardHolder, expiryDate, cvv, claimIds } = req.body;
+
+    // Basic validation
+    if (!cardNumber || !cardHolder || !expiryDate || !cvv) {
+      return res.status(400).json({ success: false, message: 'All card details are required' });
+    }
+
+    // Find draft claims for this pharmacy
+    let filter = { pharmacyId, status: 'draft', servicePaymentStatus: 'unpaid' };
+    if (claimIds && claimIds.length > 0) {
+      filter._id = { $in: claimIds };
+    }
+    const drafts = await InsuranceClaim.find(filter).select('-attachmentData');
+    
+    if (drafts.length === 0) {
+      return res.status(400).json({ success: false, message: 'No draft claims found' });
+    }
+
+    const totalFee = drafts.length * 5; // 5 ILS per claim
+
+    // Simulate payment processing (will be replaced with Bank of Palestine API)
+    const paymentRef = `BP-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
+    
+    // Simulate: mask card number for receipt
+    const maskedCard = `****${cardNumber.replace(/\s/g, '').slice(-4)}`;
+
+    // Update all drafts to pending
+    await InsuranceClaim.updateMany(
+      { _id: { $in: drafts.map(d => d._id) } },
+      {
+        $set: {
+          status: 'pending',
+          servicePaymentStatus: 'paid',
+          servicePaymentRef: paymentRef,
+          servicePaymentDate: new Date(),
+        },
+        $push: {
+          statusHistory: {
+            status: 'pending',
+            changedBy: 'Payment System',
+            reason: `تم الدفع ${totalFee} شيكل - ${maskedCard}`,
+            timestamp: new Date()
+          }
+        }
+      }
+    );
+
+    res.json({
+      success: true,
+      message: 'Payment successful',
+      data: {
+        claimsCount: drafts.length,
+        totalFee,
+        paymentRef,
+        maskedCard,
+      }
+    });
+  } catch (error) {
+    console.error('Error processing payment:', error);
+    res.status(500).json({ success: false, message: 'Payment processing failed' });
+  }
+});
+
+// Delete a claim (only if still pending or draft)
 router.delete('/claim/:claimId', async (req, res) => {
   try {
     const { claimId } = req.params;
     const claim = await InsuranceClaim.findById(claimId);
     if (!claim) return res.status(404).json({ success: false, message: 'Claim not found' });
-    if (claim.status !== 'pending') {
-      return res.status(400).json({ success: false, message: 'Only pending claims can be deleted' });
+    if (claim.status !== 'pending' && claim.status !== 'draft') {
+      return res.status(400).json({ success: false, message: 'Only pending/draft claims can be deleted' });
     }
     await InsuranceClaim.findByIdAndDelete(claimId);
     res.json({ success: true, message: 'Claim deleted successfully' });
