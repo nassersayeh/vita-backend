@@ -9,6 +9,9 @@ const InsuranceClaimSchema = new mongoose.Schema({
   claimsCount: { type: Number, required: true },
   claimsValue: { type: Number, required: true },
   notes: { type: String, default: '' },
+  attachmentData: { type: String, default: '' },
+  attachmentName: { type: String, default: '' },
+  attachmentMime: { type: String, default: '' },
   status: { 
     type: String, 
     enum: ['pending', 'under_review', 'rejected', 'paid'], 

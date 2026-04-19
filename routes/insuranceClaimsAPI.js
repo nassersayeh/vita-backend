@@ -1,7 +1,21 @@
 const express = require('express');
 const router = express.Router();
+const multer = require('multer');
+const path = require('path');
 const InsuranceClaim = require('../models/InsuranceClaim');
 const User = require('../models/User');
+
+// Configure multer with memory storage (Vercel compatible)
+const claimUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+  fileFilter: (req, file, cb) => {
+    const allowed = ['.pdf', '.xlsx', '.xls', '.csv', '.jpg', '.jpeg', '.png', '.gif', '.doc', '.docx'];
+    const ext = path.extname(file.originalname).toLowerCase();
+    if (allowed.includes(ext)) cb(null, true);
+    else cb(new Error('File type not allowed'));
+  }
+});
 
 // ==================== UNION / OVERSIGHT ROUTES (must be before /:pharmacyId) ====================
 
@@ -19,6 +33,7 @@ router.get('/union/all-claims', async (req, res) => {
     
     const [claims, total] = await Promise.all([
       InsuranceClaim.find(filter)
+        .select('-attachmentData')
         .populate('pharmacyId', 'fullName mobileNumber city address idNumber')
         .sort({ createdAt: -1 })
         .skip(skip)
@@ -27,7 +42,7 @@ router.get('/union/all-claims', async (req, res) => {
     ]);
     
     // Aggregate stats (unfiltered)
-    const allClaims = await InsuranceClaim.find({});
+    const allClaims = await InsuranceClaim.find({}).select('-attachmentData');
     const stats = {
       totalClaims: allClaims.length,
       totalValue: allClaims.reduce((sum, c) => sum + (c.claimsValue || 0), 0),
@@ -105,6 +120,7 @@ router.get('/company/:companyName/claims', async (req, res) => {
     
     const [claims, total] = await Promise.all([
       InsuranceClaim.find(filter)
+        .select('-attachmentData')
         .populate('pharmacyId', 'fullName mobileNumber city address')
         .sort({ createdAt: -1 })
         .skip(skip)
@@ -113,7 +129,7 @@ router.get('/company/:companyName/claims', async (req, res) => {
     ]);
     
     // Stats
-    const allClaims = await InsuranceClaim.find({ insuranceCompany: decodeURIComponent(companyName) });
+    const allClaims = await InsuranceClaim.find({ insuranceCompany: decodeURIComponent(companyName) }).select('-attachmentData');
     const stats = {
       total: allClaims.length,
       totalValue: allClaims.reduce((sum, c) => sum + (c.claimsValue || 0), 0),
@@ -172,6 +188,26 @@ router.put('/claim/:claimId/status', async (req, res) => {
 
 // ==================== PHARMACY ROUTES ====================
 
+// Download claim attachment
+router.get('/claim/:claimId/attachment', async (req, res) => {
+  try {
+    const claim = await InsuranceClaim.findById(req.params.claimId).select('attachmentData attachmentName attachmentMime');
+    if (!claim || !claim.attachmentData) {
+      return res.status(404).json({ success: false, message: 'No attachment found' });
+    }
+    const buffer = Buffer.from(claim.attachmentData, 'base64');
+    res.set({
+      'Content-Type': claim.attachmentMime || 'application/octet-stream',
+      'Content-Disposition': `inline; filename="${encodeURIComponent(claim.attachmentName || 'attachment')}"`,
+      'Content-Length': buffer.length,
+    });
+    res.send(buffer);
+  } catch (error) {
+    console.error('Error downloading attachment:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
 // Get all claims for a pharmacy
 router.get('/:pharmacyId', async (req, res) => {
   try {
@@ -187,7 +223,7 @@ router.get('/:pharmacyId', async (req, res) => {
       if (endDate) filter.createdAt.$lte = new Date(endDate);
     }
     
-    const claims = await InsuranceClaim.find(filter).sort({ createdAt: -1 });
+    const claims = await InsuranceClaim.find(filter).select('-attachmentData').sort({ createdAt: -1 });
     res.json({ success: true, data: claims });
   } catch (error) {
     console.error('Error fetching insurance claims:', error);
@@ -196,7 +232,7 @@ router.get('/:pharmacyId', async (req, res) => {
 });
 
 // Create a new insurance claim
-router.post('/:pharmacyId', async (req, res) => {
+router.post('/:pharmacyId', claimUpload.single('attachment'), async (req, res) => {
   try {
     const { pharmacyId } = req.params;
     const { insuranceCompany, startDate, endDate, claimsCount, claimsValue, notes } = req.body;
@@ -208,7 +244,7 @@ router.post('/:pharmacyId', async (req, res) => {
     // Get pharmacy name
     const pharmacy = await User.findById(pharmacyId).select('fullName');
     
-    const claim = new InsuranceClaim({
+    const claimData = {
       pharmacyId,
       pharmacyName: pharmacy?.fullName || '',
       insuranceCompany,
@@ -219,7 +255,15 @@ router.post('/:pharmacyId', async (req, res) => {
       notes,
       status: 'pending',
       statusHistory: [{ status: 'pending', changedBy: pharmacy?.fullName || 'Pharmacy', reason: 'تم إنشاء المطالبة' }]
-    });
+    };
+
+    if (req.file) {
+      claimData.attachmentData = req.file.buffer.toString('base64');
+      claimData.attachmentName = req.file.originalname;
+      claimData.attachmentMime = req.file.mimetype;
+    }
+
+    const claim = new InsuranceClaim(claimData);
     
     await claim.save();
     res.status(201).json({ success: true, data: claim });
