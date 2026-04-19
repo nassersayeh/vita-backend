@@ -296,7 +296,12 @@ router.post('/:pharmacyId/pay-drafts', async (req, res) => {
       return res.status(400).json({ success: false, message: 'No draft claims found' });
     }
 
-    const totalFee = drafts.length * 5; // 5 ILS per claim
+    // 10 ILS per claim, 5 ILS for claims created before April 2026
+    const aprilCutoff = new Date('2026-04-01');
+    let totalFee = 0;
+    drafts.forEach(d => {
+      totalFee += (d.createdAt < aprilCutoff) ? 5 : 10;
+    });
 
     // Simulate payment processing (will be replaced with Bank of Palestine API)
     const paymentRef = `BP-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;

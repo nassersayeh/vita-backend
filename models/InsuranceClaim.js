@@ -18,7 +18,7 @@ const InsuranceClaimSchema = new mongoose.Schema({
     default: 'draft' 
   },
   // Payment for claim service (5 ILS per claim)
-  serviceFee: { type: Number, default: 5 },
+  serviceFee: { type: Number, default: 10 },
   servicePaymentStatus: { type: String, enum: ['unpaid', 'paid'], default: 'unpaid' },
   servicePaymentRef: { type: String, default: '' },
   servicePaymentDate: { type: Date },
