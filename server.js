@@ -116,7 +116,7 @@ const providerRoutes = require('./routes/provider');
 const medicationRoutes = require('./routes/medication');
 const cartRoutes = require('./routes/cart');
 
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb+srv://vita:pop1990@cluster0.nj5pcz0.mongodb.net';
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://vitaUser:pop1990@204.168.242.155:27017/vita?authSource=admin';
 
 // Cache the connection promise for serverless (Vercel)
 let dbPromise = null;
