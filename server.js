@@ -118,25 +118,19 @@ const cartRoutes = require('./routes/cart');
 
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://vitaUser:pop1990@204.168.242.155:27017/vita?authSource=admin';
 
-// Cache the connection promise for serverless (Vercel)
-let dbPromise = null;
-const connectDB = () => {
-  if (!dbPromise) {
-    dbPromise = mongoose.connect(MONGODB_URI).then(() => {
-      console.log('MongoDB connected');
-    }).catch(err => {
-      console.error('MongoDB connection error:', err);
-      dbPromise = null; // Reset so next request retries
-      throw err;
-    });
-  }
-  return dbPromise;
-};
+// Connect to MongoDB immediately on startup
+mongoose.connect(MONGODB_URI).then(() => {
+  console.log('✅ MongoDB connected');
+}).catch(err => {
+  console.error('❌ MongoDB connection error:', err.message);
+});
 
 // Middleware to ensure DB is connected before handling any request
 app.use(async (req, res, next) => {
   try {
-    await connectDB();
+    if (mongoose.connection.readyState !== 1) {
+      await mongoose.connect(MONGODB_URI);
+    }
     next();
   } catch (err) {
     res.status(500).json({ message: 'Database connection error', error: err.message });

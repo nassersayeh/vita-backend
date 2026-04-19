@@ -201,7 +201,7 @@ exports.approveUser = async (req, res) => {
       user.rejectionReason = rejectionReason;
     }
 
-    await user.save();
+    await user.save({ validateBeforeSave: false });
 
     // Auto-assign default drug inventory when a Pharmacy is approved
     if (status === 'active' && user.role === 'Pharmacy') {

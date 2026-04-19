@@ -31,14 +31,16 @@ exports.signup = async (req, res) => {
     const normalizedUsername = username && username.trim() ? username.trim() : undefined;
     
     // Basic validations
-    if (!fullName || !mobile || !password || !country || !city || !idNumber || !address || !role) {
+    if (!fullName || !mobile || !password || !country || !city || !idNumber || !role) {
       return res.status(400).json({ message: 'Please fill all required fields.' });
     }
     
-    // Validate email for non-User/non-Pharmacy roles
-    if (role !== 'User' && role !== 'Pharmacy' && !normalizedEmail) {
-      return res.status(400).json({ message: 'Email is required for this role.' });
+    // Address required only for patients
+    if (role === 'User' && !address) {
+      return res.status(400).json({ message: 'Address is required.' });
     }
+    
+    // Email is optional for all roles
     
     // Check if mobile number already exists
     const existingUser = await User.findOne({ mobileNumber: mobile });
@@ -78,7 +80,7 @@ exports.signup = async (req, res) => {
       idNumber,
       birthdate,
       address,
-      sex: role === 'Pharmacy' ? undefined : sex,
+      sex: ['Pharmacy', 'Lab', 'Clinic'].includes(role) ? undefined : sex,
       role,
       profileImage,
       isPhoneVerified: false, // Not verified yet
@@ -93,8 +95,8 @@ exports.signup = async (req, res) => {
     });
     await newUser.save();
     
-    // For Pharmacy role, skip verification - go straight to pending approval
-    if (role === 'Pharmacy') {
+    // For professional roles (Pharmacy, Doctor, Lab, Clinic), skip verification - auto-login
+    if (['Pharmacy', 'Doctor', 'Lab', 'Clinic'].includes(role)) {
       newUser.isPhoneVerified = true;
       newUser.phoneVerificationCode = undefined;
       newUser.phoneVerificationCodeExpiration = undefined;

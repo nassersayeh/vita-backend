@@ -23,7 +23,7 @@ const UserSchema = new mongoose.Schema({
   password: { type: String, required: true },
   email: { 
     type: String, 
-    required: function() { return this.role !== 'User' && this.role !== 'Pharmacy'; }, 
+    required: false, 
     unique: true, 
     sparse: true 
   }, // Updated with sparse: true
