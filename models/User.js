@@ -138,20 +138,27 @@ const UserSchema = new mongoose.Schema({
   
   // Subscription and trial
   isPaid: { type: Boolean, default: function() { return this.role === 'User'; } },
-  trialEndDate: { type: Date, default: function() { 
-    if (this.role !== 'User') {
-      const endDate = new Date();
-      endDate.setMonth(endDate.getMonth() + 3);
-      return endDate;
-    }
-    return null;
-  } },
+  trialEndDate: { type: Date, default: null },
   // Paid subscription info
   subscriptionEndDate: { type: Date, default: null },
   subscriptionPlanUnit: { type: String, enum: ['month', 'year'], default: null },
   subscriptionPlanValue: { type: Number, default: null },
   lastPaymentAmount: { type: Number, default: null },
   lastPaymentAt: { type: Date, default: null },
+  
+  // Saved card info (masked)
+  savedCard: {
+    maskedNumber: { type: String }, // e.g. **** **** **** 4242
+    cardHolder: { type: String },
+    expiryDate: { type: String },
+    cardToken: { type: String }, // encrypted/tokenized for charging
+    savedAt: { type: Date },
+  },
+  
+  // Subscription offer
+  hasAcceptedOffer: { type: Boolean, default: false },
+  offerAcceptedAt: { type: Date, default: null },
+  trialUsed: { type: Boolean, default: false },
   
   // Doctor WhatsApp integration
   whatsappSession: {

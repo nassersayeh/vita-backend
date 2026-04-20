@@ -2,28 +2,52 @@ const PharmacyInventory = require('../models/PharmacyInventory');
 const Drug = require('../models/Drug');
 const User = require('../models/User');
 
-// Get all inventory items for a pharmacy
+// Get inventory items for a pharmacy (with pagination and search)
 exports.getPharmacyInventory = async (req, res) => {
   try {
     const { pharmacyId } = req.params;
+    const fetchAll = req.query.all === 'true';
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = fetchAll ? 0 : Math.min(100, Math.max(1, parseInt(req.query.limit) || 50));
+    const search = (req.query.search || '').trim();
+    const lowStockOnly = req.query.lowStock === 'true';
+    const skip = fetchAll ? 0 : (page - 1) * limit;
 
-    // Allow patients to view any pharmacy's inventory for ordering
-    // Only check authorization if the user is trying to access their own pharmacy's full details
-    const userIsPharmacy = req.user._id.toString() === pharmacyId && req.user.role === 'pharmacy';
-    if (userIsPharmacy) {
-      // Pharmacy owners can only view their own inventory
-      // (this is fine, they own it)
+    const filter = { pharmacyId, isActive: true };
+
+    if (search.length >= 2) {
+      const searchRegex = new RegExp(search, 'i');
+      filter.$or = [
+        { drugName: searchRegex },
+        { drugGenericName: searchRegex },
+      ];
     }
-    // Patients can view any pharmacy's inventory to place orders (no authorization check needed)
 
-    const inventory = await PharmacyInventory.find({ 
-      pharmacyId,
-      isActive: true 
-    })
-      .populate('drugId', 'name genericName strength manufacturer barcode currentQuantity mainSupplier')
-      .sort({ drugName: 1 });
+    if (lowStockOnly) {
+      filter.$expr = { $lte: ['$quantity', '$minimumStock'] };
+    }
 
-    res.json(inventory);
+    let query = PharmacyInventory.find(filter)
+      .select('drugId drugName drugGenericName quantity price costPrice minimumStock isAvailable notes')
+      .populate('drugId', 'name genericName strength manufacturer barcode')
+      .sort({ drugName: 1 })
+      .lean();
+
+    if (!fetchAll) {
+      query = query.skip(skip).limit(limit);
+    }
+
+    const [inventory, total] = await Promise.all([
+      query,
+      PharmacyInventory.countDocuments(filter)
+    ]);
+
+    res.json({
+      items: inventory,
+      total,
+      page,
+      totalPages: Math.ceil(total / limit),
+    });
   } catch (error) {
     console.error('Error fetching pharmacy inventory:', error);
     res.status(500).json({ message: 'Failed to fetch inventory', error: error.message });
@@ -202,14 +226,14 @@ exports.getAvailableDrugsToAdd = async (req, res) => {
     const existingDrugs = await PharmacyInventory.find({ 
       pharmacyId,
       isActive: true 
-    }).select('drugId');
+    }).select('drugId').lean();
     
-    const existingDrugIds = existingDrugs.map(item => item.drugId.toString());
+    const existingDrugIds = existingDrugs.map(item => item.drugId);
 
-    // Build query
-    let query = { isActive: true };
+    // Build query - exclude drugs already in inventory
+    let query = { isActive: true, _id: { $nin: existingDrugIds } };
     
-    if (search) {
+    if (search && search.trim().length >= 2) {
       const searchRegex = new RegExp(search, 'i');
       query.$or = [
         { name: searchRegex },
@@ -217,17 +241,15 @@ exports.getAvailableDrugsToAdd = async (req, res) => {
         { manufacturer: searchRegex },
         { barcode: searchRegex }
       ];
+    } else {
+      return res.json([]);
     }
 
-    // Get available drugs (not in inventory yet)
-    const drugs = await Drug.find(query)
+    // Get available drugs directly from DB
+    const availableDrugs = await Drug.find(query)
       .select('name genericName strength manufacturer barcode unitSellingPrice category dosageForm')
-      .limit(50);
-
-    // Filter out drugs already in inventory
-    const availableDrugs = drugs.filter(drug => 
-      !existingDrugIds.includes(drug._id.toString())
-    );
+      .limit(30)
+      .lean();
 
     res.json(availableDrugs);
   } catch (error) {
