@@ -17,6 +17,7 @@ router.post('/:doctorId/patients/:patientId/reset-password', doctorPatientContro
 // GET all users who have role === 'Doctor'
 router.get('/', doctorsController.getAllDoctors);
 router.get('/specialties', doctorsController.getSpecialties);
+router.get('/cities', doctorsController.getCities);
 router.get('/filter', doctorsController.filterDoctors);
 
 // ============ DYNAMIC ROUTES (AFTER STATIC) ============

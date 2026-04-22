@@ -232,13 +232,17 @@ router.get('/:doctorId/trial-status', async (req, res) => {
       await doctor.save();
     }
     const now = new Date();
-    const isTrialActive = !doctor.isPaid && now < trialEndDate;
+    // Check subscription type first (can be 'paid', 'free', or undefined)
+    const isPaid = doctor.subscriptionType === 'paid' || doctor.isPaid === true;
+    const isTrialActive = !isPaid && now < trialEndDate;
     const timeLeft = isTrialActive ? trialEndDate - now : 0;
     res.json({
       isTrialActive,
       trialEndDate,
       timeLeft, // in milliseconds
-      isPaid: doctor.isPaid
+      isPaid: isPaid,
+      subscriptionType: doctor.subscriptionType,
+      subscriptionStatus: doctor.subscriptionStatus,
     });
   } catch (error) {
     console.error('Error fetching trial status:', error);

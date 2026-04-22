@@ -30,20 +30,25 @@ router.get('/:id/trial-status', auth, async (req, res) => {
     const user = await require('../models/User').findById(req.params.id);
     if (!user) return res.status(404).json({ message: 'User not found' });
     
+    // Check subscription type first (can be 'paid', 'free', or undefined)
+    const isPaid = user.subscriptionType === 'paid' || user.isPaid === true;
+    
     let trialEndDate = user.trialEndDate;
     const now = new Date();
-    const isTrialActive = !user.isPaid && trialEndDate && now < trialEndDate;
+    const isTrialActive = !isPaid && trialEndDate && now < trialEndDate;
     const timeLeft = isTrialActive ? trialEndDate - now : 0;
     
     res.json({
       isTrialActive,
       trialEndDate,
       timeLeft,
-      isPaid: user.isPaid,
+      isPaid: isPaid,
       hasAcceptedOffer: user.hasAcceptedOffer || false,
       trialUsed: user.trialUsed || false,
       hasSavedCard: !!(user.savedCard && user.savedCard.maskedNumber),
       subscriptionEndDate: user.subscriptionEndDate,
+      subscriptionType: user.subscriptionType,
+      subscriptionStatus: user.subscriptionStatus,
     });
   } catch (error) {
     res.status(500).json({ message: 'Server error' });

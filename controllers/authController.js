@@ -92,6 +92,10 @@ exports.signup = async (req, res) => {
         address: address,
         isActive: true
       }] : undefined,
+      // Initialize subscription for new pharmacies
+      isPaid: role === 'Pharmacy' ? false : undefined,
+      subscriptionType: role === 'Pharmacy' ? 'free' : undefined,
+      subscriptionStatus: role === 'Pharmacy' ? 'inactive' : undefined,
     });
     await newUser.save();
     

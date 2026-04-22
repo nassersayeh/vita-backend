@@ -28,6 +28,32 @@ exports.getSpecialties = async (req, res) => {
   }
 };
 
+exports.getCities = async (req, res) => {
+  try {
+    // Get unique cities from active doctors
+    const cities = await User.distinct('city', { 
+      role: 'Doctor', 
+      activationStatus: 'active',
+      city: { $exists: true, $ne: '', $ne: null }
+    });
+    
+    // Sort cities alphabetically
+    const sortedCities = cities.filter(city => city && city.trim()).sort();
+    
+    res.json({ 
+      success: true, 
+      data: sortedCities,
+      count: sortedCities.length 
+    });
+  } catch (err) {
+    console.error('Error fetching cities:', err);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Server error fetching cities.' 
+    });
+  }
+};
+
 exports.filterDoctors = async (req, res) => {
   try {
     const { city, specialty, q } = req.query;
