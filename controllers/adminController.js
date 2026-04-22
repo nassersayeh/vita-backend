@@ -191,10 +191,17 @@ exports.approveUser = async (req, res) => {
     user.approvedBy = adminId;
     user.approvedAt = new Date();
 
-    if (status === 'active' && trialDays && user.role !== 'User') {
-      const trialEndDate = new Date();
-      trialEndDate.setDate(trialEndDate.getDate() + parseInt(trialDays));
-      user.trialEndDate = trialEndDate;
+    // When approving a professional user (Pharmacy, Doctor, Lab, Clinic)
+    // Set them to FREE by default - no trial days unless explicitly paid
+    if (status === 'active' && user.role !== 'User') {
+      user.isPaid = false;
+      user.subscriptionType = 'free';
+      user.subscriptionStatus = 'inactive';
+      user.trialEndDate = null;
+      user.trialStartDate = null;
+      user.trialUsed = false;
+      // Trial days are only set if admin explicitly provides them for a PAID upgrade
+      // For initial approval, we always start with FREE
     }
 
     if (status === 'declined' && rejectionReason) {
@@ -220,7 +227,9 @@ exports.approveUser = async (req, res) => {
         id: user._id,
         fullName: user.fullName,
         role: user.role,
-        activationStatus: user.activationStatus
+        activationStatus: user.activationStatus,
+        subscriptionType: user.subscriptionType,
+        isPaid: user.isPaid
       }
     });
   } catch (error) {
