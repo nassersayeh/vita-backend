@@ -159,6 +159,24 @@ const UserSchema = new mongoose.Schema({
   hasAcceptedOffer: { type: Boolean, default: false },
   offerAcceptedAt: { type: Date, default: null },
   trialUsed: { type: Boolean, default: false },
+  dashboardTrialCancelledAt: { type: Date, default: null },      // when they cancelled the trial
+  dashboardRemainingTrialMs: { type: Number, default: null },    // ms remaining at cancellation time
+  
+  // Vita AI (ChatBot) Subscription
+  vitatAI: {
+    hasAcceptedTrial: { type: Boolean, default: false },
+    trialStartDate: { type: Date, default: null },
+    trialEndDate: { type: Date, default: null },
+    trialCancelledAt: { type: Date, default: null },      // when they cancelled
+    remainingTrialMs: { type: Number, default: null },    // ms remaining at cancellation time
+    isSubscribed: { type: Boolean, default: false },
+    subscriptionStartDate: { type: Date, default: null },
+    subscriptionEndDate: { type: Date, default: null },
+    subscriptionStatus: { type: String, enum: ['active', 'expired', 'cancelled'], default: null },
+    additionalTrialDaysGranted: { type: Number, default: 0 },
+    additionalTrialStartDate: { type: Date, default: null },
+    additionalTrialEndDate: { type: Date, default: null },
+  },
   
   // Doctor WhatsApp integration
   whatsappSession: {

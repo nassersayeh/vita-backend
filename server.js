@@ -28,6 +28,7 @@ const notificationRoutes = require('./routes/notificationRoutes');
 const AdminprofileRoutes = require('./routes/profileRoutes');
 const employeeRoutes = require('./routes/employeeRoutes');
 const supplierRoutes = require('./routes/supplierRoutes');
+const vitatAIRoutes = require('./routes/vitatAI');
 
 // New enhanced routes
 const pointsNewRoutes = require('./routes/pointsNew');
@@ -205,6 +206,7 @@ app.use('/api/oversight', oversightRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/insurance-claims', insuranceClaimsRoutes);
 app.use('/api/notifications', require('./routes/notifications'));
+app.use('/api/vitatai', vitatAIRoutes);
 
 // Clinic routes
 const clinicRoutes = require('./routes/clinicRoutes');
