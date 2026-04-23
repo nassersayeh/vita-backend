@@ -576,6 +576,9 @@ exports.updateUser = async (req, res) => {
       'bio', 'specialty', 'licenseNumber', 'yearsOfExperience', 'consultationFee',
       'birthdate', 'gender', 'language',
       'activationStatus', 'isPaid', 'trialEndDate',
+      // Professional-specific fields
+      'pharmacyName', 'labName', 'hospitalName', 'institutionName',
+      'institutionType', 'clinicAddress',
     ];
     
     const cleanData = {};
@@ -585,9 +588,8 @@ exports.updateUser = async (req, res) => {
         if (updateData[key] === '' && ['yearsOfExperience', 'consultationFee', 'height', 'weight'].includes(key)) {
           continue;
         }
-        // Convert empty strings to null for unique-indexed fields to avoid duplicate key errors
+        // Skip empty strings for email, idNumber, username - don't set them to null to avoid duplicate key errors
         if (updateData[key] === '' && ['email', 'idNumber', 'username'].includes(key)) {
-          cleanData[key] = null;
           continue;
         }
         cleanData[key] = updateData[key];
