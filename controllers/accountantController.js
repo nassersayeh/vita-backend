@@ -2394,7 +2394,15 @@ exports.updatePatient = async (req, res) => {
     const updateData = {};
     if (fullName) updateData.fullName = fullName;
     if (mobileNumber) updateData.mobileNumber = mobileNumber;
-    if (email !== undefined) updateData.email = email;
+    if (email !== undefined) {
+      // Store null (not "") to avoid unique index conflict on empty email
+      updateData.email = email && email.trim() !== '' ? email.trim() : undefined;
+      if (updateData.email === undefined) {
+        // Unset the email field to avoid duplicate key on empty string
+        updateData.$unset = { email: '' };
+        delete updateData.email;
+      }
+    }
     if (idNumber) updateData.idNumber = idNumber;
     if (birthdate) updateData.birthdate = birthdate;
     if (sex) updateData.sex = sex;
@@ -2425,7 +2433,14 @@ exports.updatePatient = async (req, res) => {
     if (previousDiseases !== undefined) updateData.previousDiseases = previousDiseases;
     if (disabilities !== undefined) updateData.disabilities = disabilities;
 
-    const patient = await User.findByIdAndUpdate(patientId, updateData, { new: true })
+    // Separate $unset from regular updateData
+    const unsetFields = updateData.$unset;
+    if (unsetFields) delete updateData.$unset;
+
+    const updateOp = { $set: updateData };
+    if (unsetFields) updateOp.$unset = unsetFields;
+
+    const patient = await User.findByIdAndUpdate(patientId, updateOp, { new: true })
       .select('fullName mobileNumber email idNumber birthdate sex address city country maritalStatus emergencyContactName emergencyContactRelation emergencyPhone hasChronicDiseases chronicDiseasesText hasSurgeries surgeriesText hasFamilyDiseases familyDiseasesText hasDrugAllergies drugAllergiesText hasFoodAllergies foodAllergiesText height weight bloodPressure heartRate temperature bloodSugar smoking previousDiseases disabilities');
 
     if (!patient) {
