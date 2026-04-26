@@ -177,6 +177,8 @@ exports.updateRequest = async (req, res) => {
       return res.status(404).json({ message: 'طلب الفحص غير موجود' });
     }
 
+    const wasAlreadyCompleted = request.status === 'completed';
+
     if (status) request.status = status;
     if (notes !== undefined) request.notes = notes;
     if (results) {
@@ -192,6 +194,7 @@ exports.updateRequest = async (req, res) => {
     if (status === 'completed') request.completedDate = new Date();
 
     // When lab tech marks as completed, set pricing and create debt
+    // Only add/update debt on FIRST completion (not on subsequent edits)
     if (status === 'completed') {
       // testPrices is an optional object: { testId: customPrice, ... }
       // If not provided, use default prices from MedicalTest
@@ -213,7 +216,8 @@ exports.updateRequest = async (req, res) => {
       request.totalCost = totalCost;
 
       // Add lab test cost as DEBT to the patient in CLINIC OWNER's Financial
-      if (totalCost > 0) {
+      // Only create/update debt on FIRST completion - skip if already was completed
+      if (totalCost > 0 && !wasAlreadyCompleted) {
         try {
           const clinic = await getClinicForLabTech(labTechId);
           if (clinic) {
