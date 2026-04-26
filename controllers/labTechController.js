@@ -15,6 +15,14 @@ const getClinicForLabTech = async (labTechId) => {
   return clinic;
 };
 
+// Get all lab tech IDs in the same clinic
+const getAllLabTechIdsInClinic = (clinic) => {
+  if (!clinic) return [];
+  return clinic.staff
+    .filter(s => s.role === 'LabTech' && s.status === 'active')
+    .map(s => s.userId);
+};
+
 // Get dashboard stats
 exports.getDashboardStats = async (req, res) => {
   try {
@@ -27,12 +35,13 @@ exports.getDashboardStats = async (req, res) => {
     tomorrow.setDate(tomorrow.getDate() + 1);
     const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
 
-    // Get requests where lab is this user or clinic-wide
+    // Get requests where lab is this user or clinic-wide (all lab techs in same clinic)
     const queryFilter = { labId: labTechId };
     if (clinic) {
       const doctorIds = clinic.doctors.filter(d => d.status === 'active').map(d => d.doctorId);
+      const allLabTechIds = getAllLabTechIdsInClinic(clinic);
       queryFilter.$or = [
-        { labId: labTechId },
+        { labId: { $in: allLabTechIds } },
         { doctorId: { $in: doctorIds } }
       ];
       delete queryFilter.labId;
@@ -127,9 +136,10 @@ exports.getRequests = async (req, res) => {
     let queryFilter = { labId: labTechId, approvalStatus: { $ne: 'pending_approval' } };
     if (clinic) {
       const doctorIds = clinic.doctors.filter(d => d.status === 'active').map(d => d.doctorId);
+      const allLabTechIds = getAllLabTechIdsInClinic(clinic);
       queryFilter = {
         $or: [
-          { labId: labTechId },
+          { labId: { $in: allLabTechIds } },
           { doctorId: { $in: doctorIds } }
         ],
         // Only show approved requests (not pending accountant approval)
