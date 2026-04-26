@@ -57,6 +57,80 @@ router.get('/revenue/:year/:month', adminController.getRevenueByMonth);
 // Gift points to users
 router.post('/gift-points', adminController.giftPoints);
 
+// ======= Insurance Payments (Pharmacy claims to admin) =======
+router.get('/insurance-payments', async (req, res) => {
+  try {
+    const InsuranceClaim = require('../models/InsuranceClaim');
+    // Group by pharmacy - only claims where service fee was actually paid (via card)
+    const grouped = await InsuranceClaim.aggregate([
+      { $match: { servicePaymentStatus: 'paid' } },
+      {
+        $group: {
+          _id: '$pharmacyId',
+          pharmacyName: { $first: '$pharmacyName' },
+          totalClaims: { $sum: 1 },
+          totalClaimsValue: { $sum: '$claimsValue' },
+          totalServiceFee: { $sum: '$serviceFee' },
+          totalPaidServiceFee: { $sum: '$serviceFee' },
+          paidClaims: { $sum: { $cond: [{ $eq: ['$status', 'paid'] }, 1, 0] } },
+          pendingClaims: { $sum: { $cond: [{ $ne: ['$status', 'paid'] }, 1, 0] } },
+        }
+      },
+      { $sort: { totalPaidServiceFee: -1 } }
+    ]);
+    res.json({ pharmacies: grouped });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
+router.get('/insurance-payments/:pharmacyId', async (req, res) => {
+  try {
+    const InsuranceClaim = require('../models/InsuranceClaim');
+    const mongoose = require('mongoose');
+    const claims = await InsuranceClaim.find({
+      pharmacyId: new mongoose.Types.ObjectId(req.params.pharmacyId),
+      servicePaymentStatus: 'paid',
+    }).sort({ createdAt: -1 });
+    res.json({ claims });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
+// ======= Subscriptions (Platform + Vita AI ChatBot) =======
+router.get('/subscriptions', async (req, res) => {
+  try {
+    const User = require('../models/User');
+    const now = new Date();
+
+    // Platform subscriptions
+    const platformSubs = await User.find({
+      role: { $in: ['Pharmacy', 'Doctor'] },
+      $or: [
+        { subscriptionEndDate: { $ne: null } },
+        { isPaid: true },
+        { hasAcceptedOffer: true },
+      ]
+    }).select('name fullName clinicName role phone city subscriptionEndDate subscriptionPlanUnit subscriptionPlanValue lastPaymentAmount lastPaymentAt isPaid hasAcceptedOffer offerAcceptedAt trialEndDate').lean();
+
+    // Vita AI subscriptions
+    const aiSubs = await User.find({
+      'vitatAI.isSubscribed': true,
+    }).select('name fullName clinicName role phone city vitatAI').lean();
+
+    // Vita AI trial users
+    const aiTrials = await User.find({
+      'vitatAI.hasAcceptedTrial': true,
+      'vitatAI.isSubscribed': { $ne: true },
+    }).select('name fullName clinicName role phone city vitatAI').lean();
+
+    res.json({ platformSubs, aiSubs, aiTrials });
+  } catch (err) {
+    res.status(500).json({ message: 'Server error', error: err.message });
+  }
+});
+
 // Insurance companies and oversight accounts for admin
 router.get('/insurance-accounts', async (req, res) => {
   try {

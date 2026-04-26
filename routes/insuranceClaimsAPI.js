@@ -235,10 +235,20 @@ router.get('/:pharmacyId', async (req, res) => {
 router.post('/:pharmacyId', claimUpload.single('attachment'), async (req, res) => {
   try {
     const { pharmacyId } = req.params;
-    const { insuranceCompany, startDate, endDate, claimsCount, claimsValue, notes } = req.body;
-    
-    if (!insuranceCompany || !startDate || !endDate || !claimsCount || !claimsValue) {
+    const { insuranceCompany, claimMonth, claimYear, startDate, endDate, claimsCount, claimsValue, notes } = req.body;
+
+    if (!insuranceCompany || !claimsCount || !claimsValue) {
       return res.status(400).json({ success: false, message: 'All fields are required' });
+    }
+
+    // Build startDate/endDate from month/year if provided
+    let resolvedStart = startDate;
+    let resolvedEnd = endDate;
+    if (claimMonth && claimYear) {
+      const month = parseInt(claimMonth);
+      const year = parseInt(claimYear);
+      resolvedStart = new Date(year, month - 1, 1);
+      resolvedEnd = new Date(year, month, 0); // last day of month
     }
 
     // Get pharmacy name
@@ -248,8 +258,10 @@ router.post('/:pharmacyId', claimUpload.single('attachment'), async (req, res) =
       pharmacyId,
       pharmacyName: pharmacy?.fullName || '',
       insuranceCompany,
-      startDate,
-      endDate,
+      claimMonth: claimMonth || '',
+      claimYear: claimYear || '',
+      startDate: resolvedStart,
+      endDate: resolvedEnd,
       claimsCount,
       claimsValue,
       notes,
@@ -278,15 +290,15 @@ router.post('/:pharmacyId', claimUpload.single('attachment'), async (req, res) =
 router.post('/:pharmacyId/pay-drafts', async (req, res) => {
   try {
     const { pharmacyId } = req.params;
-    const { cardNumber, cardHolder, expiryDate, cvv, claimIds } = req.body;
+    const { cardNumber, cardHolder, expiryDate, cvv, claimIds, skipPayment } = req.body;
 
-    // Basic validation
-    if (!cardNumber || !cardHolder || !expiryDate || !cvv) {
-      return res.status(400).json({ success: false, message: 'All card details are required' });
-    }
+    // === التحقق من بيانات البطاقة معطّل مؤقتاً ===
+    // if (!skipPayment && (!cardNumber || !cardHolder || !expiryDate || !cvv)) {
+    //   return res.status(400).json({ success: false, message: 'All card details are required' });
+    // }
 
     // Find draft claims for this pharmacy
-    let filter = { pharmacyId, status: 'draft', servicePaymentStatus: 'unpaid' };
+    let filter = { pharmacyId, status: 'draft' };
     if (claimIds && claimIds.length > 0) {
       filter._id = { $in: claimIds };
     }
@@ -296,18 +308,12 @@ router.post('/:pharmacyId/pay-drafts', async (req, res) => {
       return res.status(400).json({ success: false, message: 'No draft claims found' });
     }
 
-    // 10 ILS per claim, 5 ILS for claims with startDate before April 2026
     const aprilCutoff = new Date('2026-04-01');
     let totalFee = 0;
-    drafts.forEach(d => {
-      totalFee += (d.startDate < aprilCutoff) ? 5 : 10;
-    });
+    drafts.forEach(d => { totalFee += (d.startDate < aprilCutoff) ? 5 : 10; });
 
-    // Simulate payment processing (will be replaced with Bank of Palestine API)
-    const paymentRef = `BP-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
-    
-    // Simulate: mask card number for receipt
-    const maskedCard = `****${cardNumber.replace(/\s/g, '').slice(-4)}`;
+    const paymentRef = `DIRECT-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
+    const maskedCard = skipPayment ? 'N/A' : `****${(cardNumber || '').replace(/\s/g, '').slice(-4)}`;
 
     // Update all drafts to pending
     await InsuranceClaim.updateMany(
@@ -315,15 +321,15 @@ router.post('/:pharmacyId/pay-drafts', async (req, res) => {
       {
         $set: {
           status: 'pending',
-          servicePaymentStatus: 'paid',
+          servicePaymentStatus: skipPayment ? 'unpaid' : 'paid',
           servicePaymentRef: paymentRef,
           servicePaymentDate: new Date(),
         },
         $push: {
           statusHistory: {
             status: 'pending',
-            changedBy: 'Payment System',
-            reason: `تم الدفع ${totalFee} شيكل - ${maskedCard}`,
+            changedBy: 'Pharmacy',
+            reason: skipPayment ? 'تم الإرسال مباشرة' : `تم الدفع ${totalFee} شيكل - ${maskedCard}`,
             timestamp: new Date()
           }
         }
@@ -332,17 +338,12 @@ router.post('/:pharmacyId/pay-drafts', async (req, res) => {
 
     res.json({
       success: true,
-      message: 'Payment successful',
-      data: {
-        claimsCount: drafts.length,
-        totalFee,
-        paymentRef,
-        maskedCard,
-      }
+      message: 'Claims sent successfully',
+      data: { claimsCount: drafts.length, totalFee, paymentRef, maskedCard }
     });
   } catch (error) {
-    console.error('Error processing payment:', error);
-    res.status(500).json({ success: false, message: 'Payment processing failed' });
+    console.error('Error processing claims:', error);
+    res.status(500).json({ success: false, message: 'Failed to send claims' });
   }
 });
 
