@@ -221,6 +221,29 @@ exports.approveUser = async (req, res) => {
       }
     }
 
+    // Send WhatsApp notification to user about approval/rejection
+    try {
+      const { sendWhatsAppMessage, isWhatsAppReady } = require('../services/whatsappService');
+      const ready = await isWhatsAppReady();
+      const userPhone = user.mobileNumber || user.phone;
+      console.log(`[ApproveUser] WhatsApp ready: ${ready}, userPhone: ${userPhone}, status: ${status}`);
+      if (ready && userPhone) {
+        let msg = '';
+        if (status === 'active') {
+          msg = `مبروك ${user.fullName} 🎉\nتم تفعيل حسابك في نظام فيتا الصحي بنجاح!\nيمكنك الآن تسجيل الدخول والاستمتاع بجميع خدمات النظام.\nللدعم والمساعدة تواصل معنا: 0599909926\n---\nCongratulations ${user.fullName} 🎉\nYour account on Vita Health System has been approved!\nYou can now log in and enjoy all system services.\nFor support contact us: 0599909926`;
+        } else {
+          msg = `عزيزي ${user.fullName},\nنأسف لإعلامك أن طلب تسجيلك في نظام فيتا الصحي قد تم رفضه.\n${rejectionReason ? `السبب: ${rejectionReason}\n` : ''}للاستفسار تواصل معنا: 0599909926\n---\nDear ${user.fullName},\nWe regret to inform you that your registration request on Vita Health System has been declined.\n${rejectionReason ? `Reason: ${rejectionReason}\n` : ''}For inquiries contact us: 0599909926`;
+        }
+        const rawPhone = userPhone.replace(/\D/g, '');
+        const phone970 = rawPhone.startsWith('970') ? rawPhone : rawPhone.startsWith('0') ? '970' + rawPhone.slice(1) : '970' + rawPhone;
+        const phone972 = phone970.replace(/^970/, '972');
+        await sendWhatsAppMessage(phone970, msg).catch(() => {});
+        await sendWhatsAppMessage(phone972, msg).catch(() => {});
+      }
+    } catch (waErr) {
+      console.error('WhatsApp approval notification error:', waErr.message);
+    }
+
     res.json({
       message: `User ${status === 'active' ? 'approved' : 'rejected'} successfully`,
       user: {

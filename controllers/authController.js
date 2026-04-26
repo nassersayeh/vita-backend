@@ -3,7 +3,7 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const Otp = require('../models/Otp');
 const nodemailer = require('nodemailer');
-const { send2FACode, isWhatsAppReady } = require('../services/whatsappService');
+const { send2FACode, sendWhatsAppMessage, isWhatsAppReady } = require('../services/whatsappService');
 require('dotenv').config();
 
 // Create email transporter
@@ -105,6 +105,35 @@ exports.signup = async (req, res) => {
       newUser.phoneVerificationCode = undefined;
       newUser.phoneVerificationCodeExpiration = undefined;
       await newUser.save({ validateBeforeSave: false });
+
+      // Send welcome WhatsApp message
+      try {
+        if (await isWhatsAppReady()) {
+          const welcomeMsg =
+            `مرحباً ${fullName} 👋\n` +
+            `أهلاً وسهلاً بك في نظام *فيتا الصحي* 🏥\n\n` +
+            `تم استلام طلب تسجيلك بنجاح وهو قيد المراجعة من قِبل الإدارة.\n` +
+            `سيتم إشعارك فور تفعيل حسابك.\n\n` +
+            `لأي استفسار أو دعم فني، يمكنك التواصل معنا مباشرةً على هذا الرقم وسيتولى فريقنا مساعدتك. 💬\n\n` +
+            `---\n` +
+            `Hello ${fullName} 👋\n` +
+            `Welcome to *Vita Health System* 🏥\n\n` +
+            `Your registration request has been received and is under admin review.\n` +
+            `You will be notified once your account is activated.\n\n` +
+            `For any inquiries or technical support, feel free to message us on this number and our team will assist you. 💬`;
+
+          let cleanNumber = mobile.replace(/\D/g, '').replace(/^0+/, '');
+          if (!cleanNumber.startsWith('970') && !cleanNumber.startsWith('972')) {
+            cleanNumber = '970' + cleanNumber;
+          }
+          const phone970 = cleanNumber.replace(/^972/, '970');
+          const phone972 = cleanNumber.replace(/^970/, '972');
+          try { await sendWhatsAppMessage(phone970, welcomeMsg); } catch {}
+          try { await sendWhatsAppMessage(phone972, welcomeMsg); } catch {}
+        }
+      } catch (waErr) {
+        console.error('Welcome WhatsApp message failed:', waErr.message);
+      }
       
       // Auto-generate token so pharmacy can login immediately
       const token = jwt.sign(
