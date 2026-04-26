@@ -230,7 +230,7 @@ exports.approveUser = async (req, res) => {
       if (ready && userPhone) {
         let msg = '';
         if (status === 'active') {
-          msg = `مبروك ${user.fullName} 🎉\nتم تفعيل حسابك في نظام فيتا الصحي بنجاح!\nيمكنك الآن تسجيل الدخول والاستمتاع بجميع خدمات النظام.\nللدعم والمساعدة تواصل معنا: 0599909926\n---\nCongratulations ${user.fullName} 🎉\nYour account on Vita Health System has been approved!\nYou can now log in and enjoy all system services.\nFor support contact us: 0599909926`;
+          msg = `مبروك ${user.fullName} 🎉\nتم تفعيل حسابك في نظام فيتا الصحي بنجاح!\nيمكنك الآن تسجيل الدخول والاستمتاع بجميع خدمات النظام.\nللدعم والمساعدة تواصل معنا: 0568899090\n---\nCongratulations ${user.fullName} 🎉\nYour account on Vita Health System has been approved!\nYou can now log in and enjoy all system services.\nFor support contact us: 0568899090`;
         } else {
           msg = `عزيزي ${user.fullName},\nنأسف لإعلامك أن طلب تسجيلك في نظام فيتا الصحي قد تم رفضه.\n${rejectionReason ? `السبب: ${rejectionReason}\n` : ''}للاستفسار تواصل معنا: 0599909926\n---\nDear ${user.fullName},\nWe regret to inform you that your registration request on Vita Health System has been declined.\n${rejectionReason ? `Reason: ${rejectionReason}\n` : ''}For inquiries contact us: 0599909926`;
         }
