@@ -25,7 +25,8 @@ const insuranceCompanies = [
   { name: 'NextCare', nameAr: 'نيكست كير - NextCare', phone: '0599100012', email: 'nextcare@vita.ps', username: 'nextcare' },
   { name: 'MedCare', nameAr: 'شركة ميد كير - MedCare', phone: '0599100013', email: 'medcare@vita.ps', username: 'medcare' },
   { name: 'Mithaq', nameAr: 'شركة ميثاق للتأمين - Mithaq', phone: '0599100014', email: 'mithaq@vita.ps', username: 'mithaq' },
-  { name: 'AIC', nameAr: 'شركة التأمين العربية - AIC', phone: '0599100015', email: 'aic@vita.ps', username: 'aic' },
+   { name: 'WeCare - Al Baraka', nameAr: 'وي كير - البركة', phone: '0599100016', email: 'wecare@vita.ps', username: 'wecare' },
+   { name: 'AIC', nameAr: 'شركة التأمين العربية - AIC', phone: '0599100015', email: 'aic@vita.ps', username: 'aic' },
 ];
 
 async function seed() {
