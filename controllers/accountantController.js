@@ -224,15 +224,28 @@ exports.registerPatient = async (req, res) => {
       return res.status(403).json({ message: 'الطبيب غير موجود في هذه العيادة' });
     }
 
-    // Check if patient exists by mobile
+    // Check if patient exists by mobile or ID number
     let patient = await User.findOne({ mobileNumber });
-    
-    if (!patient) {
-      // Check by ID number
-      patient = await User.findOne({ idNumber });
+    let patientByIdNumber = await User.findOne({ idNumber });
+
+    // Check for duplicates and return appropriate error message
+    if (patient && patientByIdNumber && patient._id.toString() !== patientByIdNumber._id.toString()) {
+      // Mobile number and ID number belong to different patients
+      return res.status(400).json({ 
+        success: false,
+        message: `رقم الجوال ${mobileNumber} مرتبط برقم هوية مختلف! الرجاء التحقق من البيانات.`
+      });
     }
 
     if (patient) {
+      // Patient exists by mobile number
+      if (patient.idNumber && patient.idNumber !== idNumber) {
+        // Mobile number exists but with different ID number
+        return res.status(400).json({ 
+          success: false,
+          message: `رقم الجوال ${mobileNumber} مسجل بالفعل برقم هوية ${patient.idNumber}! الرجاء التحقق من البيانات.`
+        });
+      }
       // Patient exists — update medical history fields if provided
       const medicalFields = {
         maritalStatus, emergencyContactName, emergencyContactRelation, emergencyPhone,
@@ -285,6 +298,14 @@ exports.registerPatient = async (req, res) => {
           idNumber: patient.idNumber
         },
         isExisting: true
+      });
+    }
+
+    // Check if ID number already exists
+    if (patientByIdNumber) {
+      return res.status(400).json({ 
+        success: false,
+        message: `رقم الهوية ${idNumber} مسجل بالفعل برقم جوال ${patientByIdNumber.mobileNumber}! الرجاء التحقق من البيانات.`
       });
     }
 
