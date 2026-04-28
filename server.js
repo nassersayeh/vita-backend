@@ -117,7 +117,7 @@ const providerRoutes = require('./routes/provider');
 const medicationRoutes = require('./routes/medication');
 const cartRoutes = require('./routes/cart');
 
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://vitaUser:Pop%401990@127.0.0.1:27017/vita?authSource=admin';
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://vitaUser:Pop%401990@127.0.0.1:27018/vita?authSource=admin';
 
 // Connect to MongoDB immediately on startup
 mongoose.connect(MONGODB_URI).then(() => {

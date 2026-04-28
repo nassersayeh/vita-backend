@@ -105,6 +105,73 @@ router.get('/union/pharmacies', async (req, res) => {
   }
 });
 
+// Get insurance companies for a specific pharmacy (for claims)
+router.get('/union/pharmacy/:pharmacyId/insurance-companies', async (req, res) => {
+  try {
+    const { pharmacyId } = req.params;
+    
+    // Get all claims for this pharmacy (excluding drafts)
+    const allClaims = await InsuranceClaim.find({ 
+      pharmacyId, 
+      status: { $ne: 'draft' } 
+    }).select('-attachmentData');
+    
+    // Group by insurance company
+    const companyMap = {};
+    allClaims.forEach(claim => {
+      if (!companyMap[claim.insuranceCompany]) {
+        companyMap[claim.insuranceCompany] = {
+          company: claim.insuranceCompany,
+          total: 0,
+          pending: 0,
+          underReview: 0,
+          rejected: 0,
+          paid: 0
+        };
+      }
+      companyMap[claim.insuranceCompany].total++;
+      if (claim.status === 'pending' || claim.status === 'under_review') {
+        if (claim.status === 'pending') {
+          companyMap[claim.insuranceCompany].pending++;
+        } else {
+          companyMap[claim.insuranceCompany].underReview++;
+        }
+      } else if (claim.status === 'rejected') {
+        companyMap[claim.insuranceCompany].rejected++;
+      } else if (claim.status === 'paid') {
+        companyMap[claim.insuranceCompany].paid++;
+      }
+    });
+    
+    const companies = Object.values(companyMap);
+    res.json({ success: true, companies });
+  } catch (error) {
+    console.error('Error fetching pharmacy insurance companies:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// Get claims for a specific pharmacy and insurance company
+router.get('/union/pharmacy/:pharmacyId/company/:companyName', async (req, res) => {
+  try {
+    const { pharmacyId, companyName } = req.params;
+    
+    const claims = await InsuranceClaim.find({
+      pharmacyId,
+      insuranceCompany: decodeURIComponent(companyName),
+      status: { $ne: 'draft' }
+    })
+      .select('-attachmentData -claimsValue -paidAmount')
+      .populate('pharmacyId', 'fullName')
+      .sort({ createdAt: -1 });
+    
+    res.json({ success: true, claims });
+  } catch (error) {
+    console.error('Error fetching pharmacy company claims:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
 // ==================== INSURANCE COMPANY ROUTES (must be before /:pharmacyId) ====================
 
 // Get all pharmacy claims for a specific insurance company (by name match)

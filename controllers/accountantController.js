@@ -332,13 +332,14 @@ exports.registerPatient = async (req, res) => {
       disabilities: disabilities || '',
     });
 
-    await newPatient.save();
+    const savedPatient = await newPatient.save();
+    console.log('✓ تم حفظ المريض في قاعدة البيانات:', savedPatient._id, savedPatient.fullName, savedPatient.mobileNumber);
 
     // Add patient to doctor(s)
     if (doctorId) {
       const doctor = await User.findById(doctorId);
-      if (doctor && !doctor.patients.includes(newPatient._id)) {
-        doctor.patients.push(newPatient._id);
+      if (doctor && !doctor.patients.includes(savedPatient._id)) {
+        doctor.patients.push(savedPatient._id);
         await doctor.save({ validateBeforeSave: false });
       }
     } else {
@@ -346,8 +347,8 @@ exports.registerPatient = async (req, res) => {
       const activeDoctorIds = clinic.doctors.filter(d => d.status === 'active').map(d => d.doctorId);
       for (const docId of activeDoctorIds) {
         const doc = await User.findById(docId);
-        if (doc && !doc.patients.includes(newPatient._id)) {
-          doc.patients.push(newPatient._id);
+        if (doc && !doc.patients.includes(savedPatient._id)) {
+          doc.patients.push(savedPatient._id);
           await doc.save({ validateBeforeSave: false });
         }
       }
@@ -357,16 +358,20 @@ exports.registerPatient = async (req, res) => {
       success: true,
       message: 'تم تسجيل المريض بنجاح',
       patient: {
-        _id: newPatient._id,
-        fullName: newPatient.fullName,
-        mobileNumber: newPatient.mobileNumber,
-        idNumber: newPatient.idNumber
+        _id: savedPatient._id,
+        fullName: savedPatient.fullName,
+        mobileNumber: savedPatient.mobileNumber,
+        idNumber: savedPatient.idNumber
       },
       isExisting: false
     });
   } catch (error) {
-    console.error('Error registering patient:', error);
-    res.status(500).json({ message: 'فشل في تسجيل المريض', error: error.message });
+    console.error('✗ خطأ في تسجيل المريض:', error);
+    res.status(500).json({ 
+      message: 'فشل في تسجيل المريض', 
+      error: error.message,
+      details: error.errmsg || error.toString()
+    });
   }
 };
 
