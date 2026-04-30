@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const InsuranceClaimSchema = new mongoose.Schema({
   pharmacyId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   pharmacyName: { type: String, default: '' },
+  insuranceCompanyId: { type: mongoose.Schema.Types.ObjectId, ref: 'InsuranceCompany' },
   insuranceCompany: { type: String, required: true },
   claimMonth: { type: String, default: '' },
   claimYear: { type: String, default: '' },

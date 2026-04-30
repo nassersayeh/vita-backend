@@ -4,6 +4,7 @@ const multer = require('multer');
 const path = require('path');
 const InsuranceClaim = require('../models/InsuranceClaim');
 const User = require('../models/User');
+const InsuranceCompany = require('../models/InsuranceCompany');
 
 // Configure multer with memory storage (Vercel compatible)
 const claimUpload = multer({
@@ -26,7 +27,7 @@ router.get('/union/all-claims', async (req, res) => {
     
     const filter = { status: { $ne: 'draft' } };
     if (status) filter.status = status;
-    if (insuranceCompany) filter.insuranceCompany = insuranceCompany;
+    if (insuranceCompany) filter.insuranceCompanyId = insuranceCompany;
     if (pharmacyName) filter.pharmacyName = { $regex: pharmacyName, $options: 'i' };
     
     const skip = (parseInt(page) - 1) * parseInt(limit);
@@ -35,14 +36,18 @@ router.get('/union/all-claims', async (req, res) => {
       InsuranceClaim.find(filter)
         .select('-attachmentData')
         .populate('pharmacyId', 'fullName mobileNumber city address idNumber')
+        .populate('insuranceCompanyId', 'nameAr name')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(parseInt(limit)),
       InsuranceClaim.countDocuments(filter)
     ]);
     
-    // Aggregate stats (exclude drafts)
-    const allClaims = await InsuranceClaim.find({ status: { $ne: 'draft' } }).select('-attachmentData');
+    // Aggregate stats (exclude drafts) - populate insuranceCompanyId to get correct company name
+    const allClaims = await InsuranceClaim.find({ status: { $ne: 'draft' } })
+      .select('-attachmentData')
+      .populate('insuranceCompanyId', 'nameAr name');
+    
     const stats = {
       totalClaims: allClaims.length,
       totalValue: allClaims.reduce((sum, c) => sum + (c.claimsValue || 0), 0),
@@ -52,23 +57,48 @@ router.get('/union/all-claims', async (req, res) => {
       paid: allClaims.filter(c => c.status === 'paid').length,
       paidValue: allClaims.filter(c => c.status === 'paid').reduce((sum, c) => sum + (c.paidAmount || c.claimsValue || 0), 0),
       uniquePharmacies: [...new Set(allClaims.map(c => c.pharmacyId?.toString()))].length,
-      uniqueCompanies: [...new Set(allClaims.map(c => c.insuranceCompany))].length,
+      uniqueCompanies: [...new Set(allClaims.map(c => c.insuranceCompanyId?._id?.toString() || c.insuranceCompany))].length,
     };
     
-    // Per-company breakdown
+    // Per-company breakdown - use insuranceCompanyId for correct grouping
     const companyBreakdown = {};
     allClaims.forEach(c => {
-      if (!companyBreakdown[c.insuranceCompany]) {
-        companyBreakdown[c.insuranceCompany] = { total: 0, value: 0, pending: 0, paid: 0, rejected: 0 };
+      // Use the full company name format: Arabic - English
+      const companyName = c.insuranceCompanyId?.nameAr && c.insuranceCompanyId?.name
+        ? `${c.insuranceCompanyId.nameAr} - ${c.insuranceCompanyId.name}`
+        : (c.insuranceCompanyId?.nameAr || c.insuranceCompanyId?.name || c.insuranceCompany);
+      const companyKey = c.insuranceCompanyId?._id?.toString() || companyName;
+      
+      if (!companyBreakdown[companyKey]) {
+        companyBreakdown[companyKey] = { 
+          name: companyName,
+          total: 0, 
+          value: 0, 
+          pending: 0, 
+          paid: 0, 
+          rejected: 0 
+        };
       }
-      companyBreakdown[c.insuranceCompany].total++;
-      companyBreakdown[c.insuranceCompany].value += c.claimsValue || 0;
-      if (c.status === 'pending' || c.status === 'under_review') companyBreakdown[c.insuranceCompany].pending++;
-      if (c.status === 'paid') companyBreakdown[c.insuranceCompany].paid++;
-      if (c.status === 'rejected') companyBreakdown[c.insuranceCompany].rejected++;
+      companyBreakdown[companyKey].total++;
+      companyBreakdown[companyKey].value += c.claimsValue || 0;
+      if (c.status === 'pending' || c.status === 'under_review') companyBreakdown[companyKey].pending++;
+      if (c.status === 'paid') companyBreakdown[companyKey].paid++;
+      if (c.status === 'rejected') companyBreakdown[companyKey].rejected++;
     });
     
-    res.json({ success: true, claims, total, stats, companyBreakdown, page: parseInt(page), totalPages: Math.ceil(total / parseInt(limit)) });
+    // Transform breakdown to use company names as keys for frontend compatibility
+    const transformedBreakdown = {};
+    Object.entries(companyBreakdown).forEach(([key, data]) => {
+      transformedBreakdown[data.name] = {
+        total: data.total,
+        value: data.value,
+        pending: data.pending,
+        paid: data.paid,
+        rejected: data.rejected
+      };
+    });
+    
+    res.json({ success: true, claims, total, stats, companyBreakdown: transformedBreakdown, page: parseInt(page), totalPages: Math.ceil(total / parseInt(limit)) });
   } catch (error) {
     console.error('Error fetching union claims:', error);
     res.status(500).json({ success: false, message: 'Server error' });
@@ -110,18 +140,27 @@ router.get('/union/pharmacy/:pharmacyId/insurance-companies', async (req, res) =
   try {
     const { pharmacyId } = req.params;
     
-    // Get all claims for this pharmacy (excluding drafts)
+    // Get all claims for this pharmacy (excluding drafts) with populated insurance company data
     const allClaims = await InsuranceClaim.find({ 
       pharmacyId, 
       status: { $ne: 'draft' } 
-    }).select('-attachmentData');
+    })
+      .select('-attachmentData')
+      .populate('insuranceCompanyId', 'nameAr name _id');
     
-    // Group by insurance company
+    // Group by insurance company ID
     const companyMap = {};
     allClaims.forEach(claim => {
-      if (!companyMap[claim.insuranceCompany]) {
-        companyMap[claim.insuranceCompany] = {
-          company: claim.insuranceCompany,
+      const companyId = claim.insuranceCompanyId?._id?.toString();
+      // Use the full company name format: Arabic - English
+      const companyName = claim.insuranceCompanyId?.nameAr && claim.insuranceCompanyId?.name
+        ? `${claim.insuranceCompanyId.nameAr} - ${claim.insuranceCompanyId.name}`
+        : (claim.insuranceCompanyId?.nameAr || claim.insuranceCompanyId?.name || claim.insuranceCompany);
+      
+      if (!companyMap[companyId]) {
+        companyMap[companyId] = {
+          company: companyName,
+          id: companyId,
           total: 0,
           pending: 0,
           underReview: 0,
@@ -129,17 +168,17 @@ router.get('/union/pharmacy/:pharmacyId/insurance-companies', async (req, res) =
           paid: 0
         };
       }
-      companyMap[claim.insuranceCompany].total++;
+      companyMap[companyId].total++;
       if (claim.status === 'pending' || claim.status === 'under_review') {
         if (claim.status === 'pending') {
-          companyMap[claim.insuranceCompany].pending++;
+          companyMap[companyId].pending++;
         } else {
-          companyMap[claim.insuranceCompany].underReview++;
+          companyMap[companyId].underReview++;
         }
       } else if (claim.status === 'rejected') {
-        companyMap[claim.insuranceCompany].rejected++;
+        companyMap[companyId].rejected++;
       } else if (claim.status === 'paid') {
-        companyMap[claim.insuranceCompany].paid++;
+        companyMap[companyId].paid++;
       }
     });
     
@@ -152,17 +191,18 @@ router.get('/union/pharmacy/:pharmacyId/insurance-companies', async (req, res) =
 });
 
 // Get claims for a specific pharmacy and insurance company
-router.get('/union/pharmacy/:pharmacyId/company/:companyName', async (req, res) => {
+router.get('/union/pharmacy/:pharmacyId/company/:companyId', async (req, res) => {
   try {
-    const { pharmacyId, companyName } = req.params;
+    const { pharmacyId, companyId } = req.params;
     
     const claims = await InsuranceClaim.find({
       pharmacyId,
-      insuranceCompany: decodeURIComponent(companyName),
+      insuranceCompanyId: companyId,
       status: { $ne: 'draft' }
     })
       .select('-attachmentData -claimsValue -paidAmount')
       .populate('pharmacyId', 'fullName')
+      .populate('insuranceCompanyId', 'nameAr name')
       .sort({ createdAt: -1 });
     
     res.json({ success: true, claims });
@@ -308,6 +348,29 @@ router.post('/:pharmacyId', claimUpload.single('attachment'), async (req, res) =
       return res.status(400).json({ success: false, message: 'All fields are required' });
     }
 
+    // Validate insurance company exists in database
+    let insuranceCompanyId = insuranceCompany;
+    let insuranceCompanyData = null;
+    
+    // Try to find by ID first
+    const mongoose = require('mongoose');
+    if (mongoose.Types.ObjectId.isValid(insuranceCompany)) {
+      insuranceCompanyData = await InsuranceCompany.findById(insuranceCompany).select('_id name nameAr');
+      if (!insuranceCompanyData) {
+        return res.status(400).json({ 
+          success: false, 
+          message: 'Insurance company not found in database' 
+        });
+      }
+      insuranceCompanyId = insuranceCompanyData._id;
+    } else {
+      // If not a valid ObjectId, reject it
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Invalid insurance company ID' 
+      });
+    }
+
     // Build startDate/endDate from month/year if provided
     let resolvedStart = startDate;
     let resolvedEnd = endDate;
@@ -321,10 +384,16 @@ router.post('/:pharmacyId', claimUpload.single('attachment'), async (req, res) =
     // Get pharmacy name
     const pharmacy = await User.findById(pharmacyId).select('fullName');
     
+    // Build the full company name: Arabic - English (same format as frontend)
+    const fullCompanyName = insuranceCompanyData.nameAr && insuranceCompanyData.name 
+      ? `${insuranceCompanyData.nameAr} - ${insuranceCompanyData.name}`
+      : (insuranceCompanyData.nameAr || insuranceCompanyData.name);
+    
     const claimData = {
       pharmacyId,
       pharmacyName: pharmacy?.fullName || '',
-      insuranceCompany,
+      insuranceCompanyId,
+      insuranceCompany: fullCompanyName,
       claimMonth: claimMonth || '',
       claimYear: claimYear || '',
       startDate: resolvedStart,

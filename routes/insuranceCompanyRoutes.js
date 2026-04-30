@@ -116,7 +116,7 @@ router.get('/', async (req, res) => {
   try {
     const { status, search, page = 1, limit = 50 } = req.query;
     
-    let query = {};
+    let query = { status: 'active' }; // Always show active companies by default
     
     if (status) {
       query.status = status;

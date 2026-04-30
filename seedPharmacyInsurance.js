@@ -11,22 +11,22 @@ const OversightAccount = require('./models/OversightAccount');
 const MONGO_URI = process.env.MONGODB_URI || 'mongodb+srv://vita:pop1990@cluster0.nj5pcz0.mongodb.net';
 
 const insuranceCompanies = [
-  { name: 'NIC', nameAr: 'شركة التأمين الوطنية - NIC', phone: '0599100001', email: 'nic@vita.ps', username: 'nic' },
-  { name: 'Trust', nameAr: 'شركة ترست العالمية للتأمين - Trust', phone: '0599100002', email: 'trust@vita.ps', username: 'trust' },
-  { name: 'AHLEIA', nameAr: 'المجموعة الأهلية للتأمين - AHLEIA', phone: '0599100003', email: 'ahleia@vita.ps', username: 'ahleia' },
-  { name: 'Al Mashreq', nameAr: 'شركة المشرق للتأمين - Al Mashreq', phone: '0599100004', email: 'almashreq@vita.ps', username: 'almashreq' },
-  { name: 'Palestine Insurance', nameAr: 'شركة فلسطين للتأمين - Palestine Insurance', phone: '0599100005', email: 'palestineins@vita.ps', username: 'palestineins' },
-  { name: 'Takaful', nameAr: 'التكافل الفلسطيني للتأمين - Takaful', phone: '0599100006', email: 'takaful@vita.ps', username: 'takaful' },
-  { name: 'Al Etilaf', nameAr: 'شركة الائتلاف للتأمين - Al Etilaf', phone: '0599100007', email: 'aletilaf@vita.ps', username: 'aletilaf' },
-  { name: 'Global United', nameAr: 'شركة جلوبال المتحدة للتأمين - Global United', phone: '0599100008', email: 'globalunited@vita.ps', username: 'globalunited' },
-  { name: 'NatHealth', nameAr: 'نات هيلث - NatHealth', phone: '0599100009', email: 'nathealth@vita.ps', username: 'nathealth' },
-  { name: 'GlobeMed Palestine', nameAr: 'جلوب ميد فلسطين - GlobeMed Palestine', phone: '0599100010', email: 'globemed@vita.ps', username: 'globemed' },
-  { name: 'MedNet', nameAr: 'ميد نت - MedNet', phone: '0599100011', email: 'mednet@vita.ps', username: 'mednet' },
-  { name: 'NextCare', nameAr: 'نيكست كير - NextCare', phone: '0599100012', email: 'nextcare@vita.ps', username: 'nextcare' },
-  { name: 'MedCare', nameAr: 'شركة ميد كير - MedCare', phone: '0599100013', email: 'medcare@vita.ps', username: 'medcare' },
-  { name: 'Mithaq', nameAr: 'شركة ميثاق للتأمين - Mithaq', phone: '0599100014', email: 'mithaq@vita.ps', username: 'mithaq' },
-   { name: 'WeCare - Al Baraka', nameAr: 'وي كير - البركة', phone: '0599100016', email: 'wecare@vita.ps', username: 'wecare' },
-   { name: 'AIC', nameAr: 'شركة التأمين العربية - AIC', phone: '0599100015', email: 'aic@vita.ps', username: 'aic' },
+  { name: 'NIC', nameAr: 'شركة التأمين الوطنية', phone: '0599100001', email: 'nic@vita.ps', username: 'nic' },
+  { name: 'Trust', nameAr: 'شركة ترست العالمية للتأمين', phone: '0599100002', email: 'trust@vita.ps', username: 'trust' },
+  { name: 'AHLEIA', nameAr: 'المجموعة الأهلية للتأمين', phone: '0599100003', email: 'ahleia@vita.ps', username: 'ahleia' },
+  { name: 'Al Mashreq', nameAr: 'شركة المشرق للتأمين', phone: '0599100004', email: 'almashreq@vita.ps', username: 'almashreq' },
+  { name: 'Palestine Insurance', nameAr: 'شركة فلسطين للتأمين', phone: '0599100005', email: 'palestineins@vita.ps', username: 'palestineins' },
+  { name: 'Takaful', nameAr: 'التكافل الفلسطيني للتأمين', phone: '0599100006', email: 'takaful@vita.ps', username: 'takaful' },
+  { name: 'Al Etilaf', nameAr: 'شركة الائتلاف للتأمين', phone: '0599100007', email: 'aletilaf@vita.ps', username: 'aletilaf' },
+  { name: 'Global United', nameAr: 'شركة جلوبال المتحدة للتأمين', phone: '0599100008', email: 'globalunited@vita.ps', username: 'globalunited' },
+  { name: 'NatHealth', nameAr: 'نات هيلث', phone: '0599100009', email: 'nathealth@vita.ps', username: 'nathealth' },
+  { name: 'GlobeMed Palestine', nameAr: 'جلوب ميد فلسطين', phone: '0599100010', email: 'globemed@vita.ps', username: 'globemed' },
+  { name: 'MedNet', nameAr: 'ميد نت', phone: '0599100011', email: 'mednet@vita.ps', username: 'mednet' },
+  { name: 'NextCare', nameAr: 'نيكست كير', phone: '0599100012', email: 'nextcare@vita.ps', username: 'nextcare' },
+  { name: 'MedCare', nameAr: 'شركة ميد كير', phone: '0599100013', email: 'medcare@vita.ps', username: 'medcare' },
+  { name: 'Mithaq', nameAr: 'شركة ميثاق للتأمين', phone: '0599100014', email: 'mithaq@vita.ps', username: 'mithaq' },
+  { name: 'AIC', nameAr: 'شركة التأمين العربية', phone: '0599100015', email: 'aic@vita.ps', username: 'aic' },
+  { name: 'WeCare - Al Baraka', nameAr: 'وي كير - البركة', phone: '0599100016', email: 'wecare@vita.ps', username: 'wecare' },
 ];
 
 async function seed() {

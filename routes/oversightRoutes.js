@@ -155,16 +155,73 @@ router.get('/stats', async (req, res) => {
       }
     ]);
     
-    // Insurance companies info
-    const insuranceCompanies = await InsuranceCompany.find({ status: 'active' })
-      .select('name nameAr totalClaims totalPaid pendingAmount');
+    // Get all insurance companies
+    const allInsuranceCompanies = await InsuranceCompany.find({ status: 'active' })
+      .select('name nameAr _id');
+    
+    // Calculate stats for each insurance company from actual claims
+    const insuranceCompaniesStats = await Promise.all(
+      allInsuranceCompanies.map(async (company) => {
+        // Get doctor claims for this company
+        const doctorClaimsStats = await DoctorClaim.aggregate([
+          { $match: { insuranceCompanyId: company._id } },
+          {
+            $group: {
+              _id: null,
+              count: { $sum: 1 },
+              totalAmount: { $sum: '$claimAmount' },
+              paidAmount: {
+                $sum: {
+                  $cond: [{ $eq: ['$status', 'paid'] }, '$claimAmount', 0]
+                }
+              }
+            }
+          }
+        ]);
+        
+        // Get pharmacy claims for this company
+        const pharmacyClaimsStats = await Claim.aggregate([
+          { $match: { insuranceCompanyId: company._id } },
+          {
+            $group: {
+              _id: null,
+              count: { $sum: 1 },
+              totalAmount: { $sum: '$claimAmount' },
+              paidAmount: {
+                $sum: {
+                  $cond: [{ $eq: ['$status', 'paid'] }, '$claimAmount', 0]
+                }
+              }
+            }
+          }
+        ]);
+        
+        const doctorStats = doctorClaimsStats[0] || { count: 0, totalAmount: 0, paidAmount: 0 };
+        const pharmacyStats = pharmacyClaimsStats[0] || { count: 0, totalAmount: 0, paidAmount: 0 };
+        
+        const totalClaims = doctorStats.count + pharmacyStats.count;
+        const totalAmount = doctorStats.totalAmount + pharmacyStats.totalAmount;
+        const totalPaid = doctorStats.paidAmount + pharmacyStats.paidAmount;
+        const pendingAmount = totalAmount - totalPaid;
+        
+        return {
+          _id: company._id,
+          name: company.name,
+          nameAr: company.nameAr,
+          totalClaims,
+          totalAmount,
+          totalPaid,
+          pendingAmount
+        };
+      })
+    );
     
     // Build summary
     const summary = {
       doctorClaims: { total: 0, totalAmount: 0, approvedAmount: 0, byStatus: {} },
       pharmacyClaims: { total: 0, totalAmount: 0, approvedAmount: 0, byStatus: {} },
       overall: { totalClaims: 0, totalAmount: 0, approvedAmount: 0, pendingAmount: 0 },
-      insuranceCompanies
+      insuranceCompanies: insuranceCompaniesStats
     };
     
     doctorStats.forEach(s => {

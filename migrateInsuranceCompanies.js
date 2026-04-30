@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const InsuranceClaim = require('./models/InsuranceClaim');
+const InsuranceCompany = require('./models/InsuranceCompany');
 
 // قائمة الشركات المراد حذفها ونقل مطالباتها
 const companiesToMigrate = {
@@ -17,7 +18,7 @@ const companiesToMigrate = {
 async function migrateInsuranceCompanies() {
   try {
     // الاتصال بقاعدة البيانات
-    await mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/vita', {
+    await mongoose.connect(process.env.MONGO_URI || 'mongodb://vitaUser:Pop%401990@127.0.0.1:27018/vita?authSource=admin', {
       useNewUrlParser: true,
       useUnifiedTopology: true
     });
@@ -57,6 +58,15 @@ async function migrateInsuranceCompanies() {
           const result = await InsuranceClaim.deleteMany({ insuranceCompany: company });
           console.log(`  ✓ تم حذف ${result.deletedCount} مطالبة`);
         }
+      }
+    }
+
+    // حذف شركات التامين من قاعدة البيانات
+    console.log('\n→ حذف شركات التامين من قاعدة البيانات');
+    for (const company of Object.keys(companiesToMigrate)) {
+      const result = await InsuranceCompany.deleteMany({ nameAr: company });
+      if (result.deletedCount > 0) {
+        console.log(`  ✓ تم حذف شركة "${company}" من قاعدة البيانات (${result.deletedCount} سجل)`);
       }
     }
 
