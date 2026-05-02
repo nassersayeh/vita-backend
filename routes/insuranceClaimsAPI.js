@@ -5,6 +5,7 @@ const path = require('path');
 const InsuranceClaim = require('../models/InsuranceClaim');
 const User = require('../models/User');
 const InsuranceCompany = require('../models/InsuranceCompany');
+const { sendCustomMessage } = require('../services/whatsappService');
 
 // Configure multer with memory storage (Vercel compatible)
 const claimUpload = multer({
@@ -260,7 +261,7 @@ router.put('/claim/:claimId/status', async (req, res) => {
     const { claimId } = req.params;
     const { status, rejectionReason, paymentMethod, paymentReference, paidAmount, reviewedBy } = req.body;
     
-    const claim = await InsuranceClaim.findById(claimId);
+    const claim = await InsuranceClaim.findById(claimId).populate('pharmacyId', 'fullName mobileNumber');
     if (!claim) return res.status(404).json({ success: false, message: 'Claim not found' });
     
     claim.status = status;
@@ -286,6 +287,52 @@ router.put('/claim/:claimId/status', async (req, res) => {
     });
     
     await claim.save();
+
+    // Send WhatsApp notification to pharmacy about status update
+    try {
+      const pharmacy = claim.pharmacyId;
+      if (pharmacy && pharmacy.mobileNumber) {
+        let statusMessage = '';
+        let emoji = '';
+
+        if (status === 'pending') {
+          statusMessage = 'تم استقبال المطالبة وجاري المراجعة';
+          emoji = '⏳';
+        } else if (status === 'under_review') {
+          statusMessage = 'المطالبة قيد المراجعة';
+          emoji = '👁️';
+        } else if (status === 'approved') {
+          statusMessage = 'تم الموافقة على المطالبة';
+          emoji = '✅';
+        } else if (status === 'partially_approved') {
+          statusMessage = 'تم الموافقة الجزئية على المطالبة';
+          emoji = '⚠️';
+        } else if (status === 'paid') {
+          statusMessage = `تم دفع المطالبة بمبلغ ${paidAmount || claim.claimsValue} ₪`;
+          emoji = '💰';
+        } else if (status === 'rejected') {
+          statusMessage = `تم رفض المطالبة\nالسبب: ${rejectionReason}`;
+          emoji = '❌';
+        }
+
+        const message = `${emoji} *تحديث حالة المطالبة المالية*\n\n` +
+          `الصيدلية: ${pharmacy.fullName}\n` +
+          `شركة التأمين: ${claim.insuranceCompany}\n` +
+          `القيمة: ${claim.claimsValue} ₪\n\n` +
+          `${statusMessage}\n\n` +
+          `📱 _فيتا سيستم_`;
+
+        try {
+          await sendCustomMessage(pharmacy.mobileNumber, message);
+          console.log(`✅ Status update WhatsApp notification sent to pharmacy`);
+        } catch (whatsappError) {
+          console.warn(`⚠️ Failed to send status update notification:`, whatsappError.message);
+        }
+      }
+    } catch (notificationError) {
+      console.warn(`⚠️ Error in status update notification:`, notificationError.message);
+    }
+
     res.json({ success: true, data: claim });
   } catch (error) {
     console.error('Error updating claim status:', error);
@@ -382,7 +429,7 @@ router.post('/:pharmacyId', claimUpload.single('attachment'), async (req, res) =
     }
 
     // Get pharmacy name
-    const pharmacy = await User.findById(pharmacyId).select('fullName');
+    const pharmacy = await User.findById(pharmacyId).select('fullName mobileNumber');
     
     // Build the full company name: Arabic - English (same format as frontend)
     const fullCompanyName = insuranceCompanyData.nameAr && insuranceCompanyData.name 
@@ -415,6 +462,33 @@ router.post('/:pharmacyId', claimUpload.single('attachment'), async (req, res) =
     const claim = new InsuranceClaim(claimData);
     
     await claim.save();
+
+    // Send WhatsApp notification to pharmacy
+    try {
+      const pharmacyPhone = pharmacy?.mobileNumber;
+      if (pharmacyPhone) {
+        const message = `📋 *تنبيه: تم تقديم مطالبة مالية*\n\n` +
+          `الصيدلية: ${pharmacy?.fullName}\n` +
+          `شركة التأمين: ${fullCompanyName}\n` +
+          `القيمة: ${claimsValue} ₪\n` +
+          `عدد المطالبات: ${claimsCount}\n\n` +
+          `✅ تم استقبال المطالبة بنجاح\n\n` +
+          `سيتم إشعاركم بتحديث حالة المطالبة عند معالجتها من قبل شركة التأمين.\n\n` +
+          `📱 _فيتا سيستم_`;
+        
+        try {
+          await sendCustomMessage(pharmacyPhone, message);
+          console.log(`✅ WhatsApp notification sent to pharmacy ${pharmacyId}`);
+        } catch (whatsappError) {
+          console.warn(`⚠️ Failed to send WhatsApp notification to pharmacy ${pharmacyId}:`, whatsappError.message);
+          // Don't fail the request if WhatsApp fails
+        }
+      }
+    } catch (notificationError) {
+      console.warn(`⚠️ Error in WhatsApp notification:`, notificationError.message);
+      // Don't fail the request if notification fails
+    }
+
     res.status(201).json({ success: true, data: claim });
   } catch (error) {
     console.error('Error creating insurance claim:', error);
@@ -471,6 +545,40 @@ router.post('/:pharmacyId/pay-drafts', async (req, res) => {
         }
       }
     );
+
+    // Notify the pharmacy from the system/admin WhatsApp after drafts are sent.
+    try {
+      const pharmacy = await User.findById(pharmacyId).select('fullName mobileNumber');
+
+      if (pharmacy?.mobileNumber) {
+        const claimsCount = drafts.reduce((sum, claim) => sum + (Number(claim.claimsCount) || 0), 0);
+        const claimsValue = drafts.reduce((sum, claim) => sum + (Number(claim.claimsValue) || 0), 0);
+        const companyNames = [...new Set(drafts.map(claim => claim.insuranceCompany).filter(Boolean))];
+        const companyLine = companyNames.length === 1
+          ? companyNames[0]
+          : `${companyNames.length} شركات تأمين`;
+
+        const message = `✅ *تم إرسال المطالبة المالية بنجاح*\n\n` +
+          `عزيزي/عزيزتي ${pharmacy.fullName || 'صيدليتنا الكريمة'}،\n` +
+          `نحب نطمنكم أن نظام فيتا قام بإرسال المطالبة المالية لشركة التأمين.\n\n` +
+          `شركة التأمين: ${companyLine}\n` +
+          `عدد ملفات المطالبة: ${drafts.length}\n` +
+          `إجمالي عدد المطالبات: ${claimsCount}\n` +
+          `إجمالي القيمة: ${claimsValue.toFixed(2)} ₪\n\n` +
+          `سيتم متابعة الطلب وإشعاركم بأي تحديث على الحالة.\n\n` +
+          `مع تحياتنا،\n` +
+          `📱 _فريق فيتا_`;
+
+        try {
+          await sendCustomMessage(pharmacy.mobileNumber, message);
+          console.log(`✅ Claim sent WhatsApp notification sent to pharmacy ${pharmacyId}`);
+        } catch (whatsappError) {
+          console.warn(`⚠️ Failed to send claim sent WhatsApp notification to pharmacy ${pharmacyId}:`, whatsappError.message);
+        }
+      }
+    } catch (notificationError) {
+      console.warn(`⚠️ Error in claim sent WhatsApp notification:`, notificationError.message);
+    }
 
     res.json({
       success: true,

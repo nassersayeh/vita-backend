@@ -7,7 +7,7 @@ const MONGO_URI = process.env.MONGODB_URI || 'mongodb+srv://vita:pop1990@cluster
 
 async function check() {
   try {
-    await mongoose.connect(MONGO_URI);
+    await mongoose.connect('mongodb://vitaUser:Pop%401990@127.0.0.1:27018/vita?authSource=admin');
     const claims = await InsuranceClaim.find();
     
     console.log('Stored Company Names in Claims:\n');

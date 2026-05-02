@@ -5,7 +5,7 @@ const InsuranceCompany = require('./models/InsuranceCompany');
 
 async function check() {
   try {
-    await mongoose.connect(process.env.MONGODB_URI || 'mongodb+srv://vita:pop1990@cluster0.nj5pcz0.mongodb.net');
+    await mongoose.connect('mongodb://vitaUser:Pop%401990@127.0.0.1:27018/vita?authSource=admin');
     
     const companies = await InsuranceCompany.find();
     console.log('Current Insurance Companies:\n');
