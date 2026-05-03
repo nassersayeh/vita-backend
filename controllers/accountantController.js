@@ -17,43 +17,6 @@ const getClinicForAccountant = async (accountantId) => {
   return clinic;
 };
 
-const isAppointmentFinancialTransaction = (txn) => {
-  if (!txn) return false;
-  if (txn.appointmentId) return true;
-  const description = String(txn.description || '');
-  return (
-    description.includes('موعد') ||
-    description.includes('كشفية') ||
-    description.toLowerCase().includes('appointment')
-  );
-};
-
-const isSameCalendarDay = (a, b) => {
-  if (!a || !b) return false;
-  const first = new Date(a);
-  const second = new Date(b);
-  return (
-    first.getFullYear() === second.getFullYear() &&
-    first.getMonth() === second.getMonth() &&
-    first.getDate() === second.getDate()
-  );
-};
-
-const matchesPaidAppointmentTransaction = (txn, paidAppointments = []) => {
-  if (!txn?.patientId) return false;
-  const txnAmount = Number(txn.amount || 0);
-  return paidAppointments.some((apt) => {
-    const aptPatientId = apt.patient?._id || apt.patient;
-    const aptAmount = Number(apt.paymentAmount || 0);
-    const aptPaidDate = apt.paidAt || apt.updatedAt;
-    return (
-      aptPatientId?.toString() === txn.patientId?.toString() &&
-      Math.abs(aptAmount - txnAmount) < 0.01 &&
-      isSameCalendarDay(aptPaidDate, txn.date)
-    );
-  });
-};
-
 // Get dashboard stats
 exports.getDashboardStats = async (req, res) => {
   try {
@@ -121,16 +84,6 @@ exports.getDashboardStats = async (req, res) => {
       { $group: { _id: null, total: { $sum: '$paymentAmount' } } }
     ]).catch(() => []);
 
-    const paidAppointmentsForRevenue = await Appointment.find({
-      doctorId: { $in: doctorIds },
-      isPaid: true,
-      $or: [
-        { paidAt: { $gte: monthStart } },
-        { paidAt: { $exists: false }, updatedAt: { $gte: monthStart } },
-        { paidAt: null, updatedAt: { $gte: monthStart } }
-      ]
-    }).select('patient paymentAmount paidAt updatedAt').lean().catch(() => []);
-
     // Total outstanding debts from Appointment model
     const appointmentDebts = await Appointment.aggregate([
       { $match: { doctorId: { $in: doctorIds }, debt: { $gt: 0 } } },
@@ -162,8 +115,8 @@ exports.getDashboardStats = async (req, res) => {
       const ownerFinancial = await Financial.findOne({ doctorId: clinicOwnerId2 });
       if (ownerFinancial && ownerFinancial.transactions) {
         for (const txn of ownerFinancial.transactions) {
-          // Skip appointment income transactions (already counted from Appointment.paymentAmount)
-          if (isAppointmentFinancialTransaction(txn) || matchesPaidAppointmentTransaction(txn, paidAppointmentsForRevenue)) continue;
+          // Skip appointment-linked transactions (already counted from Appointment model)
+          if (txn.appointmentId) continue;
           const txnDate = new Date(txn.date);
           if (txnDate >= monthStart && txnDate < tomorrow) {
             financialMonthIncome += txn.amount || 0;
@@ -946,8 +899,8 @@ exports.getMonthlyReport = async (req, res) => {
         .populate('transactions.patientId', 'fullName mobileNumber');
       if (ownerFinancial && ownerFinancial.transactions) {
         for (const txn of ownerFinancial.transactions) {
-          // Skip appointment income transactions (already in report from Appointment query)
-          if (isAppointmentFinancialTransaction(txn) || matchesPaidAppointmentTransaction(txn, paidAppointments)) continue;
+          // Skip appointment-linked transactions (already in report from Appointment query)
+          if (txn.appointmentId) continue;
           const txnDate = new Date(txn.date);
           if (txnDate >= startDate && txnDate <= endDate) {
             report.push({
@@ -2603,7 +2556,7 @@ exports.insertPayment = async (req, res) => {
     const newRemainingDebt = Math.round((totalDebt - totalCovered) * 100) / 100;
 
     // ====== Step 3: Record the payment transaction on clinic owner's financial ======
-    const paymentTransaction = {
+    financial.transactions.push({
       amount: paidAmount,
       description: description || 'دفعة من مريض',
       date: date ? new Date(date) : new Date(),
@@ -2612,8 +2565,7 @@ exports.insertPayment = async (req, res) => {
       discount: discountAmount,
       discountPercent: discountPct,
       totalDebtBeforeDiscount: totalDebt,
-    };
-    financial.transactions.push(paymentTransaction);
+    });
     financial.totalEarnings += paidAmount;
 
     // ====== Step 4: Process debts - FIFO, mark paid/partial based on coverage ======
@@ -2707,12 +2659,6 @@ exports.insertPayment = async (req, res) => {
         await apt.save();
         aptCoveragePool = 0;
       }
-    }
-
-    if (paidAppointmentIds.length === 1) {
-      paymentTransaction.appointmentId = paidAppointmentIds[0];
-      financial.markModified('transactions');
-      await financial.save();
     }
 
     // ====== Step 6: Distribute paid amount proportionally to doctors ======
@@ -2980,8 +2926,8 @@ exports.getFinancialData = async (req, res) => {
     let financialTransactionIncome = 0;
     const ownerTransactions = financial.transactions || [];
     for (const txn of ownerTransactions) {
-      // Skip appointment income transactions (already counted from Appointment model)
-      if (isAppointmentFinancialTransaction(txn) || matchesPaidAppointmentTransaction(txn, paidAppointments)) continue;
+      // Skip appointment-linked transactions (already counted from Appointment model)
+      if (txn.appointmentId) continue;
       const txnDate = new Date(txn.date);
       if (txnDate >= startOfMonth && txnDate <= endOfMonth) {
         financialTransactionIncome += txn.amount || 0;
@@ -3739,7 +3685,7 @@ exports.getDoctorAccountsReport = async (req, res) => {
         if (doctorFinancial) {
           for (const txn of doctorFinancial.transactions) {
             // Only non-appointment transactions in the date range (debt payments, treatment income)
-            if (isAppointmentFinancialTransaction(txn)) continue;
+            if (txn.appointmentId) continue;
             const txnDate = new Date(txn.date);
             if (txnDate >= startDate && txnDate <= endDate) {
               treatmentIncome += txn.amount || 0;

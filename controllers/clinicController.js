@@ -29,6 +29,9 @@ exports.getClinicInfo = async (req, res) => {
       await clinic.save();
     }
     
+    const activeDoctors = clinic.doctors.filter(d => d.status === 'active' && d.doctorId);
+    const activeStaff = clinic.staff.filter(s => s.status === 'active' && s.userId);
+
     res.status(200).json({
       success: true,
       clinic: {
@@ -36,8 +39,8 @@ exports.getClinicInfo = async (req, res) => {
         name: clinic.name,
         description: clinic.description,
         maxDoctors: clinic.maxDoctors,
-        doctorCount: clinic.doctors.filter(d => d.status === 'active').length,
-        doctors: clinic.doctors.filter(d => d.status === 'active').map(d => ({
+        doctorCount: activeDoctors.length,
+        doctors: activeDoctors.map(d => ({
           _id: d._id,
           doctorId: d.doctorId._id,
           doctor: d.doctorId,
@@ -45,7 +48,7 @@ exports.getClinicInfo = async (req, res) => {
           addedAt: d.addedAt,
           notes: d.notes
         })),
-        staff: clinic.staff.filter(s => s.status === 'active').map(s => ({
+        staff: activeStaff.map(s => ({
           _id: s._id,
           userId: s.userId._id,
           user: s.userId,
@@ -152,6 +155,8 @@ exports.addDoctor = async (req, res) => {
       isPhoneVerified: true,
       activationStatus: 'active',
       isPaid: true, // Clinic pays for doctors
+      managedByClinic: true,
+      clinicId: clinic._id,
       workplaces: [{
         name: clinic.name,
         address: clinicOwner.address || '',
@@ -1253,6 +1258,7 @@ exports.addStaff = async (req, res) => {
       isPhoneVerified: true,
       activationStatus: 'active',
       isPaid: true,
+      clinicId: clinic._id,
     });
     
     await newStaff.save();
