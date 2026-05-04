@@ -12,6 +12,8 @@ const financialSchema = new mongoose.Schema({
       date: { type: Date, default: Date.now },
       patientId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
       appointmentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Appointment' },
+      // New: support for multiple appointments paid in single transaction (from insertPayment)
+      appointmentIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Appointment' }],
       orderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Order' },
       paymentMethod: { type: String, enum: ['Cash', 'Card', 'Visa', 'Insurance', 'BankTransfer'], required: true },
       // Discount applied to this payment

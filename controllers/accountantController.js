@@ -116,7 +116,8 @@ exports.getDashboardStats = async (req, res) => {
       if (ownerFinancial && ownerFinancial.transactions) {
         for (const txn of ownerFinancial.transactions) {
           // Skip appointment-linked transactions (already counted from Appointment model)
-          if (txn.appointmentId) continue;
+          // Check both appointmentId (single) and appointmentIds (array)
+          if (txn.appointmentId || (txn.appointmentIds && txn.appointmentIds.length > 0)) continue;
           const txnDate = new Date(txn.date);
           if (txnDate >= monthStart && txnDate < tomorrow) {
             financialMonthIncome += txn.amount || 0;
@@ -900,7 +901,8 @@ exports.getMonthlyReport = async (req, res) => {
       if (ownerFinancial && ownerFinancial.transactions) {
         for (const txn of ownerFinancial.transactions) {
           // Skip appointment-linked transactions (already in report from Appointment query)
-          if (txn.appointmentId) continue;
+          // Check both appointmentId (single) and appointmentIds (array)
+          if (txn.appointmentId || (txn.appointmentIds && txn.appointmentIds.length > 0)) continue;
           const txnDate = new Date(txn.date);
           if (txnDate >= startDate && txnDate <= endDate) {
             report.push({
@@ -1295,7 +1297,9 @@ exports.getPatientReceipt = async (req, res) => {
       const desc = txn.description || '';
       // Always skip internal entries
       if (desc.includes('حصة الطبيب')) continue;
+      // Skip if this transaction covers appointments we've already shown
       if (txn.appointmentId && coveredAptIds.has(txn.appointmentId.toString())) continue;
+      if (txn.appointmentIds && txn.appointmentIds.some(id => coveredAptIds.has(id.toString()))) continue;
       if (desc.includes('دفع موعد')) continue;
       if (desc.includes('دفع فحوصات مخبرية') || desc.includes('دفع فحوصات')) continue;
       if (desc.includes('إتمام موعد')) continue;
@@ -2555,20 +2559,7 @@ exports.insertPayment = async (req, res) => {
     // Remaining debt after this payment
     const newRemainingDebt = Math.round((totalDebt - totalCovered) * 100) / 100;
 
-    // ====== Step 3: Record the payment transaction on clinic owner's financial ======
-    financial.transactions.push({
-      amount: paidAmount,
-      description: description || 'دفعة من مريض',
-      date: date ? new Date(date) : new Date(),
-      patientId,
-      paymentMethod: paymentMethod || 'Cash',
-      discount: discountAmount,
-      discountPercent: discountPct,
-      totalDebtBeforeDiscount: totalDebt,
-    });
-    financial.totalEarnings += paidAmount;
-
-    // ====== Step 4: Process debts - FIFO, mark paid/partial based on coverage ======
+    // ====== Step 3: Process debts - FIFO, mark paid/partial based on coverage ======
     // Sort debts oldest first
     allDebts.sort((a, b) => new Date(a.debt.date) - new Date(b.debt.date));
 
@@ -2614,7 +2605,7 @@ exports.insertPayment = async (req, res) => {
       await docFin.save();
     }
 
-    // ====== Step 5: Mark unpaid appointments as paid (up to coverage) ======
+    // ====== Step 4: Mark unpaid appointments as paid (up to coverage) ======
     const allDoctorIds = clinic.doctors?.filter(d => d.status === 'active').map(d => d.doctorId) || [];
     if (!allDoctorIds.some(id => id.toString() === clinicOwnerId.toString())) {
       allDoctorIds.push(clinicOwnerId);
@@ -2660,6 +2651,23 @@ exports.insertPayment = async (req, res) => {
         aptCoveragePool = 0;
       }
     }
+
+    // ====== Step 5: Record the payment transaction on clinic owner's financial ======
+    // Now that appointments are updated, add them to the transaction
+    financial.transactions.push({
+      amount: paidAmount,
+      description: description || 'دفعة من مريض',
+      date: date ? new Date(date) : new Date(),
+      patientId,
+      paymentMethod: paymentMethod || 'Cash',
+      discount: discountAmount,
+      discountPercent: discountPct,
+      totalDebtBeforeDiscount: totalDebt,
+      // Add appointment IDs that were paid through this transaction
+      appointmentIds: paidAppointmentIds.map(id => id.toString()),
+    });
+    financial.totalEarnings += paidAmount;
+    await financial.save();
 
     // ====== Step 6: Distribute paid amount proportionally to doctors ======
     for (const [docId, docPaidAmount] of Object.entries(doctorPaidAmounts)) {
@@ -2927,7 +2935,8 @@ exports.getFinancialData = async (req, res) => {
     const ownerTransactions = financial.transactions || [];
     for (const txn of ownerTransactions) {
       // Skip appointment-linked transactions (already counted from Appointment model)
-      if (txn.appointmentId) continue;
+      // Check both appointmentId (single) and appointmentIds (array)
+      if (txn.appointmentId || (txn.appointmentIds && txn.appointmentIds.length > 0)) continue;
       const txnDate = new Date(txn.date);
       if (txnDate >= startOfMonth && txnDate <= endOfMonth) {
         financialTransactionIncome += txn.amount || 0;
@@ -3685,7 +3694,8 @@ exports.getDoctorAccountsReport = async (req, res) => {
         if (doctorFinancial) {
           for (const txn of doctorFinancial.transactions) {
             // Only non-appointment transactions in the date range (debt payments, treatment income)
-            if (txn.appointmentId) continue;
+            // Skip both appointmentId (single) and appointmentIds (array)
+            if (txn.appointmentId || (txn.appointmentIds && txn.appointmentIds.length > 0)) continue;
             const txnDate = new Date(txn.date);
             if (txnDate >= startDate && txnDate <= endDate) {
               treatmentIncome += txn.amount || 0;
