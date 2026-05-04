@@ -23,9 +23,9 @@ const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://vitaUser:Pop%401990@12
 
 async function findClinicByName(clinicName) {
   try {
-    const clinic = await User.findOne({ 
-      name: { $regex: clinicName, $options: 'i' },
-      role: 'Clinic'
+    const Clinic = require('./models/Clinic');
+    const clinic = await Clinic.findOne({ 
+      name: { $regex: clinicName, $options: 'i' }
     });
     return clinic;
   } catch (err) {
@@ -46,70 +46,70 @@ async function fixDuplicatePayments(clinicOwnerId, dryRun = true) {
       return;
     }
 
-    // Get all paid appointments for this clinic owner
-    const paidAppointments = await Appointment.find({
+    // Get all appointments for this clinic owner (paid or not)
+    const allAppointments = await Appointment.find({
       doctorId: clinicOwnerId,
-      isPaid: true,
       paymentAmount: { $gt: 0 }
     });
 
-    console.log(`📊 Found ${paidAppointments.length} paid appointments`);
+    console.log(`📊 Found ${allAppointments.length} appointments with payments`);
     console.log(`💰 Found ${financial.transactions.length} financial transactions\n`);
 
-    // Build a map of expected payments from appointments
-    const appointmentPayments = new Map(); // Key: "amount-date", Value: [appointmentIds]
-    for (const apt of paidAppointments) {
+    // Build a map of appointment payments - group by date and look for patterns
+    const appointmentPaymentsByDate = new Map(); // Key: date, Value: [amounts]
+    for (const apt of allAppointments) {
       const paymentAmount = apt.paymentAmount || 0;
-      const paidDate = apt.paidAt || apt.updatedAt;
-      const dateStr = new Date(paidDate).toDateString(); // Normalize date to day level
-      const key = `${paymentAmount}-${dateStr}`;
+      const paidDate = apt.paidAt || apt.updatedAt || apt.appointmentDateTime;
+      const dateStr = new Date(paidDate).toDateString();
       
-      if (!appointmentPayments.has(key)) {
-        appointmentPayments.set(key, []);
+      if (!appointmentPaymentsByDate.has(dateStr)) {
+        appointmentPaymentsByDate.set(dateStr, []);
       }
-      appointmentPayments.get(key).push(apt._id.toString());
+      appointmentPaymentsByDate.get(dateStr).push(paymentAmount);
     }
 
-    // Analyze transactions to find duplicates
-    const duplicateTransactions = [];
-    const transactionsToKeep = [];
+    // Analyze transactions to find potential duplicates
     const transactionsWithoutAppointmentIds = [];
+    const suspiciousTransactions = [];
 
+    console.log('📋 ANALYZING TRANSACTIONS:\n');
     for (let i = 0; i < financial.transactions.length; i++) {
       const txn = financial.transactions[i];
       const amount = txn.amount || 0;
       const txnDate = txn.date || new Date();
       const dateStr = new Date(txnDate).toDateString();
-      const key = `${amount}-${dateStr}`;
 
-      // Check if this transaction has no appointmentId but matches an appointment payment
-      if (!txn.appointmentId && !txn.appointmentIds && amount > 0) {
-        const matchingApts = appointmentPayments.get(key);
-        if (matchingApts && matchingApts.length > 0) {
-          console.log(`⚠️  Potential duplicate transaction found:`);
-          console.log(`    Amount: ${amount}, Date: ${dateStr}`);
-          console.log(`    Description: ${txn.description}`);
-          console.log(`    Patient: ${txn.patientId}`);
-          
-          // Check if it's a "دفعة من مريض" type transaction (from insertPayment)
-          const isPaymentTransaction = txn.description === 'دفعة من مريض' || 
-                                       txn.description?.includes('دفعة') ||
-                                       txn.totalDebtBeforeDiscount > 0;
-          
-          if (isPaymentTransaction) {
-            console.log(`    ✅ This looks like an insertPayment transaction - MARKING FOR DELETION\n`);
-            duplicateTransactions.push({
-              index: i,
-              txn: txn,
-              matchingApts: matchingApts,
-              reason: 'Duplicate insertPayment transaction'
-            });
-          } else {
-            console.log(`    ℹ️  This might be a different type of transaction - KEEPING\n`);
-            transactionsWithoutAppointmentIds.push({ index: i, txn });
-          }
+      // Check if transaction is missing appointmentIds but matches appointments
+      if (!txn.appointmentId && !txn.appointmentIds) {
+        const appointmentsThatDay = appointmentPaymentsByDate.get(dateStr) || [];
+        
+        // Check if amount matches any appointment that day
+        const exactMatch = appointmentsThatDay.includes(amount);
+        
+        console.log(`Transaction [${i}]:`);
+        console.log(`  Amount: ${amount}, Date: ${dateStr}`);
+        console.log(`  Description: "${txn.description}"`);
+        console.log(`  PatientId: ${txn.patientId}`);
+        console.log(`  Appointments that day: ${appointmentsThatDay.length}, Amounts: [${appointmentsThatDay.join(', ')}]`);
+        
+        // Identify if this is a "دفعة" type transaction
+        const isPaymentTransaction = txn.description === 'دفعة من مريض' || 
+                                     txn.description?.includes('دفعة') ||
+                                     (txn.totalDebtBeforeDiscount && txn.totalDebtBeforeDiscount > 0);
+        
+        if (isPaymentTransaction && exactMatch) {
+          console.log(`  ⚠️  SUSPICIOUS: Payment transaction matching appointment amount\n`);
+          suspiciousTransactions.push({
+            index: i,
+            txn: txn,
+            matchingAmount: amount,
+            reason: 'Payment transaction matching appointment'
+          });
+        } else if (isPaymentTransaction) {
+          console.log(`  ℹ️  REVIEW: Payment transaction (no exact appointment match)\n`);
+          transactionsWithoutAppointmentIds.push({ index: i, txn });
         } else {
-          // No matching appointment, keep it
+          console.log(`  ✅ Non-payment transaction\n`);
           transactionsWithoutAppointmentIds.push({ index: i, txn });
         }
       }
@@ -117,38 +117,39 @@ async function fixDuplicatePayments(clinicOwnerId, dryRun = true) {
 
     // Summary
     console.log(`\n📈 ANALYSIS RESULTS:`);
-    console.log(`   Duplicate transactions to remove: ${duplicateTransactions.length}`);
+    console.log(`   Suspicious transactions (likely duplicates): ${suspiciousTransactions.length}`);
     console.log(`   Transactions without appointmentIds (to review): ${transactionsWithoutAppointmentIds.length}`);
 
-    if (duplicateTransactions.length === 0) {
-      console.log(`\n✅ No duplicate transactions found! Data looks clean.`);
+    if (suspiciousTransactions.length === 0) {
+      console.log(`\n✅ No suspicious duplicate transactions found!`);
       return;
     }
 
-    // Show details of duplicates
-    console.log(`\n📋 DUPLICATE TRANSACTIONS TO REMOVE:\n`);
-    let totalDuplicateAmount = 0;
-    for (const dup of duplicateTransactions) {
-      console.log(`   • Amount: ${dup.txn.amount} | Date: ${new Date(dup.txn.date).toLocaleDateString()}`);
-      console.log(`     Description: ${dup.txn.description}`);
-      console.log(`     Reason: ${dup.reason}`);
-      totalDuplicateAmount += dup.txn.amount;
+    // Show details of suspicious transactions
+    console.log(`\n📋 SUSPICIOUS TRANSACTIONS (LIKELY DUPLICATES):\n`);
+    let totalSuspiciousAmount = 0;
+    for (const sus of suspiciousTransactions) {
+      console.log(`   • Amount: ${sus.txn.amount} | Date: ${new Date(sus.txn.date).toLocaleDateString()}`);
+      console.log(`     Description: "${sus.txn.description}"`);
+      console.log(`     Patient ID: ${sus.txn.patientId}`);
+      console.log(`     Reason: ${sus.reason}`);
+      totalSuspiciousAmount += sus.txn.amount;
     }
-    console.log(`\n   Total amount in duplicates: ${totalDuplicateAmount}`);
+    console.log(`\n   Total amount in suspicious transactions: ${totalSuspiciousAmount}`);
 
     if (dryRun) {
-      console.log(`\n🔒 DRY RUN MODE - No changes made. Run with dryRun=false to apply changes.`);
-      return;
+      console.log(`\n🔒 DRY RUN MODE - No changes made. Run with --apply to remove these.`);
+      return { count: suspiciousTransactions.length, amount: totalSuspiciousAmount };
     }
 
     // Apply fixes
     console.log(`\n🔧 APPLYING FIXES...\n`);
 
-    // Remove duplicates (in reverse order to preserve indices)
-    for (let i = duplicateTransactions.length - 1; i >= 0; i--) {
-      const dup = duplicateTransactions[i];
-      financial.transactions.splice(dup.index, 1);
-      console.log(`   ✅ Removed duplicate: ${dup.txn.amount} (${dup.txn.description})`);
+    // Remove suspicious transactions (in reverse order to preserve indices)
+    for (let i = suspiciousTransactions.length - 1; i >= 0; i--) {
+      const sus = suspiciousTransactions[i];
+      financial.transactions.splice(sus.index, 1);
+      console.log(`   ✅ Removed suspicious: ${sus.txn.amount} (${sus.txn.description})`);
     }
 
     // Recalculate totalEarnings
@@ -167,8 +168,10 @@ async function fixDuplicatePayments(clinicOwnerId, dryRun = true) {
     await financial.save();
 
     console.log(`\n✅ FIXES APPLIED SUCCESSFULLY!`);
-    console.log(`   - Removed ${duplicateTransactions.length} duplicate transactions`);
+    console.log(`   - Removed ${suspiciousTransactions.length} suspicious transactions`);
     console.log(`   - Total amount corrected: ${reductionAmount}`);
+    
+    return { count: suspiciousTransactions.length, amount: reductionAmount };
 
   } catch (error) {
     console.error('❌ Error during fix:', error);

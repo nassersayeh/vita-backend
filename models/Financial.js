@@ -14,6 +14,8 @@ const financialSchema = new mongoose.Schema({
       appointmentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Appointment' },
       // New: support for multiple appointments paid in single transaction (from insertPayment)
       appointmentIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Appointment' }],
+      labRequestId: { type: mongoose.Schema.Types.ObjectId, ref: 'LabRequest' },
+      labRequestIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'LabRequest' }],
       orderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Order' },
       paymentMethod: { type: String, enum: ['Cash', 'Card', 'Visa', 'Insurance', 'BankTransfer'], required: true },
       // Discount applied to this payment
@@ -49,6 +51,7 @@ const financialSchema = new mongoose.Schema({
     {
       patientId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
       doctorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // Doctor who created the debt (for revenue split)
+      appointmentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Appointment' },
       orderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Order' },
       labRequestId: { type: mongoose.Schema.Types.ObjectId, ref: 'LabRequest' }, // Link to lab request if debt is from lab test
       amount: { type: Number, required: true },

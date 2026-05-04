@@ -63,6 +63,7 @@ router.post('/payments', accountantController.insertPayment);
 
 // Patient payments (view/edit/delete)
 router.get('/patients/:patientId/payments', accountantController.getPatientPayments);
+router.put('/patients/:patientId/payments/:transactionId', accountantController.editPatientPayment);
 router.put('/payments/:transactionId', accountantController.editPayment);
 router.delete('/payments/:transactionId', accountantController.deletePayment);
 

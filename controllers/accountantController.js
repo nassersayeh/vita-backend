@@ -17,6 +17,39 @@ const getClinicForAccountant = async (accountantId) => {
   return clinic;
 };
 
+const hasTransactionForAppointment = (financial, appointmentId) => {
+  if (!financial || !appointmentId) return false;
+  const targetId = appointmentId.toString();
+  return (financial.transactions || []).some((txn) =>
+    txn.appointmentId?.toString() === targetId ||
+    (txn.appointmentIds || []).some((id) => id.toString() === targetId)
+  );
+};
+
+const hasTransactionForLabRequest = (financial, labRequestId) => {
+  if (!financial || !labRequestId) return false;
+  const targetId = labRequestId.toString();
+  return (financial.transactions || []).some((txn) =>
+    txn.labRequestId?.toString() === targetId ||
+    (txn.labRequestIds || []).some((id) => id.toString() === targetId)
+  );
+};
+
+const isLinkedFinancialTransaction = (transaction) => (
+  !!transaction.appointmentId ||
+  (transaction.appointmentIds && transaction.appointmentIds.length > 0) ||
+  !!transaction.labRequestId ||
+  (transaction.labRequestIds && transaction.labRequestIds.length > 0) ||
+  !!transaction.orderId
+);
+
+const isProtectedFinancialTransaction = (transaction) => (
+  isLinkedFinancialTransaction(transaction) ||
+  !!transaction.patientId ||
+  (transaction.totalDebtBeforeDiscount || 0) > 0 ||
+  (transaction.discount || 0) > 0
+);
+
 // Get dashboard stats
 exports.getDashboardStats = async (req, res) => {
   try {
@@ -52,38 +85,6 @@ exports.getDashboardStats = async (req, res) => {
       status: { $in: ['confirmed', 'completed'] }
     });
 
-    // Monthly revenue
-    const monthRevenue = await Appointment.aggregate([
-      {
-        $match: {
-          doctorId: { $in: doctorIds },
-          isPaid: true,
-          $or: [
-            { paidAt: { $gte: monthStart } },
-            { paidAt: { $exists: false }, updatedAt: { $gte: monthStart } },
-            { paidAt: null, updatedAt: { $gte: monthStart } }
-          ]
-        }
-      },
-      { $group: { _id: null, total: { $sum: '$paymentAmount' } } }
-    ]).catch(() => []);
-
-    // Today's revenue
-    const todayRevenue = await Appointment.aggregate([
-      {
-        $match: {
-          doctorId: { $in: doctorIds },
-          isPaid: true,
-          $or: [
-            { paidAt: { $gte: today, $lt: tomorrow } },
-            { paidAt: { $exists: false }, updatedAt: { $gte: today, $lt: tomorrow } },
-            { paidAt: null, updatedAt: { $gte: today, $lt: tomorrow } }
-          ]
-        }
-      },
-      { $group: { _id: null, total: { $sum: '$paymentAmount' } } }
-    ]).catch(() => []);
-
     // Total outstanding debts from Appointment model
     const appointmentDebts = await Appointment.aggregate([
       { $match: { doctorId: { $in: doctorIds }, debt: { $gt: 0 } } },
@@ -106,8 +107,7 @@ exports.getDashboardStats = async (req, res) => {
     // Appointment.debt is a secondary tracker that may be out of sync
     const totalDebts = financialDebts || appointmentDebts[0]?.total || 0;
 
-    // Also get non-appointment income from Financial.transactions (debt payments, manual payments)
-    // These are NOT counted in the Appointment aggregate above
+    // Revenue source of truth: clinic owner's financial transactions.
     const clinicOwnerId2 = clinic.ownerId;
     let financialTodayIncome = 0;
     let financialMonthIncome = 0;
@@ -115,9 +115,6 @@ exports.getDashboardStats = async (req, res) => {
       const ownerFinancial = await Financial.findOne({ doctorId: clinicOwnerId2 });
       if (ownerFinancial && ownerFinancial.transactions) {
         for (const txn of ownerFinancial.transactions) {
-          // Skip appointment-linked transactions (already counted from Appointment model)
-          // Check both appointmentId (single) and appointmentIds (array)
-          if (txn.appointmentId || (txn.appointmentIds && txn.appointmentIds.length > 0)) continue;
           const txnDate = new Date(txn.date);
           if (txnDate >= monthStart && txnDate < tomorrow) {
             financialMonthIncome += txn.amount || 0;
@@ -135,8 +132,8 @@ exports.getDashboardStats = async (req, res) => {
         patientCount: allPatientIds.size,
         todayAppointments,
         pendingPayments,
-        monthRevenue: (monthRevenue[0]?.total || 0) + financialMonthIncome,
-        todayRevenue: (todayRevenue[0]?.total || 0) + financialTodayIncome,
+        monthRevenue: financialMonthIncome,
+        todayRevenue: financialTodayIncome,
         totalDebts,
         clinicName: clinic.name,
         doctorCount: doctorIds.length
@@ -476,6 +473,7 @@ exports.createAppointment = async (req, res) => {
       financial.debts.push({
         patientId,
         doctorId: doctorId,
+        appointmentId: appointment._id,
         amount: fee,
         description: 'كشفية العيادة - ' + (reason || 'كشف عام'),
         date: new Date(),
@@ -522,6 +520,26 @@ exports.markAsPaid = async (req, res) => {
       return res.status(403).json({ message: 'الموعد ليس لطبيب في هذه العيادة' });
     }
 
+    // Record in CLINIC OWNER's financial (not doctor's)
+    const clinicOwnerId = clinic.ownerId;
+    let financial = await Financial.findOne({ doctorId: clinicOwnerId });
+    if (!financial) {
+      financial = new Financial({ doctorId: clinicOwnerId, totalEarnings: 0, totalExpenses: 0 });
+    }
+
+    const alreadyRecorded = hasTransactionForAppointment(financial, appointment._id);
+    if (alreadyRecorded) {
+      const populatedAppointment = await Appointment.findById(appointmentId)
+        .populate('patient', 'fullName mobileNumber')
+        .populate('doctorId', 'fullName specialty');
+
+      return res.status(200).json({
+        success: true,
+        message: 'تم تسجيل الدفع سابقاً لهذا الموعد',
+        appointment: populatedAppointment
+      });
+    }
+
     // Total fee = doctorFee + clinicFee
     const totalFee = (appointment.doctorFee || 0) + (appointment.clinicFee || appointment.appointmentFee || 0);
     const paid = paymentAmount || totalFee;
@@ -534,13 +552,6 @@ exports.markAsPaid = async (req, res) => {
     appointment.debtStatus = remaining > 0 ? (paid > 0 ? 'partial' : 'full') : 'none';
 
     await appointment.save();
-
-    // Record in CLINIC OWNER's financial (not doctor's)
-    const clinicOwnerId = clinic.ownerId;
-    let financial = await Financial.findOne({ doctorId: clinicOwnerId });
-    if (!financial) {
-      financial = new Financial({ doctorId: clinicOwnerId, totalEarnings: 0, totalExpenses: 0 });
-    }
 
     financial.transactions.push({
       amount: paid,
@@ -556,7 +567,9 @@ exports.markAsPaid = async (req, res) => {
     const patientId = appointment.patient.toString();
     let paymentPool = paid;
     const patientDebts = financial.debts.filter(d => 
-      d.patientId?.toString() === patientId && d.status === 'pending'
+      d.patientId?.toString() === patientId &&
+      d.status === 'pending' &&
+      (!d.appointmentId || d.appointmentId.toString() === appointment._id.toString())
     );
     patientDebts.sort((a, b) => new Date(a.date) - new Date(b.date));
     for (const debt of patientDebts) {
@@ -577,6 +590,7 @@ exports.markAsPaid = async (req, res) => {
       financial.debts.push({
         patientId: appointment.patient,
         doctorId: appointment.doctorId,
+        appointmentId: appointment._id,
         amount: remaining,
         description: `دين موعد - ${appointment.reason || 'كشف'}`,
         date: new Date(),
@@ -701,15 +715,6 @@ exports.markTestAsPaid = async (req, res) => {
       return res.status(404).json({ message: 'طلب الفحص غير موجود' });
     }
 
-    const totalCost = labRequest.totalCost || labRequest.testIds.reduce((sum, t) => sum + (t.price || 0), 0);
-    labRequest.totalCost = totalCost;
-    labRequest.isPaid = true;
-    labRequest.paidAmount = paymentAmount || totalCost;
-    labRequest.paidAt = new Date();
-    labRequest.paidBy = accountantId;
-
-    await labRequest.save();
-
     // Record in CLINIC OWNER's financial
     const clinicOwnerId = clinic.ownerId;
     let financial = await Financial.findOne({ doctorId: clinicOwnerId });
@@ -717,12 +722,32 @@ exports.markTestAsPaid = async (req, res) => {
       financial = new Financial({ doctorId: clinicOwnerId, totalEarnings: 0, totalExpenses: 0 });
     }
 
+    if (hasTransactionForLabRequest(financial, labRequest._id)) {
+      return res.status(200).json({
+        success: true,
+        message: 'تم تسجيل دفع هذا الفحص سابقاً'
+      });
+    }
+
+    const totalCost = labRequest.totalCost || labRequest.testIds.reduce((sum, t) => sum + (t.price || 0), 0);
     const paid = paymentAmount || totalCost;
+    if (paid < totalCost) {
+      return res.status(400).json({ message: 'دفعة المختبر الجزئية غير مدعومة من هذا المسار. يجب دفع كامل قيمة الفحص أو استخدام سداد الدين.' });
+    }
+    labRequest.totalCost = totalCost;
+    labRequest.isPaid = true;
+    labRequest.paidAmount = paid;
+    labRequest.paidAt = new Date();
+    labRequest.paidBy = accountantId;
+
+    await labRequest.save();
+
     financial.transactions.push({
       amount: paid,
       description: `دفع فحوصات مخبرية`,
       date: new Date(),
       patientId: labRequest.patientId,
+      labRequestId: labRequest._id,
       paymentMethod: paymentMethod || 'Cash'
     });
     financial.totalEarnings = (financial.totalEarnings || 0) + paid;
@@ -900,9 +925,8 @@ exports.getMonthlyReport = async (req, res) => {
         .populate('transactions.patientId', 'fullName mobileNumber');
       if (ownerFinancial && ownerFinancial.transactions) {
         for (const txn of ownerFinancial.transactions) {
-          // Skip appointment-linked transactions (already in report from Appointment query)
-          // Check both appointmentId (single) and appointmentIds (array)
-          if (txn.appointmentId || (txn.appointmentIds && txn.appointmentIds.length > 0)) continue;
+          // Skip linked transactions already in report from Appointment/LabRequest queries.
+          if (isLinkedFinancialTransaction(txn)) continue;
           const txnDate = new Date(txn.date);
           if (txnDate >= startDate && txnDate <= endDate) {
             report.push({
@@ -1965,12 +1989,16 @@ exports.acceptAppointment = async (req, res) => {
       const existingDebt = (financial.debts || []).find(d =>
         d.patientId?.toString() === appointment.patient.toString() &&
         d.status === 'pending' &&
-        d.amount === fee
+        (
+          d.appointmentId?.toString() === appointment._id.toString() ||
+          (!d.appointmentId && d.amount === fee)
+        )
       );
       if (!existingDebt) {
         financial.debts.push({
           patientId: appointment.patient,
           doctorId: appointment.doctorId,
+          appointmentId: appointment._id,
           amount: fee,
           description: 'موعد - ' + (appointment.reason || 'كشف عام'),
           date: new Date(),
@@ -2041,6 +2069,28 @@ exports.declineAppointment = async (req, res) => {
     appointment.debtStatus = 'none';
     if (reason) appointment.notes = (appointment.notes ? appointment.notes + '\n' : '') + 'سبب الرفض: ' + reason;
     await appointment.save();
+
+    const clinicOwnerId = clinic.ownerId;
+    const financial = await Financial.findOne({ doctorId: clinicOwnerId });
+    if (financial) {
+      const relatedDebts = (financial.debts || []).filter(d =>
+        d.status === 'pending' &&
+        d.patientId?.toString() === appointment.patient.toString() &&
+        (
+          d.appointmentId?.toString() === appointment._id.toString() ||
+          (!d.appointmentId && (d.description || '').includes(appointment.reason || ''))
+        )
+      );
+      for (const debt of relatedDebts) {
+        debt.amount = 0;
+        debt.status = 'paid';
+        debt.paidAt = new Date();
+      }
+      if (relatedDebts.length > 0) {
+        financial.markModified('debts');
+        await financial.save();
+      }
+    }
 
     const Notification = require('../models/Notification');
     const doctor = await User.findById(appointment.doctorId);
@@ -2133,7 +2183,8 @@ exports.completeAppointment = async (req, res) => {
       }
 
       // Add payment as income transaction (only if patient is paying)
-      if (totalPaying > 0) {
+      const ownerPaymentAlreadyRecorded = hasTransactionForAppointment(financial, appointment._id);
+      if (totalPaying > 0 && !ownerPaymentAlreadyRecorded) {
         financial.transactions.push({
           amount: totalPaying,
           description: `إتمام موعد - ${clinic.name} (كشفية: ₪${clinicFeeAmount} + رسوم طبيب: ₪${doctorFeeAmount})`,
@@ -2149,7 +2200,9 @@ exports.completeAppointment = async (req, res) => {
       const patientId = appointment.patient.toString();
       let feeToDeduct = totalPaying;
       const patientDebts = financial.debts.filter(d => 
-        d.patientId?.toString() === patientId && d.status === 'pending'
+        d.patientId?.toString() === patientId &&
+        d.status === 'pending' &&
+        (!d.appointmentId || d.appointmentId.toString() === appointment._id.toString())
       );
       patientDebts.sort((a, b) => new Date(a.date) - new Date(b.date));
       for (const debt of patientDebts) {
@@ -2176,16 +2229,18 @@ exports.completeAppointment = async (req, res) => {
         if (!doctorFinancial) {
           doctorFinancial = new Financial({ doctorId: appointment.doctorId, totalEarnings: 0, totalExpenses: 0 });
         }
-        doctorFinancial.transactions.push({
-          amount: doctorShareAmount,
-          description: `حصة الطبيب من كشفية - ${clinic.name} (${100 - clinicPercentage}%)`,
-          date: new Date(),
-          patientId: appointment.patient,
-          appointmentId: appointment._id,
-          paymentMethod: 'Cash',
-        });
-        doctorFinancial.totalEarnings = (doctorFinancial.totalEarnings || 0) + doctorShareAmount;
-        await doctorFinancial.save();
+        if (!hasTransactionForAppointment(doctorFinancial, appointment._id)) {
+          doctorFinancial.transactions.push({
+            amount: doctorShareAmount,
+            description: `حصة الطبيب من كشفية - ${clinic.name} (${100 - clinicPercentage}%)`,
+            date: new Date(),
+            patientId: appointment.patient,
+            appointmentId: appointment._id,
+            paymentMethod: 'Cash',
+          });
+          doctorFinancial.totalEarnings = (doctorFinancial.totalEarnings || 0) + doctorShareAmount;
+          await doctorFinancial.save();
+        }
       } catch (docFinErr) {
         console.error('Error updating doctor financial:', docFinErr);
       }
@@ -2565,6 +2620,9 @@ exports.insertPayment = async (req, res) => {
 
     // Track how much each doctor gets from this payment (for revenue split)
     const doctorPaidAmounts = {}; // { doctorId: amountPaidForThisDoctor }
+    const labPaidAmounts = {}; // { labRequestId: actualPaidAmount }
+    const paidLabRequestIds = new Set();
+    const fullyCoveredLabRequestIds = new Set();
     let coveragePool = totalCovered; // discount + paid amount to distribute across debts
 
     for (const item of allDebts) {
@@ -2590,8 +2648,17 @@ exports.insertPayment = async (req, res) => {
       // Track per-doctor: how much of the PAID amount (not discount) goes to this doctor
       // Proportional: (covered / totalCovered) * paidAmount
       if (totalCovered > 0) {
-        const doctorPaidPortion = Math.round((covered / totalCovered) * paidAmount * 100) / 100;
-        doctorPaidAmounts[doctorId] = (doctorPaidAmounts[doctorId] || 0) + doctorPaidPortion;
+        const paidPortion = Math.round((covered / totalCovered) * paidAmount * 100) / 100;
+        doctorPaidAmounts[doctorId] = (doctorPaidAmounts[doctorId] || 0) + paidPortion;
+
+        if (debt.labRequestId && covered > 0) {
+          const labRequestId = debt.labRequestId.toString();
+          labPaidAmounts[labRequestId] = (labPaidAmounts[labRequestId] || 0) + paidPortion;
+          paidLabRequestIds.add(labRequestId);
+          if (debt.status === 'paid' || debt.amount <= 0) {
+            fullyCoveredLabRequestIds.add(labRequestId);
+          }
+        }
       }
     }
 
@@ -2603,6 +2670,29 @@ exports.insertPayment = async (req, res) => {
     for (const docFin of doctorFinancials) {
       docFin.markModified('debts');
       await docFin.save();
+    }
+
+    // Keep lab technician view in sync when accountant pays lab debts via "insert payment".
+    for (const labRequestId of paidLabRequestIds) {
+      const labPaidAmount = labPaidAmounts[labRequestId] || 0;
+      const labRequest = await LabRequest.findById(labRequestId);
+      if (!labRequest) continue;
+
+      const currentPaid = Number(labRequest.paidAmount || 0);
+      const nextPaid = Math.round((currentPaid + labPaidAmount) * 100) / 100;
+      const totalCost = Number(labRequest.totalCost || labRequest.originalCost || 0);
+      labRequest.paidAmount = totalCost > 0 ? Math.min(nextPaid, totalCost) : nextPaid;
+
+      if (
+        fullyCoveredLabRequestIds.has(labRequestId) ||
+        (totalCost > 0 && labRequest.paidAmount >= totalCost)
+      ) {
+        labRequest.isPaid = true;
+        labRequest.paidAt = labRequest.paidAt || new Date();
+        labRequest.paidBy = accountantId;
+      }
+
+      await labRequest.save();
     }
 
     // ====== Step 4: Mark unpaid appointments as paid (up to coverage) ======
@@ -2665,6 +2755,8 @@ exports.insertPayment = async (req, res) => {
       totalDebtBeforeDiscount: totalDebt,
       // Add appointment IDs that were paid through this transaction
       appointmentIds: paidAppointmentIds.map(id => id.toString()),
+      labRequestId: paidLabRequestIds.size === 1 ? Array.from(paidLabRequestIds)[0] : undefined,
+      labRequestIds: Array.from(paidLabRequestIds),
     });
     financial.totalEarnings += paidAmount;
     await financial.save();
@@ -2694,6 +2786,7 @@ exports.insertPayment = async (req, res) => {
             description: `حصة الطبيب من دفعة مريض - ${clinic.name} (${descParts.join(' | ')})`,
             date: new Date(),
             patientId,
+            appointmentIds: paidAppointmentIds.map(id => id.toString()),
             paymentMethod: paymentMethod || 'Cash'
           });
           doctorFinancial.totalEarnings = (doctorFinancial.totalEarnings || 0) + doctorShare;
@@ -2929,21 +3022,17 @@ exports.getFinancialData = async (req, res) => {
     });
     const monthExpensesTotal = monthExpenses.reduce((sum, exp) => sum + (exp.amount || 0), 0);
 
-    // Also add non-appointment Financial.transactions income (debt payments, manual payments)
-    // These are NOT counted in the Appointment/Lab queries above
-    let financialTransactionIncome = 0;
+    // Clinic owner's transactions are the income source of truth for editable payments.
+    let transactionIncome = 0;
     const ownerTransactions = financial.transactions || [];
     for (const txn of ownerTransactions) {
-      // Skip appointment-linked transactions (already counted from Appointment model)
-      // Check both appointmentId (single) and appointmentIds (array)
-      if (txn.appointmentId || (txn.appointmentIds && txn.appointmentIds.length > 0)) continue;
       const txnDate = new Date(txn.date);
       if (txnDate >= startOfMonth && txnDate <= endOfMonth) {
-        financialTransactionIncome += txn.amount || 0;
+        transactionIncome += txn.amount || 0;
       }
     }
 
-    const totalMonthlyIncome = appointmentIncome + labIncome + financialTransactionIncome;
+    const totalMonthlyIncome = transactionIncome;
 
     // Build response - augment financial with computed income and merged debts
     const financialData = financial.toObject ? financial.toObject() : { ...financial };
@@ -2952,7 +3041,7 @@ exports.getFinancialData = async (req, res) => {
     financialData.totalExpenses = monthExpensesTotal;
     financialData.appointmentIncome = appointmentIncome;
     financialData.labIncome = labIncome;
-    financialData.paymentIncome = financialTransactionIncome;
+    financialData.paymentIncome = transactionIncome;
     financialData.monthLabel = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 
     res.status(200).json({ success: true, financial: financialData });
@@ -3172,6 +3261,7 @@ exports.payDebt = async (req, res) => {
     await debtOwnerFinancial.save();
 
     // Sync linked LabRequest if this debt is from a lab test
+    let linkedLabRequestId = debt.labRequestId || null;
     try {
       let labReq = null;
       if (debt.labRequestId) {
@@ -3187,20 +3277,23 @@ exports.payDebt = async (req, res) => {
         // Link for future
         if (labReq) {
           debt.labRequestId = labReq._id;
+          linkedLabRequestId = labReq._id;
           debtOwnerFinancial.markModified('debts');
           await debtOwnerFinancial.save();
         }
       }
       if (labReq) {
-        labReq.paidAmount = (labReq.paidAmount || 0) + paymentAmount;
+        const totalCost = Number(labReq.totalCost || labReq.originalCost || 0);
+        const nextPaid = Math.round(((labReq.paidAmount || 0) + paymentAmount) * 100) / 100;
+        labReq.paidAmount = totalCost > 0 ? Math.min(nextPaid, totalCost) : nextPaid;
         if (debt.status === 'paid') {
           labReq.isPaid = true;
           labReq.paidAt = new Date();
+          labReq.paidBy = accountantId;
         }
-        // Update totalCost to match remaining debt
-        labReq.totalCost = debt.amount;
         await labReq.save();
-        console.log(`✅ Synced LabRequest ${labReq._id} on debt payment (paidAmount+${paymentAmount}, totalCost=${debt.amount})`);
+        linkedLabRequestId = labReq._id;
+        console.log(`✅ Synced LabRequest ${labReq._id} on debt payment (paidAmount+${paymentAmount})`);
       }
     } catch (labErr) {
       console.error('Error syncing LabRequest on debt payment:', labErr);
@@ -3212,6 +3305,8 @@ exports.payDebt = async (req, res) => {
       description: `دفع دين - ${debt.description || ''}`,
       date: new Date(),
       patientId: debt.patientId,
+      labRequestId: linkedLabRequestId || undefined,
+      labRequestIds: linkedLabRequestId ? [linkedLabRequestId] : [],
       paymentMethod: paymentMethod || 'Cash'
     });
     financial.totalEarnings += paymentAmount;
@@ -3693,9 +3788,8 @@ exports.getDoctorAccountsReport = async (req, res) => {
           .populate('transactions.patientId', 'fullName mobileNumber');
         if (doctorFinancial) {
           for (const txn of doctorFinancial.transactions) {
-            // Only non-appointment transactions in the date range (debt payments, treatment income)
-            // Skip both appointmentId (single) and appointmentIds (array)
-            if (txn.appointmentId || (txn.appointmentIds && txn.appointmentIds.length > 0)) continue;
+            // Only unlinked treatment/debt-split transactions in the date range.
+            if (isLinkedFinancialTransaction(txn)) continue;
             const txnDate = new Date(txn.date);
             if (txnDate >= startDate && txnDate <= endDate) {
               treatmentIncome += txn.amount || 0;
@@ -3966,6 +4060,134 @@ exports.getPatientPayments = async (req, res) => {
   }
 };
 
+// Edit a payment from the patient payments tab only.
+exports.editPatientPayment = async (req, res) => {
+  try {
+    const accountantId = req.user._id;
+    const clinic = await getClinicForAccountant(accountantId);
+    if (!clinic) {
+      return res.status(404).json({ message: 'لم يتم العثور على عيادة مرتبطة بحسابك' });
+    }
+
+    const { patientId, transactionId } = req.params;
+    const { amount, description, paymentMethod } = req.body;
+    const newAmount = Number(amount);
+    if (!newAmount || newAmount <= 0) {
+      return res.status(400).json({ message: 'يجب إدخال مبلغ صالح' });
+    }
+
+    const clinicOwnerId = clinic.ownerId;
+    const financial = await Financial.findOne({ doctorId: clinicOwnerId });
+    if (!financial) {
+      return res.status(404).json({ message: 'لم يتم العثور على البيانات المالية' });
+    }
+
+    const transaction = financial.transactions.id(transactionId);
+    if (!transaction) {
+      return res.status(404).json({ message: 'لم يتم العثور على الدفعة' });
+    }
+    if (transaction.patientId?.toString() !== patientId) {
+      return res.status(403).json({ message: 'هذه الدفعة لا تخص هذا المريض' });
+    }
+    if (transaction.labRequestId || (transaction.labRequestIds && transaction.labRequestIds.length > 0) || transaction.orderId) {
+      return res.status(400).json({ message: 'هذه الدفعة مرتبطة بعملية مركبة ولا يمكن تعديلها من هنا' });
+    }
+
+    const oldAmount = transaction.amount || 0;
+    const diff = newAmount - oldAmount;
+
+    transaction.amount = newAmount;
+    if (description !== undefined) transaction.description = description;
+    if (paymentMethod) transaction.paymentMethod = paymentMethod;
+    transaction.lastEditedBy = accountantId;
+    transaction.lastEditedAt = new Date();
+    financial.totalEarnings = (financial.totalEarnings || 0) + diff;
+
+    if (transaction.appointmentId) {
+      const appointment = await Appointment.findById(transaction.appointmentId);
+      if (appointment) {
+        const totalFee = (appointment.doctorFee || 0) + (appointment.clinicFee || appointment.appointmentFee || 0);
+        appointment.paymentAmount = newAmount;
+        appointment.debt = Math.max(0, totalFee - newAmount);
+        appointment.isPaid = appointment.debt <= 0;
+        appointment.debtStatus = appointment.debt > 0 ? (newAmount > 0 ? 'partial' : 'full') : 'none';
+        if (appointment.isPaid && !appointment.paidAt) appointment.paidAt = new Date();
+        await appointment.save();
+      }
+    }
+
+    if (transaction.appointmentIds && transaction.appointmentIds.length > 0) {
+      const appointments = await Appointment.find({
+        _id: { $in: transaction.appointmentIds }
+      }).sort({ appointmentDateTime: 1 });
+
+      let remainingPayment = newAmount + (transaction.discount || 0);
+      for (const appointment of appointments) {
+        const totalFee = (appointment.doctorFee || 0) + (appointment.clinicFee || appointment.appointmentFee || 0);
+        const paidForAppointment = Math.max(0, Math.min(remainingPayment, totalFee));
+        remainingPayment = Math.max(0, remainingPayment - paidForAppointment);
+        const remainingDebt = Math.max(0, totalFee - paidForAppointment);
+
+        appointment.paymentAmount = paidForAppointment;
+        appointment.debt = remainingDebt;
+        appointment.isPaid = remainingDebt <= 0;
+        appointment.debtStatus = remainingDebt > 0 ? (paidForAppointment > 0 ? 'partial' : 'full') : 'none';
+        if (appointment.isPaid && !appointment.paidAt) appointment.paidAt = new Date();
+        await appointment.save();
+
+        const existingDebt = (financial.debts || []).find((debt) =>
+          debt.patientId?.toString() === patientId &&
+          debt.appointmentId?.toString() === appointment._id.toString()
+        );
+
+        if (remainingDebt > 0) {
+          if (existingDebt) {
+            existingDebt.amount = remainingDebt;
+            existingDebt.status = 'pending';
+            existingDebt.paidAt = undefined;
+          } else {
+            financial.debts.push({
+              patientId: appointment.patient,
+              doctorId: appointment.doctorId,
+              appointmentId: appointment._id,
+              amount: remainingDebt,
+              description: `دين موعد - ${appointment.reason || 'كشف'}`,
+              date: new Date(),
+              status: 'pending'
+            });
+          }
+        } else if (existingDebt) {
+          existingDebt.amount = 0;
+          existingDebt.status = 'paid';
+          existingDebt.paidAt = new Date();
+        }
+      }
+      financial.markModified('debts');
+    }
+
+    financial.markModified('transactions');
+    await financial.save();
+
+    const accountant = await User.findById(accountantId).select('fullName');
+    res.status(200).json({
+      success: true,
+      message: 'تم تعديل الدفعة بنجاح',
+      transaction: {
+        _id: transaction._id,
+        amount: transaction.amount,
+        description: transaction.description,
+        date: transaction.date,
+        paymentMethod: transaction.paymentMethod,
+        lastEditedBy: { _id: accountantId, fullName: accountant?.fullName },
+        lastEditedAt: transaction.lastEditedAt
+      }
+    });
+  } catch (error) {
+    console.error('Error editing patient payment:', error);
+    res.status(500).json({ message: 'فشل في تعديل الدفعة', error: error.message });
+  }
+};
+
 // Edit a payment transaction
 exports.editPayment = async (req, res) => {
   try {
@@ -3987,6 +4209,11 @@ exports.editPayment = async (req, res) => {
     const transaction = financial.transactions.id(transactionId);
     if (!transaction) {
       return res.status(404).json({ message: 'لم يتم العثور على الدفعة' });
+    }
+    if (isProtectedFinancialTransaction(transaction)) {
+      return res.status(400).json({
+        message: 'لا يمكن تعديل دفعة مرتبطة بمريض أو موعد أو مختبر من هنا. استخدم شاشة الدين/الموعد المرتبطة حتى تبقى الحسابات متوازنة.'
+      });
     }
 
     // Adjust totalEarnings based on amount change
@@ -4051,6 +4278,11 @@ exports.deletePayment = async (req, res) => {
     const transaction = financial.transactions.id(transactionId);
     if (!transaction) {
       return res.status(404).json({ message: 'لم يتم العثور على الدفعة' });
+    }
+    if (isProtectedFinancialTransaction(transaction)) {
+      return res.status(400).json({
+        message: 'لا يمكن حذف دفعة مرتبطة بمريض أو موعد أو مختبر من هنا. يجب عكس العملية من المصدر المرتبط.'
+      });
     }
 
     // Reverse totalEarnings
@@ -4223,6 +4455,10 @@ exports.getInvoices = async (req, res) => {
             specialty: doctor.specialty
           } : null,
           appointmentId: t.appointmentId || null,
+          appointmentIds: t.appointmentIds || [],
+          labRequestId: t.labRequestId || null,
+          labRequestIds: t.labRequestIds || [],
+          isEditable: !isProtectedFinancialTransaction(t),
           invoiceNo: t._id.toString().slice(-8).toUpperCase(),
           isEdited: !!t.lastEditedBy,
           lastEditedBy: editor ? { _id: editor._id, fullName: editor.fullName } : null,
@@ -4324,14 +4560,15 @@ exports.editDebt = async (req, res) => {
         }
       }
       if (labReq) {
-        labReq.totalCost = debt.amount;
         if (debt.status === 'paid') {
           labReq.isPaid = true;
-          labReq.paidAmount = debt.originalAmount || debt.amount;
+          labReq.paidAmount = labReq.totalCost || labReq.originalCost || debt.originalAmount || debt.amount;
           labReq.paidAt = new Date();
+        } else if (!labReq.paidAmount) {
+          labReq.totalCost = debt.amount;
         }
         await labReq.save();
-        console.log(`✅ Synced LabRequest ${labReq._id} totalCost to ${debt.amount}`);
+        console.log(`✅ Synced LabRequest ${labReq._id} on debt edit`);
       }
     } catch (labErr) {
       console.error('Error syncing LabRequest on debt edit:', labErr);
