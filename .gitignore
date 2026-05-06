@@ -11,4 +11,6 @@ uploads/
 *.xls
 service-account.json.json
 baileys_auth.json
+gen-lang-client-*.json
+*-credentials.json
 0
