@@ -16,6 +16,7 @@ const pharmaciesRoutes = require('./routes/pharmacies');
 const appointmentsRouter = require('./routes/appointments')
 const patientRoutes = require('./routes/patientRoutes');
 const orderRoutes = require('./routes/orderRoutes');
+const addressRoutes = require('./routes/addressRoutes');
 const userSettingsRoutes = require('./routes/Settings');
 const settingsRoutes = require('./routes/settingsRoutes');
 const friendRequestsRoutes = require('./routes/friendRequests');
@@ -146,6 +147,7 @@ app.use('/api/profile', profileRoutes);
 app.use('/api/doctors', doctorsRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/orders', require('./routes/orders')); // Add new orders route
+app.use('/api/addresses', addressRoutes);
 app.use('/uploads', express.static('uploads'));
 app.use('/api/users', usersRoutes);
 app.use('/api/user', userRoutes);

@@ -8,6 +8,7 @@ const PharmacyInventory = require('../models/PharmacyInventory');
 const Order = require('../models/Order');
 const Financial = require('../models/Financial');
 const PharmacyFinancial = require('../models/PharmacyFinancial');
+const orderController = require('../controllers/orderController');
 
 // GET /api/orders/patient/:patientId - Get patient orders
 router.get('/patient/:patientId', async (req, res) => {
@@ -241,70 +242,7 @@ router.post('/pos', auth, async (req, res) => {
 });
 
 // PUT /api/orders/:orderId/status - Update order status
-router.put('/:orderId/status', async (req, res) => {
-  try {
-    const { orderId } = req.params;
-    const { status } = req.body;
-
-    const order = await Order.findById(orderId);
-
-    if (!order) {
-      return res.status(404).json({ message: 'Order not found' });
-    }
-
-    const previousStatus = order.status;
-    order.status = status;
-    await order.save();
-
-    // If order is being accepted (confirmed), record revenue
-    if (status === 'accepted' && previousStatus !== 'accepted') {
-
-      try {
-        const PharmacyFinancial = require('../models/PharmacyFinancial');
-        let financial = await PharmacyFinancial.findOne({ pharmacyId: order.pharmacyId });
-
-        if (!financial) {
-          financial = new PharmacyFinancial({ pharmacyId: order.pharmacyId });
-        }
-
-        // Check if this order revenue is already recorded
-        const existingTransaction = financial.transactions.find(
-          t => t.relatedId && t.relatedId.toString() === order._id.toString()
-        );
-
-        if (!existingTransaction) {
-          // Record order revenue
-          financial.transactions.push({
-            transactionId: new mongoose.Types.ObjectId(),
-            type: 'income',
-            category: 'order',
-            amount: order.total,
-            description: `Order #${order._id.toString().slice(-6)} confirmed`,
-            relatedId: order._id,
-            relatedModel: 'Order',
-            reference: order._id.toString(),
-            paymentMethod: 'Cash', // Default, can be updated
-            status: 'completed',
-            date: new Date(),
-          });
-
-          financial.totalRevenue += order.total;
-          financial.monthlyRevenue += order.total;
-          financial.accountBalance += order.total;
-          await financial.save();
-        }
-      } catch (financialError) {
-        console.error('Failed to record order revenue:', financialError);
-        // Don't fail the order update if financial recording fails
-      }
-    }
-
-    res.json({ success: true, message: 'Order status updated', order });
-  } catch (error) {
-    console.error('Error updating order status:', error);
-    res.status(500).json({ message: 'Server error updating order status' });
-  }
-});
+router.put('/:orderId/status', orderController.updateOrderStatus);
 
 // PUT /api/orders/:orderId/complete - Complete order with payment method
 router.put('/:orderId/complete', async (req, res) => {

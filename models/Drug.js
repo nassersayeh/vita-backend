@@ -5,6 +5,13 @@ const DrugSchema = new mongoose.Schema({
   name: { type: String, required: true },
   genericName: { type: String },
   description: { type: String },
+  imageUrl: { type: String },
+  imageSourceUrl: { type: String },
+  externalDescription: { type: String },
+  metadataStatus: { type: String, enum: ['pending', 'fetched', 'not_found', 'error'], default: 'pending' },
+  metadataError: { type: String },
+  metadataSource: { type: String },
+  metadataFetchedAt: { type: Date },
   category: { type: String },
   manufacturer: { type: String },
   dosageForm: { type: String }, // tablet, capsule, syrup, injection, etc.

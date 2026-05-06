@@ -1,5 +1,6 @@
 
 // controllers/orderController.js
+const mongoose = require('mongoose');
 const Order = require('../models/Order');
 const Product = require('../models/Product');
 const PharmacyInventory = require('../models/PharmacyInventory');
@@ -12,11 +13,29 @@ const { sendWhatsAppMessage } = require('../services/whatsappService');
 
 exports.createOrder = async (req, res) => {
   try {
-    const { pharmacyId, user, items, total, status, orderType, prescriptionId, prescriptionImage, prescriptionNotes } = req.body;
+    const {
+      pharmacyId,
+      city,
+      user,
+      items,
+      total,
+      status,
+      orderType,
+      prescriptionId,
+      prescriptionImage,
+      prescriptionNotes,
+      paymentMethod,
+      deliveryMethod,
+      deliveryAddress
+    } = req.body;
     console.log('Received request body:', req.body);
 
-    if (!pharmacyId || !user || !items || !total) {
-      return res.status(400).json({ message: 'Missing required order fields (pharmacyId, user, items, or total).' });
+    if (!user || !items || total === undefined || total === null) {
+      return res.status(400).json({ message: 'Missing required order fields (user, items, or total).' });
+    }
+
+    if (!pharmacyId && !city) {
+      return res.status(400).json({ message: 'City is required for admin medicine orders.' });
     }
 
     if (!Array.isArray(items) || items.length === 0) {
@@ -73,7 +92,7 @@ exports.createOrder = async (req, res) => {
 
         console.log('mathched : '+item.prescriptionDetails.products)
         for (const product of item.prescriptionDetails.products) {
-          const matchedProduct = await Product.findOne({ name: product.name, pharmacyId });
+          const matchedProduct = pharmacyId ? await Product.findOne({ name: product.name, pharmacyId }) : null;
           processedItems.push({
             onModel: 'Product', // Treat as Product to link with store
             item: matchedProduct ? matchedProduct._id : null,
@@ -99,7 +118,8 @@ exports.createOrder = async (req, res) => {
 
     const finalTotal = Number(total);
     const newOrder = new Order({
-      pharmacyId,
+      pharmacyId: pharmacyId || null,
+      city: city || deliveryAddress?.city || '',
       user,
       items: processedItems,
       total: finalTotal,
@@ -107,7 +127,10 @@ exports.createOrder = async (req, res) => {
       orderType: orderType || 'manual',
       prescriptionId: prescriptionId || null,
       prescriptionImage: prescriptionImage || null,
-      prescriptionNotes: prescriptionNotes || ''
+      prescriptionNotes: prescriptionNotes || '',
+      paymentMethod: paymentMethod || 'Cash',
+      deliveryMethod: deliveryMethod || 'pickup',
+      deliveryAddress: deliveryAddress || null
     });
     await newOrder.save();
     console.log('Saved order:', newOrder);
@@ -166,17 +189,50 @@ exports.createOrder = async (req, res) => {
     }
 
     console.log('Creating notification with patient name:', patientName);
-    await Notification.create({
-      user: pharmacyId,
-      type: 'order',
-      message: `لديك طلب جديد من المستخدم ${patientName}`,
-      relatedId: newOrder._id
-    });
+    if (pharmacyId) {
+      await Notification.create({
+        user: pharmacyId,
+        type: 'order',
+        message: `لديك طلب جديد من المستخدم ${patientName}`,
+        relatedId: newOrder._id
+      });
+    } else {
+      const admins = await User.find({ role: { $in: ['Admin', 'Superadmin'] } }).select('_id').lean();
+      if (admins.length > 0) {
+        await Notification.insertMany(admins.map(admin => ({
+          user: admin._id,
+          type: 'order',
+          message: `طلب أدوية جديد من ${patientName}${city ? ` - ${city}` : ''}`,
+          relatedId: newOrder._id
+        })));
+      }
+    }
 
     res.status(201).json({ message: 'تم إنشاء الطلب بنجاح', order: newOrder });
   } catch (err) {
     console.error('Error creating order:', err);
     res.status(500).json({ message: 'خطأ في الخادم أثناء إنشاء الطلب.', error: err.message });
+  }
+};
+
+exports.getAdminOrders = async (req, res) => {
+  try {
+    const orders = await Order.find({
+      $or: [
+        { pharmacyId: null },
+        { pharmacyId: { $exists: false } }
+      ]
+    })
+      .populate('user', 'fullName email mobileNumber idNumber city address')
+      .sort({ createdAt: -1 })
+      .limit(200)
+      .lean()
+      .exec();
+
+    res.json({ orders });
+  } catch (err) {
+    console.error('Error fetching admin orders:', err);
+    res.status(500).json({ message: 'Server error fetching admin orders.' });
   }
 };
 
@@ -310,10 +366,14 @@ exports.updateOrderStatus = async (req, res) => {
 
     // Validate status transitions
     const validTransitions = {
-      'pending': ['accepted', 'declined'],
-      'accepted': ['preparing'],
-      'preparing': ['ready'],
-      'ready': ['delivered']
+      pending: ['accepted', 'declined', 'cancelled'],
+      accepted: ['preparing', 'ready', 'delivery_assigned', 'cancelled'],
+      preparing: ['ready', 'delivery_assigned', 'cancelled'],
+      ready: ['delivery_assigned', 'shipped', 'delivered', 'cancelled'],
+      delivery_assigned: ['shipped', 'delivered', 'cancelled'],
+      shipped: ['delivered', 'cancelled'],
+      delivered: ['completed', 'cancelled'],
+      completed: [],
     };
 
     if (!validTransitions[order.status] || !validTransitions[order.status].includes(status)) {
@@ -324,15 +384,57 @@ exports.updateOrderStatus = async (req, res) => {
 
     const previousStatus = order.status;
     order.status = status;
+
+    // Update status timestamp based on new status
+    const now = new Date();
+    if (status === 'accepted') {
+      order.acceptedAt = now;
+    } else if (status === 'preparing') {
+      order.preparingStartedAt = now;
+    } else if (status === 'delivery_assigned') {
+      order.deliveryAssignedAt = now;
+    } else if (status === 'shipped') {
+      order.shippedAt = now;
+    } else if (status === 'delivered') {
+      order.deliveredAt = now;
+    }
+
+    // Add to statusHistory for audit trail
+    if (!order.statusHistory) {
+      order.statusHistory = [];
+    }
+    
+    // Determine who changed the status
+    let changedBy = null;
+    if (req.user?._id) {
+      changedBy = req.user._id;
+    } else if (req.body.changedBy && typeof req.body.changedBy === 'string' && req.body.changedBy.match(/^[0-9a-fA-F]{24}$/)) {
+      // Valid ObjectId format
+      changedBy = req.body.changedBy;
+    } else if (mongoose.Types.ObjectId.isValid(req.body.changedBy)) {
+      changedBy = req.body.changedBy;
+    } else {
+      // Default to null if no valid user ID is provided
+      changedBy = null;
+    }
+    
+    order.statusHistory.push({
+      status: status,
+      changedAt: now,
+      changedBy: changedBy,
+      notes: req.body.notes || null
+    });
+
     await order.save();
 
     // Get pharmacy details for notifications
-    const pharmacyAccount = await User.findById(order.pharmacyId);
+    const pharmacyAccount = order.pharmacyId ? await User.findById(order.pharmacyId) : null;
+    const isAdminOrder = !order.pharmacyId;
 
     // Handle different status changes
     if (status === 'accepted') {
       // Add to pharmacy revenue
-      try {
+      if (order.pharmacyId) try {
         let financial = await Financial.findOne({ pharmacyId: order.pharmacyId });
         if (!financial) {
           financial = new Financial({ pharmacyId: order.pharmacyId });
@@ -354,57 +456,59 @@ exports.updateOrderStatus = async (req, res) => {
       }
 
       // Decrease product quantities
-      console.log('Processing stock decrease for order items:', JSON.stringify(order.items));
-      for (const item of order.items) {
-        console.log(`Processing item: ${item.name}, onModel: ${item.onModel}, item ref: ${item.item}, quantity: ${item.quantity}`);
+      if (order.pharmacyId) {
+        console.log('Processing stock decrease for order items:', JSON.stringify(order.items));
+        for (const item of order.items) {
+          console.log(`Processing item: ${item.name}, onModel: ${item.onModel}, item ref: ${item.item}, quantity: ${item.quantity}`);
 
-        if (item.onModel === 'Product' && item.quantity > 0) {
-          try {
-            let product = null;
-
-            if (item.item) {
-              product = await Product.findOne({ _id: item.item, pharmacyId: order.pharmacyId });
-            }
-
-            if (!product && item.name) {
-              product = await Product.findOne({ name: item.name, pharmacyId: order.pharmacyId });
-              console.log(`Product not found by ID, searching by name "${item.name}":`, product ? 'Found' : 'Not found');
-            }
-
-            if (product) {
-              const previousAmount = product.amount;
-              if (product.amount < item.quantity) {
-                console.warn(`Insufficient stock for ${product.name} (available: ${product.amount}, requested: ${item.quantity})`);
-              }
-              product.amount = Math.max(0, product.amount - item.quantity);
-              product.totalSold = (product.totalSold || 0) + item.quantity;
-              product.lastSoldDate = new Date();
-              await product.save();
-              console.log(`Product stock decreased for ${product.name}: ${previousAmount} -> ${product.amount}`);
-            } else {
-              console.warn(`Product not found for item: ${item.name} (ID: ${item.item})`);
-            }
-
-            // Update PharmacyInventory
+          if (item.onModel === 'Product' && item.quantity > 0) {
             try {
-              const inventoryItem = await PharmacyInventory.findOne({
-                pharmacyId: order.pharmacyId,
-                drugName: item.name
-              });
+              let product = null;
 
-              if (inventoryItem) {
-                const previousQuantity = inventoryItem.quantity;
-                inventoryItem.quantity = Math.max(0, inventoryItem.quantity - item.quantity);
-                inventoryItem.soldCount = (inventoryItem.soldCount || 0) + item.quantity;
-                inventoryItem.lastSoldDate = new Date();
-                await inventoryItem.save();
-                console.log(`PharmacyInventory stock decreased for ${item.name}: ${previousQuantity} -> ${inventoryItem.quantity}`);
+              if (item.item) {
+                product = await Product.findOne({ _id: item.item, pharmacyId: order.pharmacyId });
               }
-            } catch (inventoryError) {
-              console.error(`Error updating PharmacyInventory for item ${item.name}:`, inventoryError);
+
+              if (!product && item.name) {
+                product = await Product.findOne({ name: item.name, pharmacyId: order.pharmacyId });
+                console.log(`Product not found by ID, searching by name "${item.name}":`, product ? 'Found' : 'Not found');
+              }
+
+              if (product) {
+                const previousAmount = product.amount;
+                if (product.amount < item.quantity) {
+                  console.warn(`Insufficient stock for ${product.name} (available: ${product.amount}, requested: ${item.quantity})`);
+                }
+                product.amount = Math.max(0, product.amount - item.quantity);
+                product.totalSold = (product.totalSold || 0) + item.quantity;
+                product.lastSoldDate = new Date();
+                await product.save();
+                console.log(`Product stock decreased for ${product.name}: ${previousAmount} -> ${product.amount}`);
+              } else {
+                console.warn(`Product not found for item: ${item.name} (ID: ${item.item})`);
+              }
+
+              // Update PharmacyInventory
+              try {
+                const inventoryItem = await PharmacyInventory.findOne({
+                  pharmacyId: order.pharmacyId,
+                  drugName: item.name
+                });
+
+                if (inventoryItem) {
+                  const previousQuantity = inventoryItem.quantity;
+                  inventoryItem.quantity = Math.max(0, inventoryItem.quantity - item.quantity);
+                  inventoryItem.soldCount = (inventoryItem.soldCount || 0) + item.quantity;
+                  inventoryItem.lastSoldDate = new Date();
+                  await inventoryItem.save();
+                  console.log(`PharmacyInventory stock decreased for ${item.name}: ${previousQuantity} -> ${inventoryItem.quantity}`);
+                }
+              } catch (inventoryError) {
+                console.error(`Error updating PharmacyInventory for item ${item.name}:`, inventoryError);
+              }
+            } catch (productError) {
+              console.error(`Error updating product stock for item ${item.name}:`, productError);
             }
-          } catch (productError) {
-            console.error(`Error updating product stock for item ${item.name}:`, productError);
           }
         }
       }
@@ -412,7 +516,8 @@ exports.updateOrderStatus = async (req, res) => {
       // Send WhatsApp message for accepted order
       if (order.user?.mobileNumber) {
         try {
-          const message = `🎉 *مرحباً ${order.user.fullName || 'عميلنا العزيز'}*\n\nتم قبول طلبك من ${pharmacyAccount?.fullName || 'الصيدلية'}!\n\nرقم الطلب: #${orderId.slice(-6)}\n\nسنبدأ بتحضير طلبك قريباً. شكراً لثقتك بنا!`;
+          const sourceName = isAdminOrder ? 'إدارة Vita' : (pharmacyAccount?.fullName || 'الصيدلية');
+          const message = `مرحباً ${order.user.fullName || 'عميلنا العزيز'}\n\nتم قبول طلبك من ${sourceName}.\n\nرقم الطلب: #${orderId.slice(-6)}\n\nسنبدأ بتحضير طلبك قريباً.`;
           await sendWhatsAppMessage(order.user.mobileNumber, message);
           console.log('WhatsApp message sent for accepted order');
         } catch (whatsappError) {
@@ -424,7 +529,7 @@ exports.updateOrderStatus = async (req, res) => {
       await Notification.create({
         user: order.user._id,
         type: 'order',
-        message: `تم قبول طلبك من ${pharmacyAccount?.fullName || 'الصيدلية'}`,
+        message: `تم قبول طلبك رقم #${orderId.slice(-6)}`,
         relatedId: order._id
       });
 
@@ -457,7 +562,8 @@ exports.updateOrderStatus = async (req, res) => {
             itemsList += `${index + 1}. ${item.name} - ${item.quantity} × ${item.price}₪\n`;
           });
 
-          const message = `✅ *طلبك جاهز للاستلام!*\n\n${order.user.fullName || 'عميلنا العزيز'}، طلبك رقم #${orderId.slice(-6)} جاهز!\n\n📋 *تفاصيل الطلب:*\n${itemsList}\n💰 *المجموع:* ${order.total}₪\n\nشكراً لشرائك من ${pharmacyAccount?.fullName || 'صيدلتنا'}!\n\nيرجى التوجه لاستلام طلبك.`;
+          const sourceName = isAdminOrder ? 'Vita' : (pharmacyAccount?.fullName || 'صيدلتنا');
+          const message = `طلبك جاهز للاستلام!\n\n${order.user.fullName || 'عميلنا العزيز'}، طلبك رقم #${orderId.slice(-6)} جاهز.\n\nتفاصيل الطلب:\n${itemsList}\nالمجموع: ${order.total}₪\n\nشكراً لشرائك من ${sourceName}.`;
           await sendWhatsAppMessage(order.user.mobileNumber, message);
           console.log('WhatsApp message sent for ready order');
         } catch (whatsappError) {
@@ -470,6 +576,19 @@ exports.updateOrderStatus = async (req, res) => {
         user: order.user._id,
         type: 'order',
         message: `طلبك رقم #${orderId.slice(-6)} جاهز للاستلام`,
+        relatedId: order._id
+      });
+    } else if (status === 'delivered' || status === 'completed' || status === 'cancelled' || status === 'declined') {
+      const statusMessages = {
+        delivered: `تم تسليم طلبك رقم #${orderId.slice(-6)}`,
+        completed: `تم إكمال طلبك رقم #${orderId.slice(-6)}`,
+        cancelled: `تم إلغاء طلبك رقم #${orderId.slice(-6)}`,
+        declined: `تعذر قبول طلبك رقم #${orderId.slice(-6)}`,
+      };
+      await Notification.create({
+        user: order.user._id,
+        type: 'order',
+        message: statusMessages[status],
         relatedId: order._id
       });
     }

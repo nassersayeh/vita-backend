@@ -4,6 +4,15 @@
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || 'YOUR_GEMINI_API_KEY';
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 
+function getMimeAndData(fileData) {
+  if (!fileData) return { mimeType: 'application/octet-stream', fileBase64: '' };
+  const dataUrlMatch = String(fileData).match(/^data:([^;]+);base64,(.+)$/);
+  if (dataUrlMatch) {
+    return { mimeType: dataUrlMatch[1], fileBase64: dataUrlMatch[2] };
+  }
+  return { mimeType: 'application/octet-stream', fileBase64: fileData };
+}
+
 /**
  * Generate clinical SOAP notes from symptoms and patient info
  * @param {Object} params - Input parameters
@@ -1719,6 +1728,103 @@ Response style:
   }
 }
 
+async function extractPrescriptionMedications({
+  fileData,
+  language = 'ar'
+}) {
+  const { mimeType, fileBase64 } = getMimeAndData(fileData);
+  if (!fileBase64) {
+    throw new Error('Prescription file data is required');
+  }
+  if (!GEMINI_API_KEY || GEMINI_API_KEY === 'YOUR_GEMINI_API_KEY') {
+    throw new Error('AI service is not configured');
+  }
+
+  const prompt = `
+You are a prescription OCR and medication extraction engine.
+Read the attached prescription. It may be a system-generated prescription, a scanned paper prescription, or a phone photo.
+
+Return ONLY valid JSON. Do not include markdown.
+Extract medication names as written and normalize obvious OCR mistakes only when confident.
+Do not invent medicines. If handwriting is unclear, include the item with confidence below 0.5 and a note.
+
+JSON shape:
+{
+  "medications": [
+    {
+      "name": "medicine brand or generic name",
+      "strength": "e.g. 500mg, 5ml, 20 mg/ml, or empty",
+      "dosageForm": "tablet | capsule | syrup | injection | drops | cream | inhaler | unknown",
+      "quantity": 1,
+      "instructions": "short dosing instructions if visible",
+      "confidence": 0.0
+    }
+  ],
+  "patientName": "",
+  "doctorName": "",
+  "prescriptionDate": "",
+  "notes": ""
+}`;
+
+  const response = await fetch(`${GEMINI_API_URL}?key=${GEMINI_API_KEY}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      contents: [{
+        parts: [
+          { text: prompt },
+          {
+            inline_data: {
+              mime_type: mimeType,
+              data: fileBase64
+            }
+          }
+        ]
+      }],
+      generationConfig: {
+        temperature: 0.1,
+        topK: 20,
+        topP: 0.8,
+        maxOutputTokens: 2048,
+      }
+    })
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.error?.message || 'Failed to analyze prescription');
+  }
+
+  const data = await response.json();
+  const generatedText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  const jsonMatch = generatedText.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) {
+    return {
+      medications: [],
+      patientName: '',
+      doctorName: '',
+      prescriptionDate: '',
+      notes: language === 'ar' ? 'لم يتم التعرف على أدوية بوضوح' : 'No clear medications detected'
+    };
+  }
+
+  const parsed = JSON.parse(jsonMatch[0]);
+  return {
+    medications: Array.isArray(parsed.medications) ? parsed.medications.map((med) => ({
+      name: String(med.name || '').trim(),
+      strength: String(med.strength || '').trim(),
+      dosageForm: String(med.dosageForm || 'unknown').trim(),
+      quantity: Math.max(1, Number(med.quantity) || 1),
+      instructions: String(med.instructions || '').trim(),
+      confidence: Math.max(0, Math.min(1, Number(med.confidence) || 0))
+    })).filter((med) => med.name) : [],
+    patientName: parsed.patientName || '',
+    doctorName: parsed.doctorName || '',
+    prescriptionDate: parsed.prescriptionDate || '',
+    notes: parsed.notes || ''
+  };
+}
+
 module.exports = {
   generateClinicalNotes,
   checkDrugInteractions,
@@ -1729,5 +1835,6 @@ module.exports = {
   doctorAssistantChat,
   doctorAssistantAnalyzeFile,
   pharmacyDrugCheck,
-  pharmacyAssistantChat
+  pharmacyAssistantChat,
+  extractPrescriptionMedications
 };

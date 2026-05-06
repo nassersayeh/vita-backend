@@ -1,6 +1,27 @@
 const express = require('express');
 const router = express.Router();
 const Drug = require('../models/Drug');
+const multer = require('multer');
+const fs = require('fs');
+const path = require('path');
+
+const drugImageDir = path.join(process.cwd(), 'uploads', 'drugs');
+fs.mkdirSync(drugImageDir, { recursive: true });
+
+const drugImageUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, drugImageDir),
+    filename: (req, file, cb) => {
+      const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+      cb(null, `${uniqueSuffix}${path.extname(file.originalname)}`);
+    }
+  }),
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype?.startsWith('image/')) return cb(null, true);
+    cb(new Error('Only image files are allowed'), false);
+  },
+  limits: { fileSize: 5 * 1024 * 1024 }
+});
 
 // Arabic to Latin transliteration — produces a regex pattern
 // that accounts for common ambiguities (ب→b/p, ف→f/v/ph, etc.)
@@ -94,6 +115,7 @@ router.post('/', async (req, res) => {
       name,
       genericName,
       description,
+      imageUrl,
       category,
       manufacturer,
       dosageForm,
@@ -118,6 +140,11 @@ router.post('/', async (req, res) => {
       name,
       genericName,
       description,
+      imageUrl: imageUrl || '',
+      imageSourceUrl: '',
+      externalDescription: '',
+      metadataStatus: imageUrl ? 'fetched' : 'pending',
+      metadataSource: imageUrl ? 'manual' : '',
       category,
       manufacturer,
       dosageForm,
@@ -139,9 +166,18 @@ router.post('/', async (req, res) => {
 // Update drug
 router.put('/:drugId', async (req, res) => {
   try {
+    const updates = { ...req.body };
+    if (updates.imageUrl) {
+      updates.imageSourceUrl = '';
+      updates.externalDescription = '';
+      updates.metadataStatus = 'fetched';
+      updates.metadataSource = 'manual';
+      updates.metadataError = '';
+      updates.metadataFetchedAt = new Date();
+    }
     const drug = await Drug.findByIdAndUpdate(
       req.params.drugId,
-      { $set: req.body },
+      { $set: updates },
       { new: true }
     );
 
@@ -188,7 +224,7 @@ router.get('/popular', async (req, res) => {
     const skip = (parseInt(page) - 1) * parseInt(limit);
     
     const drugs = await Drug.find({ isActive: true, unitSellingPrice: { $gt: 0 } })
-      .select('name genericName unitSellingPrice barcode')
+      .select('name genericName unitSellingPrice barcode imageUrl imageSourceUrl description externalDescription metadataStatus metadataSource metadataFetchedAt')
       .sort({ name: 1 })
       .skip(skip)
       .limit(parseInt(limit));
@@ -238,7 +274,7 @@ router.get('/search/quick', async (req, res) => {
       isActive: true,
       $or: searchConditions
     })
-    .select('name genericName category manufacturer unitSellingPrice barcode')
+    .select('name genericName category manufacturer unitSellingPrice barcode imageUrl imageSourceUrl description externalDescription metadataStatus metadataSource metadataFetchedAt')
     .sort({ name: 1 })
     .limit(parseInt(limit));
 
@@ -246,6 +282,67 @@ router.get('/search/quick', async (req, res) => {
   } catch (error) {
     console.error('Quick search error:', error);
     res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Return manually stored drug images/descriptions only. External image fetching is disabled.
+router.post('/metadata/batch', async (req, res) => {
+  try {
+    const { drugIds = [] } = req.body;
+    const ids = Array.isArray(drugIds) ? drugIds.slice(0, 20) : [];
+    if (ids.length === 0) {
+      return res.json({ drugs: [] });
+    }
+
+    const drugs = await Drug.find({ _id: { $in: ids }, isActive: true });
+
+    res.json({
+      drugs: drugs.map((drug) => ({
+        _id: drug._id,
+        imageUrl: drug.metadataSource === 'manual' ? (drug.imageUrl || '') : '',
+        imageSourceUrl: drug.imageSourceUrl || '',
+        description: drug.description || '',
+        externalDescription: '',
+        metadataStatus: drug.metadataSource === 'manual' && drug.imageUrl ? 'fetched' : 'pending',
+        metadataError: '',
+        metadataSource: drug.metadataSource === 'manual' && drug.imageUrl ? 'manual' : '',
+        metadataFetchedAt: drug.metadataFetchedAt || null
+      }))
+    });
+  } catch (error) {
+    console.error('Drug metadata batch error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+router.post('/:drugId/image', drugImageUpload.single('image'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: 'لم يتم رفع صورة' });
+    }
+
+    const drug = await Drug.findById(req.params.drugId);
+    if (!drug) {
+      return res.status(404).json({ message: 'Drug not found' });
+    }
+
+    drug.imageUrl = `${req.protocol}://${req.get('host')}/uploads/drugs/${req.file.filename}`;
+    drug.imageSourceUrl = '';
+    drug.externalDescription = '';
+    drug.metadataStatus = 'fetched';
+    drug.metadataSource = 'manual';
+    drug.metadataError = '';
+    drug.metadataFetchedAt = new Date();
+    await drug.save();
+
+    res.json({
+      success: true,
+      drug,
+      imageUrl: drug.imageUrl
+    });
+  } catch (error) {
+    console.error('Upload drug image error:', error);
+    res.status(500).json({ message: 'فشل في رفع صورة الدواء', error: error.message });
   }
 });
 

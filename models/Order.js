@@ -34,15 +34,32 @@ const ItemSchema = new mongoose.Schema({
 
 const OrderSchema = new mongoose.Schema({
   user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-  pharmacyId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  pharmacyId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  city: { type: String, trim: true },
   items: { type: [ItemSchema], default: [] },
   total: { type: Number, required: true },
   subtotal: { type: Number },
   taxAmount: { type: Number, default: 0 },
   vatApplied: { type: Boolean, default: false },
   vatRate: { type: Number, default: 0 },
-  status: { type: String, enum: ['pending', 'accepted', 'declined', 'preparing', 'ready', 'delivered', 'completed', 'cancelled', 'paid'], default: 'pending' },
-  paymentMethod: { type: String, enum: ['Cash', 'Card', 'Insurance'], default: 'Cash' },
+  status: { type: String, enum: ['pending', 'accepted', 'declined', 'preparing', 'ready', 'delivery_assigned', 'shipped', 'delivered', 'completed', 'cancelled', 'paid'], default: 'pending' },
+  // Status tracking timestamps
+  acceptedAt: { type: Date },
+  preparingStartedAt: { type: Date },
+  deliveryAssignedAt: { type: Date },
+  shippedAt: { type: Date },
+  deliveredAt: { type: Date },
+  // Status history for audit trail
+  statusHistory: [{
+    status: String,
+    changedAt: { type: Date, default: Date.now },
+    changedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    notes: String
+  }],
+  // Delivery assignment info
+  assignedDeliveryPerson: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  trackingNumber: String,
+  paymentMethod: { type: String, enum: ['Cash', 'Card', 'Insurance', 'ReflectVisa'], default: 'Cash' },
   insuranceCompany: { type: String },
   // New fields for prescription handling
   orderType: { type: String, enum: ['prescription', 'upload', 'manual'], default: 'manual' },
