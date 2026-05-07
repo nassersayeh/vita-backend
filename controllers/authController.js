@@ -23,12 +23,17 @@ const countryMapping = {
 
 exports.signup = async (req, res) => {
   try {
-    const { profileImage, fullName, username, birthdate, mobile, password, country, city, idNumber, address, sex, role, email } = req.body;
+    const { profileImage, fullName, username, birthdate, mobile, password, country, city, idNumber, address, sex, role, email, termsAccepted } = req.body;
     
     // Normalize email - treat empty string as undefined
     const normalizedEmail = email && email.trim() ? email.trim() : undefined;
     // Normalize username - treat empty string as undefined
     const normalizedUsername = username && username.trim() ? username.trim() : undefined;
+    
+    // Check if terms are accepted
+    if (!termsAccepted) {
+      return res.status(400).json({ message: 'You must accept the Terms and Conditions to register.' });
+    }
     
     // Basic validations
     if (!fullName || !mobile || !password || !country || !city || !idNumber || !role) {
@@ -86,6 +91,10 @@ exports.signup = async (req, res) => {
       isPhoneVerified: false, // Not verified yet
       phoneVerificationCode: verificationCode,
       phoneVerificationCodeExpiration: verificationCodeExpiration,
+      // Terms and Conditions
+      termsAccepted: true,
+      termsAcceptedAt: new Date(),
+      termsVersion: '1.0',
       // Add default workplace for doctors
       workplaces: role === 'Doctor' ? [{
         name: `${fullName}'s Clinic`,

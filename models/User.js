@@ -203,6 +203,11 @@ const UserSchema = new mongoose.Schema({
     createdAt: { type: Date, default: Date.now },
   }],
   
+  // Terms and Conditions
+  termsAccepted: { type: Boolean, default: false },
+  termsAcceptedAt: { type: Date, default: null },
+  termsVersion: { type: String, default: '1.0' }, // For tracking which version was accepted
+  
   createdAt: { type: Date, default: Date.now },
 });
 

@@ -11,6 +11,34 @@ router.post('/verify-code', authController.verifyCode);
 router.post('/verify-phone', authController.verifyPhone);
 router.post('/resend-verification', authController.resendVerificationCode);
 
+// Accept Terms and Conditions
+router.put('/:id/accept-terms', async (req, res) => {
+  try {
+    const User = require('../models/User');
+    const user = await User.findById(req.params.id);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    user.termsAccepted = true;
+    user.termsAcceptedAt = new Date();
+    user.termsVersion = '1.0';
+    await user.save();
+    
+    res.json({
+      success: true,
+      message: 'Terms and Conditions accepted',
+      user: {
+        _id: user._id,
+        termsAccepted: user.termsAccepted,
+        termsAcceptedAt: user.termsAcceptedAt
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
 router.put('/:id/saved-card', async (req, res) => {
   try {
     const User = require('../models/User');
