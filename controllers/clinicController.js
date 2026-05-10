@@ -374,20 +374,39 @@ exports.getAllPatients = async (req, res) => {
       .skip(skip)
       .limit(limitNum);
     
-    // Calculate debts for these patients
+    // Calculate appointment debts for these patients
     const pagePatientIds = patientDocs.map(p => p._id);
     const appointmentDebts = await Appointment.aggregate([
       { $match: { doctorId: { $in: doctorIds }, patient: { $in: pagePatientIds }, debt: { $gt: 0 } } },
       { $group: { _id: '$patient', totalDebt: { $sum: '$debt' } } }
     ]).catch(() => []);
     
-    const debtMap = {};
-    appointmentDebts.forEach(d => { debtMap[d._id.toString()] = d.totalDebt; });
+    const appointmentDebtMap = {};
+    appointmentDebts.forEach(d => { appointmentDebtMap[d._id.toString()] = d.totalDebt; });
+
+    const ownerFinancial = await Financial.findOne({ doctorId: clinicOwnerId }).lean().catch(() => null);
+    const financialDebtMap = {};
+    const normalDebtMap = {};
+    const patientFundDebtMap = {};
+    for (const debt of (ownerFinancial?.debts || [])) {
+      const pid = debt.patientId?.toString();
+      if (!pid || debt.status === 'paid') continue;
+      const amount = Number(debt.amount) || 0;
+      financialDebtMap[pid] = (financialDebtMap[pid] || 0) + amount;
+      if ((debt.debtType || 'normal') === 'patient_fund') {
+        patientFundDebtMap[pid] = (patientFundDebtMap[pid] || 0) + amount;
+      } else {
+        normalDebtMap[pid] = (normalDebtMap[pid] || 0) + amount;
+      }
+    }
     
     const patients = patientDocs.map(p => ({
       ...p.toObject(),
       doctors: doctorMap[p._id.toString()] || [],
-      totalDebt: debtMap[p._id.toString()] || 0
+      totalDebt: financialDebtMap[p._id.toString()] || appointmentDebtMap[p._id.toString()] || 0,
+      normalDebtTotal: normalDebtMap[p._id.toString()] || 0,
+      patientFundDebtTotal: patientFundDebtMap[p._id.toString()] || 0,
+      appointmentDebtTotal: appointmentDebtMap[p._id.toString()] || 0,
     }));
     
     res.status(200).json({
@@ -734,7 +753,9 @@ exports.completeAppointment = async (req, res) => {
           // Clear patient debt for this appointment
           const patientId = appointment.patient.toString();
           const patientDebts = ownerFinancial.debts.filter(d =>
-            d.patientId?.toString() === patientId && d.status === 'pending'
+            d.patientId?.toString() === patientId &&
+            d.status === 'pending' &&
+            (d.debtType || 'normal') === 'normal'
           );
           let paymentPool = fee;
           patientDebts.sort((a, b) => new Date(a.date) - new Date(b.date));
@@ -907,6 +928,10 @@ exports.getFinancialSummary = async (req, res) => {
     let clinicTotalIncome = 0;
     let clinicExpenses = 0;
     let clinicDebts = 0;
+    let clinicNormalDebts = 0;
+    let clinicPatientFundDebts = 0;
+    let clinicNormalDebtPatients = [];
+    let clinicPatientFundDebtPatients = [];
     const ownerFinancial = financials.find(f => f.doctorId.toString() === clinicOwnerId.toString());
     if (ownerFinancial) {
       // حساب الإيرادات الحقيقية من مجموع المعاملات (بدل totalEarnings اللي ممكن يكون غلط)
@@ -915,6 +940,55 @@ exports.getFinancialSummary = async (req, res) => {
       clinicDebts = (ownerFinancial.debts || [])
         .filter(d => d.status !== 'paid')
         .reduce((sum, d) => sum + (d.amount || 0), 0);
+      clinicNormalDebts = (ownerFinancial.debts || [])
+        .filter(d => d.status !== 'paid' && (d.debtType || 'normal') === 'normal')
+        .reduce((sum, d) => sum + (d.amount || 0), 0);
+      clinicPatientFundDebts = (ownerFinancial.debts || [])
+        .filter(d => d.status !== 'paid' && (d.debtType || 'normal') === 'patient_fund')
+        .reduce((sum, d) => sum + (d.amount || 0), 0);
+
+      const groupedDebts = new Map();
+      for (const debt of (ownerFinancial.debts || [])) {
+        if (debt.status === 'paid') continue;
+        const patientId = debt.patientId?.toString();
+        if (!patientId) continue;
+        const debtType = debt.debtType || 'normal';
+        const key = `${debtType}:${patientId}`;
+        const current = groupedDebts.get(key) || {
+          patientId,
+          debtType,
+          total: 0,
+          debts: [],
+        };
+        current.total += Number(debt.amount || 0);
+        current.debts.push({
+          _id: debt._id,
+          amount: debt.amount || 0,
+          description: debt.description || (debtType === 'patient_fund' ? 'صندوق مريض' : 'دين'),
+          date: debt.date,
+        });
+        groupedDebts.set(key, current);
+      }
+
+      const patientIds = [...new Set([...groupedDebts.values()].map(item => item.patientId))];
+      const debtPatients = await User.find({ _id: { $in: patientIds } }).select('fullName mobileNumber').lean();
+      const patientMap = new Map(debtPatients.map(patient => [patient._id.toString(), patient]));
+      const formatDebtPatient = (item) => ({
+        patientId: item.patientId,
+        patientName: patientMap.get(item.patientId)?.fullName || 'مريض غير معروف',
+        patientPhone: patientMap.get(item.patientId)?.mobileNumber || '',
+        total: Math.round(item.total * 100) / 100,
+        debts: item.debts,
+      });
+
+      clinicNormalDebtPatients = [...groupedDebts.values()]
+        .filter(item => item.debtType === 'normal')
+        .map(formatDebtPatient)
+        .sort((a, b) => b.total - a.total);
+      clinicPatientFundDebtPatients = [...groupedDebts.values()]
+        .filter(item => item.debtType === 'patient_fund')
+        .map(formatDebtPatient)
+        .sort((a, b) => b.total - a.total);
     }
     totalExpenses += clinicExpenses;
     totalDebts += clinicDebts;
@@ -1006,6 +1080,10 @@ exports.getFinancialSummary = async (req, res) => {
         totalAppointmentRevenue,
         totalAppointments,
         clinicDebts,
+        clinicNormalDebts,
+        clinicPatientFundDebts,
+        clinicNormalDebtPatients,
+        clinicPatientFundDebtPatients,
         clinicExpenses,
       },
       doctorFinancials

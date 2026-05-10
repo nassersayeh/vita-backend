@@ -22,6 +22,7 @@ const financialSchema = new mongoose.Schema({
       discount: { type: Number, default: 0 },
       discountPercent: { type: Number, default: 0 },
       totalDebtBeforeDiscount: { type: Number, default: 0 },
+      debtType: { type: String, enum: ['normal', 'patient_fund'], default: 'normal' },
       // Audit: who last edited this transaction
       lastEditedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
       lastEditedAt: { type: Date, default: null },
@@ -56,6 +57,7 @@ const financialSchema = new mongoose.Schema({
       labRequestId: { type: mongoose.Schema.Types.ObjectId, ref: 'LabRequest' }, // Link to lab request if debt is from lab test
       amount: { type: Number, required: true },
       originalAmount: { type: Number }, // Original amount before any payment (preserved when debt is paid)
+      debtType: { type: String, enum: ['normal', 'patient_fund'], default: 'normal' },
       description: { type: String, default: 'دين يدوي' },
       date: { type: Date, default: Date.now },
       status: { type: String, enum: ['pending', 'paid'], default: 'pending' },

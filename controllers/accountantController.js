@@ -2550,12 +2550,14 @@ exports.insertPayment = async (req, res) => {
       return res.status(404).json({ message: 'لم يتم العثور على عيادة مرتبطة بحسابك' });
     }
 
-    const { patientId, amount, description, paymentMethod, date, discountPercent } = req.body;
+    const { patientId, amount, description, paymentMethod, date, discountPercent, debtType } = req.body;
     if (!patientId) {
       return res.status(400).json({ message: 'المريض مطلوب' });
     }
 
     const discountPct = Math.min(Math.max(Number(discountPercent) || 0, 0), 100);
+    const selectedDebtType = debtType === 'patient_fund' ? 'patient_fund' : 'normal';
+    const debtTypeLabel = selectedDebtType === 'patient_fund' ? 'صندوق مريض' : 'دين عادي';
     const clinicOwnerId = clinic.ownerId;
 
     // ====== Step 1: Gather ALL pending debts for this patient ======
@@ -2565,7 +2567,9 @@ exports.insertPayment = async (req, res) => {
     }
 
     const patientDebts = financial.debts.filter(d =>
-      d.patientId?.toString() === patientId && d.status === 'pending'
+      d.patientId?.toString() === patientId &&
+      d.status === 'pending' &&
+      (d.debtType || 'normal') === selectedDebtType
     );
 
     // Also gather debts from individual doctors' Financial records
@@ -2583,7 +2587,9 @@ exports.insertPayment = async (req, res) => {
     }
     for (const docFin of doctorFinancials) {
       const docDebts = docFin.debts.filter(d =>
-        d.patientId?.toString() === patientId && d.status === 'pending'
+        d.patientId?.toString() === patientId &&
+        d.status === 'pending' &&
+        (d.debtType || 'normal') === selectedDebtType
       );
       for (const debt of docDebts) {
         allDebts.push({ debt, source: 'doctor', financialDoc: docFin, doctorId: docFin.doctorId.toString() });
@@ -2593,7 +2599,7 @@ exports.insertPayment = async (req, res) => {
     // ====== Step 2: Calculate totals ======
     const totalDebt = allDebts.reduce((sum, item) => sum + item.debt.amount, 0);
     if (totalDebt <= 0) {
-      return res.status(400).json({ message: 'لا يوجد دين معلق لهذا المريض' });
+      return res.status(400).json({ message: `لا يوجد ${debtTypeLabel} معلق لهذا المريض` });
     }
 
     const discountAmount = Math.round(totalDebt * discountPct / 100 * 100) / 100;
@@ -2700,12 +2706,14 @@ exports.insertPayment = async (req, res) => {
     if (!allDoctorIds.some(id => id.toString() === clinicOwnerId.toString())) {
       allDoctorIds.push(clinicOwnerId);
     }
-    const unpaidAppointments = await Appointment.find({
-      patient: patientId,
-      doctorId: { $in: allDoctorIds },
-      isPaid: { $ne: true },
-      status: { $in: ['confirmed', 'completed'] }
-    }).sort({ appointmentDateTime: 1 });
+    const unpaidAppointments = selectedDebtType === 'normal'
+      ? await Appointment.find({
+        patient: patientId,
+        doctorId: { $in: allDoctorIds },
+        isPaid: { $ne: true },
+        status: { $in: ['confirmed', 'completed'] }
+      }).sort({ appointmentDateTime: 1 })
+      : [];
 
     let aptCoveragePool = totalCovered;
     const paidAppointmentIds = [];
@@ -2750,6 +2758,7 @@ exports.insertPayment = async (req, res) => {
       date: date ? new Date(date) : new Date(),
       patientId,
       paymentMethod: paymentMethod || 'Cash',
+      debtType: selectedDebtType,
       discount: discountAmount,
       discountPercent: discountPct,
       totalDebtBeforeDiscount: totalDebt,
@@ -2793,7 +2802,9 @@ exports.insertPayment = async (req, res) => {
 
           // Clear matching debts on doctor's own financial (backward compat)
           const docOwnDebts = (doctorFinancial.debts || []).filter(d =>
-            d.patientId?.toString() === patientId && d.status === 'pending'
+            d.patientId?.toString() === patientId &&
+            d.status === 'pending' &&
+            (d.debtType || 'normal') === selectedDebtType
           );
           for (const dd of docOwnDebts) {
             if (!dd.originalAmount) dd.originalAmount = dd.amount;
@@ -2857,6 +2868,13 @@ exports.insertPayment = async (req, res) => {
     const remainingDebt = (freshFinancial?.debts || [])
       .filter(d => d.patientId?.toString() === patientId && d.status === 'pending')
       .reduce((sum, d) => sum + d.amount, 0);
+    const remainingSelectedDebt = (freshFinancial?.debts || [])
+      .filter(d =>
+        d.patientId?.toString() === patientId &&
+        d.status === 'pending' &&
+        (d.debtType || 'normal') === selectedDebtType
+      )
+      .reduce((sum, d) => sum + d.amount, 0);
 
     // Get patient info for receipt
     const patient = await User.findById(patientId).select('fullName mobileNumber');
@@ -2865,6 +2883,7 @@ exports.insertPayment = async (req, res) => {
       success: true,
       message: 'تم تسجيل الدفع بنجاح',
       remainingDebt,
+      remainingSelectedDebt,
       paidAppointments: paidAppointmentIds.length,
       receipt: {
         patientName: patient?.fullName || 'غير معروف',
@@ -2875,10 +2894,13 @@ exports.insertPayment = async (req, res) => {
         discountPercent: discountPct,
         discountAmount,
         amount: paidAmount,
+        debtType: selectedDebtType,
+        debtTypeLabel,
         discount: discountAmount,
         paymentMethod: paymentMethod || 'Cash',
         description: description || 'دفعة من مريض',
-        remainingDebt,
+        remainingDebt: remainingSelectedDebt,
+        totalRemainingDebt: remainingDebt,
         date: new Date().toISOString(),
         receiptNo: Date.now().toString(36).toUpperCase()
       }
@@ -2947,9 +2969,15 @@ exports.getPatientsWithDebt = async (req, res) => {
         return debtPatientId === pid && d.status !== 'paid';
       });
       const financialDebtTotal = patientDebts.reduce((sum, d) => sum + (d.amount || 0), 0);
+      const normalDebtTotal = patientDebts
+        .filter(d => (d.debtType || 'normal') === 'normal')
+        .reduce((sum, d) => sum + (d.amount || 0), 0);
+      const patientFundDebtTotal = patientDebts
+        .filter(d => (d.debtType || 'normal') === 'patient_fund')
+        .reduce((sum, d) => sum + (d.amount || 0), 0);
       // Use Financial.debts as the primary source of truth
       const totalDebt = financialDebtTotal || (appointmentDebtMap[pid] || 0);
-      return { ...patient, totalDebt, debts: patientDebts };
+      return { ...patient, totalDebt, normalDebtTotal, patientFundDebtTotal, debts: patientDebts };
     });
 
     // Sort: patients with debt first, then by newest (createdAt)
@@ -3170,7 +3198,8 @@ exports.addDebt = async (req, res) => {
     }
 
     const clinicOwnerId = clinic.ownerId;
-    const { patientId, amount, description, date } = req.body;
+    const { patientId, amount, description, date, debtType } = req.body;
+    const selectedDebtType = debtType === 'patient_fund' ? 'patient_fund' : 'normal';
 
     if (!patientId || !amount) {
       return res.status(400).json({ message: 'المريض والمبلغ مطلوبان' });
@@ -3184,7 +3213,8 @@ exports.addDebt = async (req, res) => {
     financial.debts.push({
       patientId,
       amount: Number(amount),
-      description: description || 'دين',
+      description: description || (selectedDebtType === 'patient_fund' ? 'صندوق مريض' : 'دين'),
+      debtType: selectedDebtType,
       date: date ? new Date(date) : new Date(),
       status: 'pending'
     });
@@ -3305,6 +3335,7 @@ exports.payDebt = async (req, res) => {
       description: `دفع دين - ${debt.description || ''}`,
       date: new Date(),
       patientId: debt.patientId,
+      debtType: debt.debtType || 'normal',
       labRequestId: linkedLabRequestId || undefined,
       labRequestIds: linkedLabRequestId ? [linkedLabRequestId] : [],
       paymentMethod: paymentMethod || 'Cash'
@@ -3342,7 +3373,9 @@ exports.payDebt = async (req, res) => {
           
           // Also mark matching debts as paid on doctor's own Financial (backward compat)
           const doctorDebts = (doctorFinancial.debts || []).filter(d =>
-            d.patientId?.toString() === debt.patientId?.toString() && d.status === 'pending'
+            d.patientId?.toString() === debt.patientId?.toString() &&
+            d.status === 'pending' &&
+            (d.debtType || 'normal') === (debt.debtType || 'normal')
           );
           let remaining = paymentAmount;
           for (const dd of doctorDebts) {
