@@ -154,7 +154,7 @@ exports.getRequests = async (req, res) => {
     const requests = await LabRequest.find(queryFilter)
       .populate('patientId', 'fullName mobileNumber profileImage birthdate sex')
       .populate('doctorId', 'fullName specialty')
-      .populate('testIds', 'name type category price normalRange unit')
+      .populate('testIds', 'name type category price normalRange normalRanges unit')
       .populate('requestedBy', 'fullName')
       .sort({ requestDate: -1 })
       .limit(limit * 1)
@@ -182,7 +182,7 @@ exports.updateRequest = async (req, res) => {
     const { requestId } = req.params;
     const { status, results, notes, testUpdates, testPrices, discount } = req.body;
 
-    const request = await LabRequest.findById(requestId).populate('testIds', 'name price');
+    const request = await LabRequest.findById(requestId).populate('testIds', 'name price normalRange normalRanges unit');
     if (!request) {
       return res.status(404).json({ message: 'طلب الفحص غير موجود' });
     }
@@ -298,7 +298,7 @@ exports.updateRequest = async (req, res) => {
     const updatedRequest = await LabRequest.findById(requestId)
       .populate('patientId', 'fullName mobileNumber profileImage birthdate sex')
       .populate('doctorId', 'fullName specialty')
-      .populate('testIds', 'name type category price normalRange unit')
+      .populate('testIds', 'name type category price normalRange normalRanges unit')
       .populate('requestedBy', 'fullName');
 
     res.status(200).json({
