@@ -20,6 +20,12 @@ router.get('/analytics', adminController.getDashboardAnalytics);
 // Get admin stats (new route)
 router.get('/stats', adminController.getDashboardAnalytics);
 
+// Get potential clients from external medical/pharmacy directories
+router.get('/potential-clients', adminController.getPotentialClients);
+
+// Update potential client follow-up status
+router.put('/potential-clients/status', adminController.updatePotentialClientStatus);
+
 // Get notification history
 router.get('/notifications/history', adminController.getNotificationHistory);
 

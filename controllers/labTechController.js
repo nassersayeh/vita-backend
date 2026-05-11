@@ -354,9 +354,20 @@ exports.getTests = async (req, res) => {
 exports.createTest = async (req, res) => {
   try {
     const labTechId = req.user._id;
-    const { name, type, category, description, normalRange, unit, price, preparationInstructions, estimatedDuration } = req.body;
+    const {
+      name,
+      type = 'laboratory',
+      category,
+      description,
+      normalRange,
+      normalRanges,
+      unit,
+      price,
+      preparationInstructions,
+      estimatedDuration
+    } = req.body;
 
-    if (!name || !type || !category) {
+    if (!name?.trim() || !type?.trim() || !category?.trim()) {
       return res.status(400).json({ message: 'الاسم، النوع، والفئة مطلوبة' });
     }
 
@@ -375,6 +386,7 @@ exports.createTest = async (req, res) => {
       category,
       description,
       normalRange,
+      normalRanges: Array.isArray(normalRanges) ? normalRanges : [],
       unit,
       price: price || 0,
       preparationInstructions,
@@ -407,7 +419,7 @@ exports.updateTest = async (req, res) => {
       return res.status(404).json({ message: 'الفحص غير موجود' });
     }
 
-    const allowedFields = ['name', 'type', 'category', 'description', 'normalRange', 'unit', 'price', 'preparationInstructions', 'estimatedDuration'];
+    const allowedFields = ['name', 'type', 'category', 'description', 'normalRange', 'normalRanges', 'unit', 'price', 'preparationInstructions', 'estimatedDuration'];
     for (const field of allowedFields) {
       if (updates[field] !== undefined) {
         test[field] = updates[field];

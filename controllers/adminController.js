@@ -155,7 +155,154 @@ const Points = require('../models/Points');
 const Order = require('../models/Order');
 const Appointment = require('../models/Appointment');
 const Financial = require('../models/Financial');
+const PotentialClientStatus = require('../models/PotentialClientStatus');
 const { assignDefaultInventory } = require('../utils/assignDefaultInventory');
+const axios = require('axios');
+const crypto = require('crypto');
+
+const leadStatusValues = ['none', 'contacted', 'subscribed', 'trial', 'rejected'];
+const potentialClientsCache = {
+  data: null,
+  fetchedAt: 0,
+};
+const POTENTIAL_CLIENTS_CACHE_MS = 60 * 60 * 1000;
+const SMARTHEALTH_MAX_PAGES = Number(process.env.SMARTHEALTH_LEADS_MAX_PAGES || 80);
+
+const decodeHtml = (value = '') => String(value)
+  .replace(/&nbsp;/g, ' ')
+  .replace(/&amp;/g, '&')
+  .replace(/&quot;/g, '"')
+  .replace(/&#39;/g, "'")
+  .replace(/&lt;/g, '<')
+  .replace(/&gt;/g, '>')
+  .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
+  .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCharCode(parseInt(code, 16)));
+
+const stripTags = (value = '') => decodeHtml(String(value).replace(/<[^>]*>/g, ' '))
+  .replace(/\s+/g, ' ')
+  .trim();
+
+const makeLeadKey = (source, parts) => crypto
+  .createHash('sha1')
+  .update(`${source}:${parts.filter(Boolean).join('|')}`)
+  .digest('hex');
+
+const extractCityFromAddress = (address = '') => {
+  const firstPart = String(address).split(/[-–،,]/)[0]?.trim();
+  return firstPart || '';
+};
+
+const extractRows = (html = '') => {
+  const rows = [];
+  const rowRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+  let rowMatch;
+
+  while ((rowMatch = rowRegex.exec(html))) {
+    const cells = [];
+    const cellRegex = /<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi;
+    let cellMatch;
+
+    while ((cellMatch = cellRegex.exec(rowMatch[1]))) {
+      cells.push(stripTags(cellMatch[1]));
+    }
+
+    if (cells.length) rows.push(cells);
+  }
+
+  return rows;
+};
+
+const fetchSmartHealthPage = async (page) => {
+  const url = `https://smarthealth.ps/ar/medicals?commit=%D8%A5%D8%A8%D8%AD%D8%AB&page=${page}&q%5Bcity_id_eq%5D=&q%5Bmedical_category_id_eq%5D=&q%5Bname_cont%5D=`;
+  const { data } = await axios.get(url, {
+    timeout: 12000,
+    headers: { 'User-Agent': 'Mozilla/5.0 Vita Admin Leads' },
+  });
+
+  return extractRows(data)
+    .filter((cells) => cells.length >= 4 && !cells[0].includes('اسم المركز'))
+    .map((cells) => {
+      const [name, address, phone, specialty] = cells;
+      const sourceKey = makeLeadKey('smarthealth', [name, address, phone, specialty]);
+
+      return {
+        source: 'smarthealth',
+        sourceLabel: 'الأطباء',
+        sourceKey,
+        name,
+        phone,
+        address,
+        specialty,
+        city: extractCityFromAddress(address),
+        status: 'none',
+      };
+    })
+    .filter((lead) => lead.name && lead.address);
+};
+
+const fetchSmartHealthLeads = async () => {
+  const pageNumbers = Array.from({ length: SMARTHEALTH_MAX_PAGES }, (_, index) => index + 1);
+  const leads = [];
+
+  for (let index = 0; index < pageNumbers.length; index += 8) {
+    const batch = pageNumbers.slice(index, index + 8);
+    const results = await Promise.allSettled(batch.map(fetchSmartHealthPage));
+    results.forEach((result) => {
+      if (result.status === 'fulfilled') leads.push(...result.value);
+    });
+  }
+
+  return leads;
+};
+
+const fetchPharmacyLeads = async () => {
+  const { data } = await axios.get('https://ppa.ps/PPAMS/Reports/PharmacyListReportPublic.php', {
+    timeout: 20000,
+    headers: { 'User-Agent': 'Mozilla/5.0 Vita Admin Leads' },
+  });
+
+  return extractRows(data)
+    .filter((cells) => cells.length >= 6 && !cells[0].includes('المحافظة'))
+    .map((cells) => {
+      const [city, mobile, pharmacyPhone, address, pharmacyName, pharmacistName] = cells;
+      const phone = [mobile, pharmacyPhone].filter(Boolean).join(' / ');
+      const sourceKey = makeLeadKey('ppa', [city, phone, address, pharmacyName, pharmacistName]);
+
+      return {
+        source: 'ppa',
+        sourceLabel: 'الصيدليات',
+        sourceKey,
+        name: pharmacyName || pharmacistName,
+        phone,
+        address,
+        specialty: 'صيدلية',
+        city,
+        status: 'none',
+      };
+    })
+    .filter((lead) => lead.name);
+};
+
+const getPotentialClientsData = async (forceRefresh = false) => {
+  const now = Date.now();
+  if (!forceRefresh && potentialClientsCache.data && now - potentialClientsCache.fetchedAt < POTENTIAL_CLIENTS_CACHE_MS) {
+    return potentialClientsCache.data;
+  }
+
+  const results = await Promise.allSettled([
+    fetchSmartHealthLeads(),
+    fetchPharmacyLeads(),
+  ]);
+
+  const leads = results.flatMap((result) => (result.status === 'fulfilled' ? result.value : []));
+  const unique = Array.from(
+    new Map(leads.map((lead) => [`${lead.source}:${lead.sourceKey}`, lead])).values()
+  );
+
+  potentialClientsCache.data = unique;
+  potentialClientsCache.fetchedAt = now;
+  return unique;
+};
 
 // Get pending provider approvals
 exports.getPendingApprovals = async (req, res) => {
@@ -802,5 +949,101 @@ exports.searchUsersForGift = async (req, res) => {
       console.error(error.stack);
     }
     res.status(500).json({ message: 'Server error while searching users', error: error.message });
+  }
+};
+
+exports.getPotentialClients = async (req, res) => {
+  try {
+    const {
+      page = 1,
+      limit = 25,
+      city,
+      source = 'all',
+      search = '',
+      refresh = 'false',
+    } = req.query;
+
+    const currentPage = Math.max(Number(page) || 1, 1);
+    const pageLimit = Math.min(Math.max(Number(limit) || 25, 1), 100);
+    const normalizedCity = String(city || '').trim();
+    const normalizedSource = String(source || 'all');
+    const searchTerm = String(search || '').trim().toLowerCase();
+
+    const allLeads = await getPotentialClientsData(refresh === 'true');
+    const statuses = await PotentialClientStatus.find({
+      sourceKey: { $in: allLeads.map((lead) => lead.sourceKey) },
+    }).lean();
+    const statusMap = new Map(statuses.map((item) => [`${item.source}:${item.sourceKey}`, item.status]));
+
+    let filtered = allLeads.map((lead) => ({
+      ...lead,
+      status: statusMap.get(`${lead.source}:${lead.sourceKey}`) || 'none',
+    }));
+
+    if (normalizedSource !== 'all') {
+      filtered = filtered.filter((lead) => lead.source === normalizedSource);
+    }
+
+    if (normalizedCity) {
+      filtered = filtered.filter((lead) => lead.city === normalizedCity);
+    }
+
+    if (searchTerm) {
+      filtered = filtered.filter((lead) => [
+        lead.name,
+        lead.phone,
+        lead.address,
+        lead.specialty,
+        lead.city,
+      ].some((value) => String(value || '').toLowerCase().includes(searchTerm)));
+    }
+
+    const cities = Array.from(new Set(allLeads.map((lead) => lead.city).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'ar'));
+    const total = filtered.length;
+    const totalPages = Math.max(Math.ceil(total / pageLimit), 1);
+    const leads = filtered.slice((currentPage - 1) * pageLimit, currentPage * pageLimit);
+
+    res.json({
+      leads,
+      cities,
+      total,
+      totalPages,
+      currentPage,
+      limit: pageLimit,
+      fetchedAt: potentialClientsCache.fetchedAt,
+    });
+  } catch (error) {
+    console.error('Get potential clients error:', error);
+    res.status(500).json({ message: 'Server error while fetching potential clients', error: error.message });
+  }
+};
+
+exports.updatePotentialClientStatus = async (req, res) => {
+  try {
+    const { source, sourceKey, status, adminId } = req.body;
+
+    if (!['smarthealth', 'ppa'].includes(source) || !sourceKey) {
+      return res.status(400).json({ message: 'Invalid potential client reference' });
+    }
+
+    if (!leadStatusValues.includes(status)) {
+      return res.status(400).json({ message: 'Invalid status' });
+    }
+
+    const update = {
+      status,
+      updatedBy: adminId || undefined,
+    };
+
+    const savedStatus = await PotentialClientStatus.findOneAndUpdate(
+      { source, sourceKey },
+      update,
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+
+    res.json({ message: 'Status updated', status: savedStatus.status });
+  } catch (error) {
+    console.error('Update potential client status error:', error);
+    res.status(500).json({ message: 'Server error while updating potential client status', error: error.message });
   }
 };
