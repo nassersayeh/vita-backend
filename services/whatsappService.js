@@ -544,14 +544,41 @@ const requestWhatsAppPairingCode = async (phoneNumber) => {
   throw new Error('Pairing code generation timed out. Please try again.');
 };
 
-// Format Palestinian phone number
-const formatPhoneNumber = (mobileNumber) => {
+const normalizeCountryName = (country = '') => String(country || '').trim().toLowerCase();
+
+const getCountryDialingCodes = (country) => {
+  const normalized = normalizeCountryName(country);
+  if (normalized.includes('قطر') || normalized.includes('qatar')) return ['974'];
+  if (normalized.includes('السعود') || normalized.includes('saudi')) return ['966'];
+  return ['970', '972'];
+};
+
+const stripKnownCountryCode = (mobileNumber, country) => {
   let cleanNumber = mobileNumber.replace(/\D/g, '');
+  if (cleanNumber.startsWith('00')) cleanNumber = cleanNumber.slice(2);
   cleanNumber = cleanNumber.replace(/^0+/, '');
-  if (cleanNumber.startsWith('970') || cleanNumber.startsWith('972')) {
+  const codes = getCountryDialingCodes(country);
+  const matchingCode = codes.find((code) => cleanNumber.startsWith(code));
+  if (matchingCode) cleanNumber = cleanNumber.slice(matchingCode.length);
+  return cleanNumber.replace(/^0+/, '');
+};
+
+const getWhatsAppPhoneCandidates = (mobileNumber, country) => {
+  const localNumber = stripKnownCountryCode(mobileNumber, country);
+  const codes = getCountryDialingCodes(country);
+  return Array.from(new Set(codes.map((code) => `${code}${localNumber}`)));
+};
+
+// Format phone number for WhatsApp. Defaults to Palestine for legacy callers.
+const formatPhoneNumber = (mobileNumber, country) => {
+  let cleanNumber = mobileNumber.replace(/\D/g, '');
+  if (cleanNumber.startsWith('00')) cleanNumber = cleanNumber.slice(2);
+  cleanNumber = cleanNumber.replace(/^0+/, '');
+  const supportedCodes = ['970', '972', '974', '966'];
+  if (supportedCodes.some((code) => cleanNumber.startsWith(code))) {
     return cleanNumber;
   }
-  return '970' + cleanNumber;
+  return getWhatsAppPhoneCandidates(mobileNumber, country)[0];
 };
 
 // Send WhatsApp message
@@ -592,7 +619,7 @@ const sendWhatsAppMessage = async (mobileNumber, message) => {
 
     const isOnWhatsApp = await sock.onWhatsApp(jid);
     
-    if (!isOnWhatsApp || !isOnWhatsApp[0]?.exists) {
+    if ((!isOnWhatsApp || !isOnWhatsApp[0]?.exists) && (phoneNumber.startsWith('970') || phoneNumber.startsWith('972'))) {
       const altPhoneNumber = phoneNumber.replace(/^970/, '972');
       const altJid = `${altPhoneNumber}@s.whatsapp.net`;
       const isAltOnWhatsApp = await sock.onWhatsApp(altJid);
@@ -603,6 +630,10 @@ const sendWhatsAppMessage = async (mobileNumber, message) => {
         return { success: true, phone: altPhoneNumber };
       }
       
+      throw new Error('This phone number is not registered on WhatsApp.');
+    }
+
+    if (!isOnWhatsApp || !isOnWhatsApp[0]?.exists) {
       throw new Error('This phone number is not registered on WhatsApp.');
     }
 
@@ -654,7 +685,7 @@ const sendCustomMessage = async (mobileNumber, customMessage) => {
 };
 
 // Send 2FA verification code
-const send2FACode = async (mobileNumber, code, lang = 'en') => {
+const send2FACode = async (mobileNumber, code, lang = 'en', country) => {
   let message;
   if (lang === 'ar') {
     message = `🔐 *Vita - رمز الأمان*\n\nرمز التحقق الخاص بك هو: *${code}*\n\nهذا الرمز صالح لمدة 10 دقائق.\n\n⚠️ _لا تشارك هذا الرمز مع أي شخص._`;
@@ -662,36 +693,25 @@ const send2FACode = async (mobileNumber, code, lang = 'en') => {
     message = `🔐 *Vita Security Code*\n\nYour verification code is: *${code}*\n\nThis code will expire in 10 minutes.\n\n⚠️ _Do not share this code with anyone._`;
   }
 
-  let cleanNumber = mobileNumber.replace(/\D/g, '').replace(/^0+/, '');
-  if (!cleanNumber.startsWith('970') && !cleanNumber.startsWith('972')) {
-    cleanNumber = '970' + cleanNumber;
-  }
-
-  const phone970 = cleanNumber.replace(/^972/, '970');
-  const phone972 = cleanNumber.replace(/^970/, '972');
+  const phoneCandidates = getWhatsAppPhoneCandidates(mobileNumber, country);
 
   let sentTo = [];
   let errors = [];
 
-  try {
-    await sendWhatsAppMessage(phone970, message);
-    sentTo.push(phone970);
-  } catch (error) {
-    errors.push(`+${phone970}: ${error.message}`);
-  }
-
-  try {
-    await sendWhatsAppMessage(phone972, message);
-    sentTo.push(phone972);
-  } catch (error) {
-    errors.push(`+${phone972}: ${error.message}`);
+  for (const phoneNumber of phoneCandidates) {
+    try {
+      await sendWhatsAppMessage(phoneNumber, message);
+      sentTo.push(phoneNumber);
+    } catch (error) {
+      errors.push(`+${phoneNumber}: ${error.message}`);
+    }
   }
 
   if (sentTo.length === 0) {
     throw new Error(`Failed to send WhatsApp message to any number. Errors: ${errors.join('; ')}`);
   }
 
-  return { success: true, sentTo };
+  return { success: true, sentTo, phone: sentTo[0] };
 };
 
 // Get WhatsApp status - checks BOTH in-memory AND MongoDB

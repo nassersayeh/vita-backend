@@ -21,9 +21,68 @@ const countryMapping = {
   Qatar: { mobileLength: 11 },
 };
 
+const normalizeCountryName = (country = '') => String(country || '').trim().toLowerCase();
+
+const getCountryDialingCodes = (country) => {
+  const normalized = normalizeCountryName(country);
+  if (normalized.includes('قطر') || normalized.includes('qatar')) return ['974'];
+  if (normalized.includes('السعود') || normalized.includes('saudi')) return ['966'];
+  return ['970', '972'];
+};
+
+const normalizeLocalMobile = (mobile = '', country = '') => {
+  let digits = String(mobile || '').replace(/\D/g, '');
+  if (digits.startsWith('00')) digits = digits.slice(2);
+
+  const matchingCode = getCountryDialingCodes(country).find((code) => digits.startsWith(code));
+  if (matchingCode) digits = digits.slice(matchingCode.length);
+
+  digits = digits.replace(/^0+/, '');
+  const normalizedCountry = normalizeCountryName(country);
+  if ((normalizedCountry.includes('فلسطين') || normalizedCountry.includes('palestine') || normalizedCountry.includes('السعود') || normalizedCountry.includes('saudi')) && digits.startsWith('5')) {
+    return `0${digits}`;
+  }
+
+  return digits;
+};
+
+const getMobileLookupCandidates = (mobile = '', country = '') => {
+  const rawDigits = String(mobile || '').replace(/\D/g, '');
+  const localMobile = normalizeLocalMobile(mobile, country);
+  const localWithoutZero = localMobile.replace(/^0+/, '');
+  const countryVariants = getCountryDialingCodes(country).map((code) => `${code}${localWithoutZero}`);
+
+  return Array.from(new Set([
+    mobile,
+    rawDigits,
+    localMobile,
+    localWithoutZero,
+    ...countryVariants,
+  ].filter(Boolean)));
+};
+
+const getLoginMobileLookupCandidates = (mobile = '') => {
+  const rawDigits = String(mobile || '').replace(/\D/g, '');
+  const withoutInternationalPrefix = rawDigits.startsWith('00') ? rawDigits.slice(2) : rawDigits;
+  const allCodes = ['970', '972', '974', '966'];
+  const stripped = allCodes.reduce((value, code) => (
+    value.startsWith(code) ? value.slice(code.length) : value
+  ), withoutInternationalPrefix).replace(/^0+/, '');
+
+  return Array.from(new Set([
+    mobile,
+    rawDigits,
+    withoutInternationalPrefix,
+    stripped,
+    stripped ? `0${stripped}` : '',
+    ...allCodes.map((code) => `${code}${stripped}`),
+  ].filter(Boolean)));
+};
+
 exports.signup = async (req, res) => {
   try {
     const { profileImage, fullName, username, birthdate, mobile, password, country, city, idNumber, address, sex, role, email, termsAccepted } = req.body;
+    const normalizedMobile = normalizeLocalMobile(mobile, country);
     
     // Normalize email - treat empty string as undefined
     const normalizedEmail = email && email.trim() ? email.trim() : undefined;
@@ -48,7 +107,7 @@ exports.signup = async (req, res) => {
     // Email is optional for all roles
     
     // Check if mobile number already exists
-    const existingUser = await User.findOne({ mobileNumber: mobile });
+    const existingUser = await User.findOne({ mobileNumber: { $in: getMobileLookupCandidates(mobile, country) } });
     if (existingUser) return res.status(400).json({ message: 'mobileNumber already exists.' });
     
     // Check if idNumber already exists
@@ -77,7 +136,7 @@ exports.signup = async (req, res) => {
     const newUser = new User({
       fullName,
       username: normalizedUsername,
-      mobileNumber: mobile,
+      mobileNumber: normalizedMobile,
       email: normalizedEmail,
       password: hashedPassword,
       country,
@@ -131,14 +190,9 @@ exports.signup = async (req, res) => {
             `You will be notified once your account is activated.\n\n` +
             `For any inquiries or technical support, feel free to message us on this number and our team will assist you. 💬`;
 
-          let cleanNumber = mobile.replace(/\D/g, '').replace(/^0+/, '');
-          if (!cleanNumber.startsWith('970') && !cleanNumber.startsWith('972')) {
-            cleanNumber = '970' + cleanNumber;
+          for (const phoneNumber of getCountryDialingCodes(country).map((code) => `${code}${normalizedMobile.replace(/^0+/, '')}`)) {
+            try { await sendWhatsAppMessage(phoneNumber, welcomeMsg); } catch {}
           }
-          const phone970 = cleanNumber.replace(/^972/, '970');
-          const phone972 = cleanNumber.replace(/^970/, '972');
-          try { await sendWhatsAppMessage(phone970, welcomeMsg); } catch {}
-          try { await sendWhatsAppMessage(phone972, welcomeMsg); } catch {}
         }
       } catch (waErr) {
         console.error('Welcome WhatsApp message failed:', waErr.message);
@@ -186,7 +240,7 @@ exports.signup = async (req, res) => {
     // Always try WhatsApp if ready
     if (await isWhatsAppReady()) {
       try {
-        const whatsappResult = await send2FACode(mobile, verificationCode);
+        const whatsappResult = await send2FACode(normalizedMobile, verificationCode, 'en', country);
         sentVia.push('whatsapp');
         console.log(`Verification code sent via WhatsApp to: ${whatsappResult.sentTo.join(', ')}`);
       } catch (whatsappError) {
@@ -261,7 +315,7 @@ exports.signup = async (req, res) => {
 exports.login = async (req, res) => {
   try {
     const { mobile, password } = req.body;
-    const user = await User.findOne({ mobileNumber: mobile });
+    const user = await User.findOne({ mobileNumber: { $in: getLoginMobileLookupCandidates(mobile) } });
     
     // If not found in Users, check InsuranceCompany and OversightAccount
     if (!user) {
@@ -351,7 +405,7 @@ exports.login = async (req, res) => {
       // Always try WhatsApp if ready
       if (await isWhatsAppReady()) {
         try {
-          const whatsappResult = await send2FACode(user.mobileNumber, verificationCode);
+          const whatsappResult = await send2FACode(user.mobileNumber, verificationCode, 'en', user.country);
           sentVia.push('whatsapp');
           console.log(`Verification code sent via WhatsApp to: ${whatsappResult.sentTo.join(', ')}`);
         } catch (whatsappError) {
@@ -463,12 +517,22 @@ exports.login = async (req, res) => {
 
 exports.forgotPassword = async (req, res) => {
   try {
-    const { email } = req.body;
-    // Check if user exists
-    const user = await User.findOne({ email });
-    if (!user) {
-      return res.status(404).json({ message: "Email not found." });
+    const mobile = req.body.mobile || req.body.mobileNumber || req.body.phone;
+    if (!mobile) {
+      return res.status(400).json({ message: "Mobile number is required." });
     }
+
+    const user = await User.findOne({ mobileNumber: { $in: getLoginMobileLookupCandidates(mobile) } });
+    if (!user) {
+      return res.status(404).json({ message: "Mobile number not found." });
+    }
+    if (!user.mobileNumber) {
+      return res.status(400).json({ message: "No mobile number found for this account." });
+    }
+    if (!(await isWhatsAppReady())) {
+      return res.status(503).json({ message: "WhatsApp is not connected. Please try again later." });
+    }
+
     // Generate a random 6-digit code
     const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
     // Set expiration (e.g., 15 minutes)
@@ -477,32 +541,29 @@ exports.forgotPassword = async (req, res) => {
     user.resetCodeExpiration = resetCodeExpiration;
     // Save without validating required fields
     await user.save({ validateBeforeSave: false });
-    
-    // Send the code by email
-    const mailOptions = {
-      from: process.env.EMAIL_USER,
-      to: user.email,
-      subject: 'Vita Verification Code',
-      text: `Your verification code is: ${resetCode}`
-    };
-    transporter.sendMail(mailOptions, (error, info) => {
-      if (error) {
-        console.error("Error sending email:", error);
-        return res.status(500).json({ message: "Error sending email." });
-      }
-      res.json({ message: "Verification code sent to your email." });
+
+    const whatsappResult = await send2FACode(user.mobileNumber, resetCode, 'en', user.country);
+    res.json({
+      message: "Verification code sent to your WhatsApp.",
+      sentVia: ['whatsapp'],
+      phone: whatsappResult.phone
     });
   } catch (error) {
     console.error("Forgot password error:", error);
-    res.status(500).json({ message: "Server error." });
+    res.status(500).json({ message: error.message || "Server error." });
   }
 };
 
 
 exports.verifyCode = async (req, res) => {
   try {
-    const { email, code } = req.body;
-    const user = await User.findOne({ email });
+    const mobile = req.body.mobile || req.body.mobileNumber || req.body.phone;
+    const { code, newPassword } = req.body;
+    if (!mobile || !code) {
+      return res.status(400).json({ message: "Mobile number and verification code are required." });
+    }
+
+    const user = await User.findOne({ mobileNumber: { $in: getLoginMobileLookupCandidates(mobile) } });
     if (!user || !user.resetCode || !user.resetCodeExpiration) {
       return res.status(404).json({ message: "No reset request found." });
     }
@@ -510,8 +571,18 @@ exports.verifyCode = async (req, res) => {
     if (Date.now() > user.resetCodeExpiration || user.resetCode !== code) {
       return res.status(400).json({ message: "Invalid or expired code." });
     }
-    // Code is valid: reset the password to 'vita@123'
-    const newPassword = 'vita@123';
+
+    if (!newPassword) {
+      return res.json({
+        message: "Verification successful. Please enter a new password.",
+        requiresNewPassword: true
+      });
+    }
+
+    if (String(newPassword).length < 6) {
+      return res.status(400).json({ message: "Password must be at least 6 characters long." });
+    }
+
     // Generate salt and hash the new password
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(newPassword, salt);
@@ -520,22 +591,8 @@ exports.verifyCode = async (req, res) => {
     user.resetCodeExpiration = undefined;
     // Save without running all validations
     await user.save({ validateBeforeSave: false });
-    
-    // Send email notification with the new password
-    const mailOptions = {
-      from: process.env.EMAIL_USER,
-      to: user.email,
-      subject: 'Vita New Password',
-      text: `Your password has been reset. Your new password is: ${newPassword}`
-    };
-    transporter.sendMail(mailOptions, (error, info) => {
-      if (error) {
-        console.error("Error sending email:", error);
-        // Even if email fails, we consider the reset successful.
-      }
-    });
-    
-    res.json({ message: "Verification successful. Your password has been reset and sent to your email." });
+
+    res.json({ message: "Password reset successfully." });
   } catch (error) {
     console.error("Verify code error:", error);
     res.status(500).json({ message: "Server error." });
@@ -620,7 +677,7 @@ exports.resendVerificationCode = async (req, res) => {
     // Always try WhatsApp if ready
     if (await isWhatsAppReady()) {
       try {
-        const whatsappResult = await send2FACode(user.mobileNumber, verificationCode);
+        const whatsappResult = await send2FACode(user.mobileNumber, verificationCode, 'en', user.country);
         sentVia.push('whatsapp');
         console.log(`Verification code resent via WhatsApp to: ${whatsappResult.sentTo.join(', ')}`);
       } catch (whatsappError) {

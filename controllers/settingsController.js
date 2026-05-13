@@ -237,7 +237,7 @@ exports.enable2FA = async (req, res) => {
     if (useWhatsApp) {
       // Send code via WhatsApp (FREE - using whatsapp-web.js)
       try {
-        const result = await send2FACode(user.mobileNumber, code);
+        const result = await send2FACode(user.mobileNumber, code, 'en', user.country);
         
         // Mask the phone number for security
         const maskedPhone = result.phone.slice(0, 3) + '****' + result.phone.slice(-3);
