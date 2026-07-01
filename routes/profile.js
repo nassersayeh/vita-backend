@@ -5,6 +5,7 @@ const profileController = require('../controllers/profileController');
 
 // Change from '/profile/:userId' to '/:userId'
 router.get('/:userId', profileController.getProfile);
+router.put('/:id/plan-change', profileController.requestPlanChange);
 router.put('/:id', profileController.updateProfile); 
 router.put('/activate/:id', profileController.updateActivationStatus);
 

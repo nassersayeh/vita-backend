@@ -1,5 +1,13 @@
 const User = require('../models/User');
 
+const SUBSCRIPTION_PLANS = {
+  core: { name: 'Core System', monthlyPrice: 100, yearlyPrice: 1000 },
+  growth: { name: 'Growth + AI', monthlyPrice: 500, yearlyPrice: 5000 },
+  premium: { name: 'Premium Media Growth', monthlyPrice: 1500, yearlyPrice: 15000 },
+};
+const VALID_BILLING_CYCLES = ['monthly', 'yearly'];
+const VALID_PAYMENT_METHODS = ['visa', 'cash', 'bank_transfer', 'reflect'];
+
 
 exports.getProfile = async (req, res) => {
   try {
@@ -77,5 +85,46 @@ exports.updateActivationStatus = async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ message: 'Server error updating activation status.' });
+  }
+};
+
+exports.requestPlanChange = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { subscriptionPlan, subscriptionBillingCycle, paymentMethod } = req.body;
+
+    const user = await User.findById(id);
+    if (!user || !['Doctor', 'Pharmacy', 'Lab'].includes(user.role)) {
+      return res.status(404).json({ message: 'Provider account not found.' });
+    }
+
+    const selectedPlan = SUBSCRIPTION_PLANS[subscriptionPlan];
+    if (!selectedPlan) {
+      return res.status(400).json({ message: 'Please choose a valid subscription plan.' });
+    }
+    if (!VALID_BILLING_CYCLES.includes(subscriptionBillingCycle)) {
+      return res.status(400).json({ message: 'Please choose a valid billing cycle.' });
+    }
+    if (!VALID_PAYMENT_METHODS.includes(paymentMethod)) {
+      return res.status(400).json({ message: 'Please choose a valid payment method.' });
+    }
+
+    user.planChangeRequest = {
+      requestedPlanKey: subscriptionPlan,
+      requestedPlanName: selectedPlan.name,
+      requestedBillingCycle: subscriptionBillingCycle,
+      requestedPrice: subscriptionBillingCycle === 'yearly' ? selectedPlan.yearlyPrice : selectedPlan.monthlyPrice,
+      paymentMethod,
+      status: 'pending',
+      requestedAt: new Date(),
+    };
+
+    await user.save({ validateBeforeSave: false });
+    const responseUser = user.toObject();
+    delete responseUser.password;
+    res.json({ message: 'Plan change request saved.', user: responseUser });
+  } catch (err) {
+    console.error('Plan change request error:', err);
+    res.status(500).json({ message: 'Server error while saving plan change request.' });
   }
 };

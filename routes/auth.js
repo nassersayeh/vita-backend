@@ -31,7 +31,8 @@ router.put('/:id/accept-terms', async (req, res) => {
       user: {
         _id: user._id,
         termsAccepted: user.termsAccepted,
-        termsAcceptedAt: user.termsAcceptedAt
+        termsAcceptedAt: user.termsAcceptedAt,
+        termsVersion: user.termsVersion
       }
     });
   } catch (err) {

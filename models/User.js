@@ -138,8 +138,33 @@ const UserSchema = new mongoose.Schema({
   
   // Subscription and trial
   isPaid: { type: Boolean, default: function() { return this.role === 'User'; } },
+  subscriptionPlanKey: { type: String, enum: ['core', 'growth', 'premium', null], default: null },
+  subscriptionPlanName: { type: String, default: null },
+  subscriptionMonthlyPrice: { type: Number, default: null },
+  subscriptionYearlyPrice: { type: Number, default: null },
+  subscriptionBillingCycle: { type: String, enum: ['monthly', 'yearly', null], default: null },
+  subscriptionSelectedPrice: { type: Number, default: null },
+  subscriptionType: { type: String, default: null },
+  subscriptionStatus: {
+    type: String,
+    enum: ['pending_approval', 'trial', 'pending_payment', 'active', 'inactive', 'expired', 'cancelled', null],
+    default: null
+  },
+  paymentMethod: { type: String, enum: ['visa', 'cash', 'bank_transfer', 'reflect', null], default: null },
+  paymentMethodSelectedAt: { type: Date, default: null },
+  planChangeRequest: {
+    requestedPlanKey: { type: String, enum: ['core', 'growth', 'premium', null], default: null },
+    requestedPlanName: { type: String, default: null },
+    requestedBillingCycle: { type: String, enum: ['monthly', 'yearly', null], default: null },
+    requestedPrice: { type: Number, default: null },
+    paymentMethod: { type: String, enum: ['visa', 'cash', 'bank_transfer', 'reflect', null], default: null },
+    status: { type: String, enum: ['pending', 'approved', 'declined', null], default: null },
+    requestedAt: { type: Date, default: null },
+  },
+  trialStartDate: { type: Date, default: null },
   trialEndDate: { type: Date, default: null },
   // Paid subscription info
+  subscriptionStartDate: { type: Date, default: null },
   subscriptionEndDate: { type: Date, default: null },
   subscriptionPlanUnit: { type: String, enum: ['month', 'year'], default: null },
   subscriptionPlanValue: { type: Number, default: null },

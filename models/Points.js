@@ -7,6 +7,7 @@ const PointsSchema = new mongoose.Schema({
   lastLoginDate: { type: Date },
   spinWheelLastUsed: { type: Date },
   lastMonthlyBonusDate: { type: Date }, // Track last time monthly bonus was awarded
+  lastFivePointWheelDate: { type: Date },
   pointsHistory: [{
     points: { type: Number, required: true },
     action: { type: String, required: true }, // 'daily_login', 'appointment', 'order', 'test', 'image', 'spin_wheel', 'monthly_bonus'

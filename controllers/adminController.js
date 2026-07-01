@@ -1,3 +1,29 @@
+const formatWhatsAppDisplayName = (fullName = '', role = 'User', language = 'ar') => {
+  const name = String(fullName || '').trim();
+  if (!name) return '';
+
+  const roleTitles = language === 'ar'
+    ? {
+      Doctor: 'د.',
+      Pharmacy: 'صيدلية',
+      Lab: 'مختبر',
+      Clinic: 'عيادة',
+      Hospital: 'مستشفى',
+      Institution: 'مركز',
+    }
+    : {
+      Doctor: 'Dr.',
+      Pharmacy: 'Pharmacy',
+      Lab: 'Lab',
+      Clinic: 'Clinic',
+      Hospital: 'Hospital',
+      Institution: 'Medical Center',
+    };
+
+  const title = roleTitles[role];
+  return title ? `${title} ${name}` : name;
+};
+
 // Get user counts by role
 exports.getUserStats = async (req, res) => {
   try {
@@ -156,6 +182,8 @@ const Order = require('../models/Order');
 const Appointment = require('../models/Appointment');
 const Financial = require('../models/Financial');
 const PotentialClientStatus = require('../models/PotentialClientStatus');
+const PointSettings = require('../models/PointSettings');
+const LandingAnalyticsEvent = require('../models/LandingAnalyticsEvent');
 const { assignDefaultInventory } = require('../utils/assignDefaultInventory');
 const axios = require('axios');
 const crypto = require('crypto');
@@ -338,17 +366,49 @@ exports.approveUser = async (req, res) => {
     user.approvedBy = adminId;
     user.approvedAt = new Date();
 
-    // When approving a professional user (Pharmacy, Doctor, Lab, Clinic)
-    // Set them to FREE by default - no trial days unless explicitly paid
+    // When approving a professional user, preserve the selected registration plan.
+    // Core starts with a 7-day free trial; higher plans start a monthly cycle.
     if (status === 'active' && user.role !== 'User') {
-      user.isPaid = false;
-      user.subscriptionType = 'free';
-      user.subscriptionStatus = 'inactive';
-      user.trialEndDate = null;
-      user.trialStartDate = null;
-      user.trialUsed = false;
-      // Trial days are only set if admin explicitly provides them for a PAID upgrade
-      // For initial approval, we always start with FREE
+      if (user.subscriptionPlanKey) {
+        user.subscriptionType = user.subscriptionPlanKey;
+        if (user.subscriptionPlanKey === 'core') {
+          const trialStart = new Date();
+          user.isPaid = false;
+          user.subscriptionStatus = 'trial';
+          user.trialStartDate = trialStart;
+          user.trialEndDate = new Date(trialStart.getTime() + 7 * 24 * 60 * 60 * 1000);
+          user.subscriptionStartDate = null;
+          user.subscriptionEndDate = null;
+          user.trialUsed = true;
+        } else {
+          const subscriptionStart = new Date();
+          const subscriptionEnd = new Date(subscriptionStart);
+          const billingCycle = user.subscriptionBillingCycle === 'yearly' ? 'yearly' : 'monthly';
+          if (billingCycle === 'yearly') {
+            subscriptionEnd.setFullYear(subscriptionEnd.getFullYear() + 1);
+          } else {
+            subscriptionEnd.setMonth(subscriptionEnd.getMonth() + 1);
+          }
+          user.isPaid = true;
+          user.subscriptionStatus = 'active';
+          user.subscriptionStartDate = subscriptionStart;
+          user.subscriptionEndDate = subscriptionEnd;
+          user.subscriptionPlanUnit = billingCycle === 'yearly' ? 'year' : 'month';
+          user.subscriptionPlanValue = 1;
+          user.trialEndDate = null;
+          user.trialStartDate = null;
+          user.trialUsed = false;
+        }
+      } else {
+        user.isPaid = false;
+        user.subscriptionType = 'free';
+        user.subscriptionStatus = 'inactive';
+        user.trialEndDate = null;
+        user.trialStartDate = null;
+        user.subscriptionStartDate = null;
+        user.subscriptionEndDate = null;
+        user.trialUsed = false;
+      }
     }
 
     if (status === 'declined' && rejectionReason) {
@@ -376,16 +436,29 @@ exports.approveUser = async (req, res) => {
       console.log(`[ApproveUser] WhatsApp ready: ${ready}, userPhone: ${userPhone}, status: ${status}`);
       if (ready && userPhone) {
         let msg = '';
+        const normalizedCountry = String(user.country || '').trim().toLowerCase();
+        const countryCodes = normalizedCountry.includes('الأردن') || normalizedCountry.includes('اردن') || normalizedCountry.includes('jordan')
+          ? ['962']
+          : normalizedCountry.includes('قطر') || normalizedCountry.includes('qatar')
+            ? ['974']
+            : normalizedCountry.includes('السعود') || normalizedCountry.includes('saudi')
+              ? ['966']
+              : ['970', '972'];
+        let localPhone = userPhone.replace(/\D/g, '');
+        if (localPhone.startsWith('00')) localPhone = localPhone.slice(2);
+        const matchingCode = countryCodes.find((code) => localPhone.startsWith(code));
+        if (matchingCode) localPhone = localPhone.slice(matchingCode.length);
+        localPhone = localPhone.replace(/^0+/, '');
+        const phoneCandidates = Array.from(new Set(countryCodes.map((code) => `${code}${localPhone}`)));
+        const loginPhone = `+${phoneCandidates[0]}`;
+        const displayNameAr = formatWhatsAppDisplayName(user.fullName, user.role, 'ar');
+        const displayNameEn = formatWhatsAppDisplayName(user.fullName, user.role, 'en');
         if (status === 'active') {
-          msg = `مبروك ${user.fullName} 🎉\nتم تفعيل حسابك في نظام فيتا الصحي بنجاح!\nيمكنك الآن تسجيل الدخول والاستمتاع بجميع خدمات النظام.\nللدعم والمساعدة تواصل معنا: 0568899090\n---\nCongratulations ${user.fullName} 🎉\nYour account on Vita Health System has been approved!\nYou can now log in and enjoy all system services.\nFor support contact us: 0568899090`;
+          msg = `مبروك ${displayNameAr} 🎉\nتم تفعيل حسابك في نظام فيتا الصحي بنجاح!\n\nاستمتع بـ 7 أيام تجريبية، وسنتواصل معك قريباً لمساعدتك في تفعيل حسابك والاستفادة من خدمات النظام.\n\nبيانات تسجيل الدخول:\nاسم المستخدم: ${loginPhone}\nكلمة المرور: كلمة المرور التي قمت بإدخالها أو جرّب 123456789\n\nيمكنك الآن تسجيل الدخول والاستمتاع بجميع خدمات النظام.\nللدعم والمساعدة تواصل معنا: 0568899090\n---\nCongratulations ${displayNameEn} 🎉\nYour account on Vita Health System has been approved!\n\nEnjoy a 7-day free trial. We will contact you soon to help you activate your account and get the most from the system.\n\nLogin details:\nUsername: ${loginPhone}\nPassword: the password you entered during registration, or try 123456789\n\nYou can now log in and enjoy all system services.\nFor support contact us: 0568899090`;
         } else {
-          msg = `عزيزي ${user.fullName},\nنأسف لإعلامك أن طلب تسجيلك في نظام فيتا الصحي قد تم رفضه.\n${rejectionReason ? `السبب: ${rejectionReason}\n` : ''}للاستفسار تواصل معنا: 0599909926\n---\nDear ${user.fullName},\nWe regret to inform you that your registration request on Vita Health System has been declined.\n${rejectionReason ? `Reason: ${rejectionReason}\n` : ''}For inquiries contact us: 0599909926`;
+          msg = `عزيزي ${displayNameAr},\nنأسف لإعلامك أن طلب تسجيلك في نظام فيتا الصحي قد تم رفضه.\n${rejectionReason ? `السبب: ${rejectionReason}\n` : ''}للاستفسار تواصل معنا: 0599909926\n---\nDear ${displayNameEn},\nWe regret to inform you that your registration request on Vita Health System has been declined.\n${rejectionReason ? `Reason: ${rejectionReason}\n` : ''}For inquiries contact us: 0599909926`;
         }
-        const rawPhone = userPhone.replace(/\D/g, '');
-        const phone970 = rawPhone.startsWith('970') ? rawPhone : rawPhone.startsWith('0') ? '970' + rawPhone.slice(1) : '970' + rawPhone;
-        const phone972 = phone970.replace(/^970/, '972');
-        await sendWhatsAppMessage(phone970, msg).catch(() => {});
-        await sendWhatsAppMessage(phone972, msg).catch(() => {});
+        await Promise.all(phoneCandidates.map((phoneNumber) => sendWhatsAppMessage(phoneNumber, msg).catch(() => {})));
       }
     } catch (waErr) {
       console.error('WhatsApp approval notification error:', waErr.message);
@@ -399,6 +472,15 @@ exports.approveUser = async (req, res) => {
         role: user.role,
         activationStatus: user.activationStatus,
         subscriptionType: user.subscriptionType,
+        subscriptionStatus: user.subscriptionStatus,
+        subscriptionPlanKey: user.subscriptionPlanKey,
+        subscriptionPlanName: user.subscriptionPlanName,
+        subscriptionBillingCycle: user.subscriptionBillingCycle,
+        subscriptionSelectedPrice: user.subscriptionSelectedPrice,
+        paymentMethod: user.paymentMethod,
+        subscriptionStartDate: user.subscriptionStartDate,
+        subscriptionEndDate: user.subscriptionEndDate,
+        trialEndDate: user.trialEndDate,
         isPaid: user.isPaid
       }
     });
@@ -1045,5 +1127,125 @@ exports.updatePotentialClientStatus = async (req, res) => {
   } catch (error) {
     console.error('Update potential client status error:', error);
     res.status(500).json({ message: 'Server error while updating potential client status', error: error.message });
+  }
+};
+
+exports.getPointSettings = async (req, res) => {
+  try {
+    const settings = await PointSettings.findOneAndUpdate(
+      { key: 'default' },
+      { $setOnInsert: { pointValueIls: 0.1 } },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    );
+
+    res.json({
+      pointValueIls: settings.pointValueIls,
+      updatedAt: settings.updatedAt,
+    });
+  } catch (error) {
+    console.error('Get admin point settings error:', error);
+    res.status(500).json({ message: 'Server error while fetching point settings' });
+  }
+};
+
+exports.updatePointSettings = async (req, res) => {
+  try {
+    const pointValueIls = Number(req.body?.pointValueIls);
+
+    if (!Number.isFinite(pointValueIls) || pointValueIls < 0) {
+      return res.status(400).json({ message: 'pointValueIls must be a positive number' });
+    }
+
+    const settings = await PointSettings.findOneAndUpdate(
+      { key: 'default' },
+      {
+        pointValueIls,
+        updatedBy: req.user?._id,
+      },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    );
+
+    res.json({
+      message: 'Point settings updated',
+      pointValueIls: settings.pointValueIls,
+      updatedAt: settings.updatedAt,
+    });
+  } catch (error) {
+    console.error('Update admin point settings error:', error);
+    res.status(500).json({ message: 'Server error while updating point settings' });
+  }
+};
+
+exports.getLandingAnalytics = async (req, res) => {
+  try {
+    const now = new Date();
+    const startDate = req.query.startDate ? new Date(req.query.startDate) : new Date(now.getTime() - 29 * 24 * 60 * 60 * 1000);
+    const endDate = req.query.endDate ? new Date(req.query.endDate) : now;
+
+    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+      return res.status(400).json({ message: 'Invalid date range' });
+    }
+
+    startDate.setHours(0, 0, 0, 0);
+    endDate.setHours(23, 59, 59, 999);
+
+    const rangeMatch = {
+      occurredAt: { $gte: startDate, $lte: endDate },
+      eventType: { $in: ['visit', 'signup'] },
+    };
+
+    const [totalVisits, totalSignups, grouped, latestSignups] = await Promise.all([
+      LandingAnalyticsEvent.countDocuments({ eventType: 'visit', occurredAt: rangeMatch.occurredAt }),
+      LandingAnalyticsEvent.countDocuments({ eventType: 'signup', occurredAt: rangeMatch.occurredAt }),
+      LandingAnalyticsEvent.aggregate([
+        { $match: rangeMatch },
+        {
+          $group: {
+            _id: {
+              date: { $dateToString: { format: '%Y-%m-%d', date: '$occurredAt' } },
+              eventType: '$eventType',
+            },
+            count: { $sum: 1 },
+          },
+        },
+        { $sort: { '_id.date': 1 } },
+      ]),
+      LandingAnalyticsEvent.find({ eventType: 'signup', occurredAt: rangeMatch.occurredAt })
+        .sort({ occurredAt: -1 })
+        .limit(10)
+        .select('visitId role country city occurredAt userId')
+        .lean(),
+    ]);
+
+    const dailyMap = new Map();
+    const cursor = new Date(startDate);
+    while (cursor <= endDate) {
+      const key = cursor.toISOString().slice(0, 10);
+      dailyMap.set(key, { date: key, visits: 0, signups: 0 });
+      cursor.setDate(cursor.getDate() + 1);
+    }
+
+    grouped.forEach((item) => {
+      const date = item._id.date;
+      if (!dailyMap.has(date)) {
+        dailyMap.set(date, { date, visits: 0, signups: 0 });
+      }
+      const row = dailyMap.get(date);
+      if (item._id.eventType === 'visit') row.visits = item.count;
+      if (item._id.eventType === 'signup') row.signups = item.count;
+    });
+
+    res.json({
+      startDate,
+      endDate,
+      totalVisits,
+      totalSignups,
+      conversionRate: totalVisits > 0 ? Number(((totalSignups / totalVisits) * 100).toFixed(2)) : 0,
+      daily: Array.from(dailyMap.values()),
+      latestSignups,
+    });
+  } catch (error) {
+    console.error('Get landing analytics error:', error);
+    res.status(500).json({ message: 'Server error while fetching landing analytics' });
   }
 };

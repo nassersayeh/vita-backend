@@ -17,6 +17,13 @@ router.post('/notifications', adminController.sendNotification);
 // Get dashboard analytics
 router.get('/analytics', adminController.getDashboardAnalytics);
 
+// Landing page analytics
+router.get('/landing-analytics', adminController.getLandingAnalytics);
+
+// Points settings
+router.get('/points/settings', adminController.getPointSettings);
+router.put('/points/settings', adminController.updatePointSettings);
+
 // Get admin stats (new route)
 router.get('/stats', adminController.getDashboardAnalytics);
 

@@ -31,7 +31,13 @@ router.get('/:id/trial-status', auth, async (req, res) => {
     if (!user) return res.status(404).json({ message: 'User not found' });
     
     // Check subscription type first (can be 'paid', 'free', or undefined)
-    const isPaid = user.subscriptionType === 'paid' || user.isPaid === true;
+    const subscriptionEndDate = user.subscriptionEndDate ? new Date(user.subscriptionEndDate) : null;
+    const subscriptionExpired = !!(subscriptionEndDate && now >= subscriptionEndDate && user.subscriptionStatus === 'active');
+    const isPaid = !subscriptionExpired && (
+      user.subscriptionType === 'paid' ||
+      user.subscriptionStatus === 'active' ||
+      user.isPaid === true
+    );
     
     let trialEndDate = user.trialEndDate;
     const now = new Date();
@@ -43,6 +49,7 @@ router.get('/:id/trial-status', auth, async (req, res) => {
       trialEndDate,
       timeLeft,
       isPaid: isPaid,
+      isSubscriptionExpired: subscriptionExpired,
       hasAcceptedOffer: user.hasAcceptedOffer || false,
       trialUsed: user.trialUsed || false,
       dashboardRemainingTrialMs: user.dashboardRemainingTrialMs || null,
@@ -55,6 +62,14 @@ router.get('/:id/trial-status', auth, async (req, res) => {
       subscriptionEndDate: user.subscriptionEndDate,
       subscriptionType: user.subscriptionType,
       subscriptionStatus: user.subscriptionStatus,
+      subscriptionPlanKey: user.subscriptionPlanKey,
+      subscriptionPlanName: user.subscriptionPlanName,
+      subscriptionMonthlyPrice: user.subscriptionMonthlyPrice,
+      subscriptionYearlyPrice: user.subscriptionYearlyPrice,
+      subscriptionBillingCycle: user.subscriptionBillingCycle,
+      subscriptionSelectedPrice: user.subscriptionSelectedPrice,
+      subscriptionStartDate: user.subscriptionStartDate,
+      paymentMethod: user.paymentMethod,
     });
   } catch (error) {
     res.status(500).json({ message: 'Server error' });

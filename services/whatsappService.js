@@ -549,6 +549,7 @@ const normalizeCountryName = (country = '') => String(country || '').trim().toLo
 const getCountryDialingCodes = (country) => {
   const normalized = normalizeCountryName(country);
   if (normalized.includes('قطر') || normalized.includes('qatar')) return ['974'];
+  if (normalized.includes('الأردن') || normalized.includes('اردن') || normalized.includes('jordan')) return ['962'];
   if (normalized.includes('السعود') || normalized.includes('saudi')) return ['966'];
   return ['970', '972'];
 };
@@ -574,7 +575,7 @@ const formatPhoneNumber = (mobileNumber, country) => {
   let cleanNumber = mobileNumber.replace(/\D/g, '');
   if (cleanNumber.startsWith('00')) cleanNumber = cleanNumber.slice(2);
   cleanNumber = cleanNumber.replace(/^0+/, '');
-  const supportedCodes = ['970', '972', '974', '966'];
+  const supportedCodes = ['970', '972', '974', '966', '962'];
   if (supportedCodes.some((code) => cleanNumber.startsWith(code))) {
     return cleanNumber;
   }
@@ -653,28 +654,25 @@ const sendWhatsAppMessage = async (mobileNumber, message) => {
 // Send custom WhatsApp message
 const sendCustomMessage = async (mobileNumber, customMessage) => {
   let cleanNumber = mobileNumber.replace(/\D/g, '').replace(/^0+/, '');
-  if (!cleanNumber.startsWith('970') && !cleanNumber.startsWith('972')) {
+  const supportedCodes = ['970', '972', '974', '966', '962'];
+  if (!supportedCodes.some((code) => cleanNumber.startsWith(code))) {
     cleanNumber = '970' + cleanNumber;
   }
 
-  const phone970 = cleanNumber.replace(/^972/, '970');
-  const phone972 = cleanNumber.replace(/^970/, '972');
+  const phoneCandidates = cleanNumber.startsWith('970') || cleanNumber.startsWith('972')
+    ? [cleanNumber.replace(/^972/, '970'), cleanNumber.replace(/^970/, '972')]
+    : [cleanNumber];
 
   let sentTo = [];
   let errors = [];
 
-  try {
-    await sendWhatsAppMessage(phone970, customMessage);
-    sentTo.push(phone970);
-  } catch (error) {
-    errors.push(`+${phone970}: ${error.message}`);
-  }
-
-  try {
-    await sendWhatsAppMessage(phone972, customMessage);
-    sentTo.push(phone972);
-  } catch (error) {
-    errors.push(`+${phone972}: ${error.message}`);
+  for (const phoneNumber of Array.from(new Set(phoneCandidates))) {
+    try {
+      await sendWhatsAppMessage(phoneNumber, customMessage);
+      sentTo.push(phoneNumber);
+    } catch (error) {
+      errors.push(`+${phoneNumber}: ${error.message}`);
+    }
   }
 
   if (sentTo.length === 0) {

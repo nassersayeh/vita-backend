@@ -35,6 +35,28 @@ router.get('/role/:role', async (req, res) => {
   }
 });
 
+// GET public clinic doctors by clinic owner user ID
+router.get('/:id/clinic-doctors', async (req, res) => {
+  try {
+    const Clinic = require('../models/Clinic');
+    const clinic = await Clinic.findOne({ ownerId: req.params.id })
+      .populate('doctors.doctorId', 'fullName specialty profileImage city country rating consultationFee workplaces activationStatus');
+
+    if (!clinic) {
+      return res.json({ doctors: [] });
+    }
+
+    const doctors = (clinic.doctors || [])
+      .filter((entry) => entry.status === 'active' && entry.doctorId && entry.doctorId.activationStatus === 'active')
+      .map((entry) => entry.doctorId);
+
+    res.json({ doctors });
+  } catch (err) {
+    console.error('Error fetching public clinic doctors:', err);
+    res.status(500).json({ message: 'Server error fetching clinic doctors' });
+  }
+});
+
 // GET single user by ID
 router.get('/:id', async (req, res) => {
   try {

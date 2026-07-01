@@ -26,6 +26,7 @@ const normalizeCountryName = (country = '') => String(country || '').trim().toLo
 const getCountryDialingCodes = (country) => {
   const normalized = normalizeCountryName(country);
   if (normalized.includes('قطر') || normalized.includes('qatar')) return ['974'];
+  if (normalized.includes('الأردن') || normalized.includes('اردن') || normalized.includes('jordan')) return ['962'];
   if (normalized.includes('السعود') || normalized.includes('saudi')) return ['966'];
   return ['970', '972'];
 };
@@ -40,6 +41,9 @@ const normalizeLocalMobile = (mobile = '', country = '') => {
   digits = digits.replace(/^0+/, '');
   const normalizedCountry = normalizeCountryName(country);
   if ((normalizedCountry.includes('فلسطين') || normalizedCountry.includes('palestine') || normalizedCountry.includes('السعود') || normalizedCountry.includes('saudi')) && digits.startsWith('5')) {
+    return `0${digits}`;
+  }
+  if ((normalizedCountry.includes('الأردن') || normalizedCountry.includes('اردن') || normalizedCountry.includes('jordan')) && digits.startsWith('7')) {
     return `0${digits}`;
   }
 
@@ -64,7 +68,7 @@ const getMobileLookupCandidates = (mobile = '', country = '') => {
 const getLoginMobileLookupCandidates = (mobile = '') => {
   const rawDigits = String(mobile || '').replace(/\D/g, '');
   const withoutInternationalPrefix = rawDigits.startsWith('00') ? rawDigits.slice(2) : rawDigits;
-  const allCodes = ['970', '972', '974', '966'];
+  const allCodes = ['970', '972', '974', '966', '962'];
   const stripped = allCodes.reduce((value, code) => (
     value.startsWith(code) ? value.slice(code.length) : value
   ), withoutInternationalPrefix).replace(/^0+/, '');
@@ -79,10 +83,63 @@ const getLoginMobileLookupCandidates = (mobile = '') => {
   ].filter(Boolean)));
 };
 
+const formatWhatsAppDisplayName = (fullName = '', role = 'User', language = 'ar') => {
+  const name = String(fullName || '').trim();
+  if (!name) return '';
+
+  const roleTitles = language === 'ar'
+    ? {
+      Doctor: 'د.',
+      Pharmacy: 'صيدلية',
+      Lab: 'مختبر',
+      Clinic: 'عيادة',
+      Hospital: 'مستشفى',
+      Institution: 'مركز',
+    }
+    : {
+      Doctor: 'Dr.',
+      Pharmacy: 'Pharmacy',
+      Lab: 'Lab',
+      Clinic: 'Clinic',
+      Hospital: 'Hospital',
+      Institution: 'Medical Center',
+    };
+
+  const title = roleTitles[role];
+  return title ? `${title} ${name}` : name;
+};
+
+const PLAN_REQUIRED_ROLES = ['Doctor', 'Pharmacy', 'Lab'];
+const VALID_PAYMENT_METHODS = ['visa', 'cash', 'bank_transfer', 'reflect'];
+const VALID_BILLING_CYCLES = ['monthly', 'yearly'];
+const SUBSCRIPTION_PLANS = {
+  core: {
+    name: 'Core System',
+    monthlyPrice: 100,
+    yearlyPrice: 1000,
+    trialDays: 7,
+  },
+  growth: {
+    name: 'Growth + AI',
+    monthlyPrice: 500,
+    yearlyPrice: 5000,
+    trialDays: 0,
+  },
+  premium: {
+    name: 'Premium Media Growth',
+    monthlyPrice: 1500,
+    yearlyPrice: 15000,
+    trialDays: 0,
+  },
+};
+
 exports.signup = async (req, res) => {
   try {
-    const { profileImage, fullName, username, birthdate, mobile, password, country, city, idNumber, address, sex, role, email, termsAccepted } = req.body;
+    const { profileImage, fullName, username, birthdate, mobile, password, country, city, idNumber, address, sex, role, email, termsAccepted, subscriptionPlan, subscriptionBillingCycle, paymentMethod } = req.body;
     const normalizedMobile = normalizeLocalMobile(mobile, country);
+    const selectedPlan = subscriptionPlan ? SUBSCRIPTION_PLANS[subscriptionPlan] : null;
+    const selectedBillingCycle = VALID_BILLING_CYCLES.includes(subscriptionBillingCycle) ? subscriptionBillingCycle : null;
+    const selectedPaymentMethod = paymentMethod && VALID_PAYMENT_METHODS.includes(paymentMethod) ? paymentMethod : null;
     
     // Normalize email - treat empty string as undefined
     const normalizedEmail = email && email.trim() ? email.trim() : undefined;
@@ -95,13 +152,25 @@ exports.signup = async (req, res) => {
     }
     
     // Basic validations
-    if (!fullName || !mobile || !password || !country || !city || !idNumber || !role) {
+    if (!fullName || !mobile || !country || !city || !idNumber || !role) {
       return res.status(400).json({ message: 'Please fill all required fields.' });
     }
     
     // Address required only for patients
     if (role === 'User' && !address) {
       return res.status(400).json({ message: 'Address is required.' });
+    }
+
+    if (PLAN_REQUIRED_ROLES.includes(role) && !selectedPlan) {
+      return res.status(400).json({ message: 'Please choose a valid subscription plan.' });
+    }
+
+    if (PLAN_REQUIRED_ROLES.includes(role) && !selectedBillingCycle) {
+      return res.status(400).json({ message: 'Please choose a valid billing cycle.' });
+    }
+
+    if (PLAN_REQUIRED_ROLES.includes(role) && !selectedPaymentMethod) {
+      return res.status(400).json({ message: 'Please choose a valid payment method.' });
     }
     
     // Email is optional for all roles
@@ -126,8 +195,9 @@ exports.signup = async (req, res) => {
       if (existingEmail) return res.status(400).json({ message: 'email already exists.' });
     }
     
-    // Hash password
-    const hashedPassword = await bcrypt.hash(password, 10);
+    // Hash password - use default if the registration password field is left empty
+    const effectivePassword = password && String(password).trim() ? password : '123456789';
+    const hashedPassword = await bcrypt.hash(effectivePassword, 10);
     
     // Generate verification code
     const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
@@ -161,9 +231,17 @@ exports.signup = async (req, res) => {
         isActive: true
       }] : undefined,
       // Initialize subscription for new pharmacies
-      isPaid: role === 'Pharmacy' ? false : undefined,
-      subscriptionType: role === 'Pharmacy' ? 'free' : undefined,
-      subscriptionStatus: role === 'Pharmacy' ? 'inactive' : undefined,
+      isPaid: PLAN_REQUIRED_ROLES.includes(role) ? false : undefined,
+      subscriptionPlanKey: selectedPlan ? subscriptionPlan : undefined,
+      subscriptionPlanName: selectedPlan ? selectedPlan.name : undefined,
+      subscriptionMonthlyPrice: selectedPlan ? selectedPlan.monthlyPrice : undefined,
+      subscriptionYearlyPrice: selectedPlan ? selectedPlan.yearlyPrice : undefined,
+      subscriptionBillingCycle: selectedPlan ? selectedBillingCycle : undefined,
+      subscriptionSelectedPrice: selectedPlan ? (selectedBillingCycle === 'yearly' ? selectedPlan.yearlyPrice : selectedPlan.monthlyPrice) : undefined,
+      subscriptionType: selectedPlan ? 'selected' : undefined,
+      subscriptionStatus: selectedPlan ? 'pending_approval' : undefined,
+      paymentMethod: selectedPaymentMethod || undefined,
+      paymentMethodSelectedAt: selectedPaymentMethod ? new Date() : undefined,
     });
     await newUser.save();
     
@@ -177,17 +255,19 @@ exports.signup = async (req, res) => {
       // Send welcome WhatsApp message
       try {
         if (await isWhatsAppReady()) {
+          const displayNameAr = formatWhatsAppDisplayName(fullName, role, 'ar');
+          const displayNameEn = formatWhatsAppDisplayName(fullName, role, 'en');
           const welcomeMsg =
-            `مرحباً ${fullName} 👋\n` +
+            `مرحباً ${displayNameAr} 👋\n` +
             `أهلاً وسهلاً بك في نظام *فيتا الصحي* 🏥\n\n` +
-            `تم استلام طلب تسجيلك بنجاح وهو قيد المراجعة من قِبل الإدارة.\n` +
-            `سيتم إشعارك فور تفعيل حسابك.\n\n` +
+            `تم تسجيلك بنجاح في نظام فيتا لاستقبال المواعيد وإدارة العيادات. أوسع شبكة طبية والتي تضم أكثر من ١٠ آلاف مريض مسجل.\n` +
+            `سيتم إرسال بيانات تسجيل الدخول قريباً.\n\n` +
             `لأي استفسار أو دعم فني، يمكنك التواصل معنا مباشرةً على هذا الرقم وسيتولى فريقنا مساعدتك. 💬\n\n` +
             `---\n` +
-            `Hello ${fullName} 👋\n` +
+            `Hello ${displayNameEn} 👋\n` +
             `Welcome to *Vita Health System* 🏥\n\n` +
-            `Your registration request has been received and is under admin review.\n` +
-            `You will be notified once your account is activated.\n\n` +
+            `You have been registered successfully on Vita for receiving appointments and managing clinics. Vita is the widest medical network, with more than 10,000 registered patients.\n` +
+            `Your login details will be sent soon.\n\n` +
             `For any inquiries or technical support, feel free to message us on this number and our team will assist you. 💬`;
 
           for (const phoneNumber of getCountryDialingCodes(country).map((code) => `${code}${normalizedMobile.replace(/^0+/, '')}`)) {
@@ -228,6 +308,17 @@ exports.signup = async (req, res) => {
           points: 0,
           language: newUser.language || 'en',
           activationStatus: newUser.activationStatus,
+          termsAccepted: newUser.termsAccepted,
+          termsAcceptedAt: newUser.termsAcceptedAt,
+          termsVersion: newUser.termsVersion,
+          subscriptionPlanKey: newUser.subscriptionPlanKey,
+          subscriptionPlanName: newUser.subscriptionPlanName,
+          subscriptionMonthlyPrice: newUser.subscriptionMonthlyPrice,
+          subscriptionYearlyPrice: newUser.subscriptionYearlyPrice,
+          subscriptionBillingCycle: newUser.subscriptionBillingCycle,
+          subscriptionSelectedPrice: newUser.subscriptionSelectedPrice,
+          subscriptionStatus: newUser.subscriptionStatus,
+          paymentMethod: newUser.paymentMethod,
           isPaid: newUser.isPaid,
         },
         token,
@@ -504,6 +595,21 @@ exports.login = async (req, res) => {
         managedByClinic: updatedUser.managedByClinic || false,
         clinicId: updatedUser.clinicId || null,
         activationStatus: updatedUser.activationStatus,
+        termsAccepted: updatedUser.termsAccepted,
+        termsAcceptedAt: updatedUser.termsAcceptedAt,
+        termsVersion: updatedUser.termsVersion,
+        subscriptionPlanKey: updatedUser.subscriptionPlanKey,
+        subscriptionPlanName: updatedUser.subscriptionPlanName,
+        subscriptionMonthlyPrice: updatedUser.subscriptionMonthlyPrice,
+        subscriptionYearlyPrice: updatedUser.subscriptionYearlyPrice,
+        subscriptionBillingCycle: updatedUser.subscriptionBillingCycle,
+        subscriptionSelectedPrice: updatedUser.subscriptionSelectedPrice,
+        subscriptionStatus: updatedUser.subscriptionStatus,
+        subscriptionStartDate: updatedUser.subscriptionStartDate,
+        subscriptionEndDate: updatedUser.subscriptionEndDate,
+        trialStartDate: updatedUser.trialStartDate,
+        trialEndDate: updatedUser.trialEndDate,
+        paymentMethod: updatedUser.paymentMethod,
         isPaid: updatedUser.isPaid,
       },
       token,

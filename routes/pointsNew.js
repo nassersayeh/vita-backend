@@ -12,6 +12,9 @@ router.post('/spin-wheel', authMiddleware, pointsController.spinWheel);
 // Award action points
 router.post('/award-action', authMiddleware, pointsController.awardActionPoints);
 
+// Point value settings
+router.get('/settings', pointsController.getPointSettings);
+
 // Get user points (enhanced)
 router.get('/user/:userId', authMiddleware, pointsController.getUserPointsNew);
 router.get('/user', authMiddleware, pointsController.getUserPointsNew);

@@ -1,5 +1,6 @@
 const Points = require('../models/Points');
 const User = require('../models/User');
+const PointSettings = require('../models/PointSettings');
 
 // Award daily login points
 exports.dailyLogin = async (req, res) => {
@@ -51,24 +52,6 @@ exports.dailyLogin = async (req, res) => {
       description: `Daily login (Day ${points.dailyLoginStreak})`
     });
 
-    // Check for monthly bonus (once per month)
-    const lastMonthBonus = points.lastMonthlyBonusDate ? new Date(points.lastMonthlyBonusDate) : null;
-    const currentMonth = today.getMonth();
-    const currentYear = today.getFullYear();
-    const lastBonusMonth = lastMonthBonus ? lastMonthBonus.getMonth() : -1;
-    const lastBonusYear = lastMonthBonus ? lastMonthBonus.getFullYear() : -1;
-
-    if (lastBonusMonth !== currentMonth || lastBonusYear !== currentYear) {
-      // Award 10 points for monthly bonus
-      points.totalPoints += 10;
-      points.lastMonthlyBonusDate = new Date();
-      points.pointsHistory.push({
-        points: 10,
-        action: 'monthly_bonus',
-        description: 'Monthly login bonus'
-      });
-    }
-
     await points.save();
 
     // Update user's total points
@@ -80,7 +63,7 @@ exports.dailyLogin = async (req, res) => {
       pointsEarned: pointsToAdd,
       totalPoints: points.totalPoints,
       streak: points.dailyLoginStreak,
-      monthlyBonusAwarded: lastBonusMonth !== currentMonth || lastBonusYear !== currentYear
+      monthlyBonusAwarded: false
     });
 
   } catch (error) {
@@ -89,7 +72,7 @@ exports.dailyLogin = async (req, res) => {
   }
 };
 
-// Spin wheel functionality (every 48 hours, 1-10 points weighted to 1)
+// Spin wheel functionality (every 24 hours, 1-3 points daily, 5 points once per month)
 exports.spinWheel = async (req, res) => {
   try {
     const userId = req.user._id; // Get from authenticated user
@@ -107,37 +90,35 @@ exports.spinWheel = async (req, res) => {
     const now = new Date();
     const lastSpin = points.spinWheelLastUsed;
     
-    // Check if 48 hours have passed
+    // Check if 24 hours have passed
     if (lastSpin) {
       const hoursSinceLastSpin = (now - lastSpin) / (1000 * 60 * 60);
-      if (hoursSinceLastSpin < 48) {
-        const hoursRemaining = Math.ceil(48 - hoursSinceLastSpin);
+      if (hoursSinceLastSpin < 24) {
+        const hoursRemaining = Math.ceil(24 - hoursSinceLastSpin);
         return res.status(400).json({ 
           message: 'Spin wheel not available yet',
           hoursRemaining,
-          nextSpinAvailable: new Date(lastSpin.getTime() + 48 * 60 * 60 * 1000)
+          nextSpinAvailable: new Date(lastSpin.getTime() + 24 * 60 * 60 * 1000)
         });
       }
     }
 
-    // Spin wheel rewards: heavily weighted towards 1 point, max 10
-    // Distribution: 1 appears 80% of the time, 2-5 appear 15%, 6-10 appear 5%
-    const rand = Math.random();
-    let pointsWon;
-    if (rand < 0.80) {
-      pointsWon = 1;
-    } else if (rand < 0.95) {
-      pointsWon = Math.floor(Math.random() * 4) + 2; // 2-5
-    } else {
-      pointsWon = Math.floor(Math.random() * 5) + 6; // 6-10
-    }
+    const lastFivePointWheelDate = points.lastFivePointWheelDate ? new Date(points.lastFivePointWheelDate) : null;
+    const fivePointBonusUsedThisMonth = lastFivePointWheelDate
+      && lastFivePointWheelDate.getMonth() === now.getMonth()
+      && lastFivePointWheelDate.getFullYear() === now.getFullYear();
+    const prizePool = fivePointBonusUsedThisMonth ? [1, 1, 2, 2, 3, 3] : [1, 1, 2, 2, 3, 3, 5];
+    const pointsWon = prizePool[Math.floor(Math.random() * prizePool.length)];
 
     points.totalPoints += pointsWon;
     points.spinWheelLastUsed = now;
+    if (pointsWon === 5) {
+      points.lastFivePointWheelDate = now;
+    }
     
     points.pointsHistory.push({
       points: pointsWon,
-      action: 'spin_wheel',
+      action: pointsWon === 5 ? 'monthly_wheel_bonus' : 'spin_wheel',
       description: `Spin wheel reward - ${pointsWon} point${pointsWon > 1 ? 's' : ''}`
     });
 
@@ -151,7 +132,7 @@ exports.spinWheel = async (req, res) => {
       message: 'Spin wheel completed',
       pointsWon,
       totalPoints: points.totalPoints,
-      nextSpinAvailable: new Date(now.getTime() + 48 * 60 * 60 * 1000)
+      nextSpinAvailable: new Date(now.getTime() + 24 * 60 * 60 * 1000)
     });
 
   } catch (error) {
@@ -222,6 +203,24 @@ exports.awardActionPoints = async (req, res) => {
   return exports.awardPoints(req, res);
 };
 
+exports.getPointSettings = async (req, res) => {
+  try {
+    const settings = await PointSettings.findOneAndUpdate(
+      { key: 'default' },
+      { $setOnInsert: { pointValueIls: 0.1 } },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    );
+
+    res.json({
+      pointValueIls: settings.pointValueIls,
+      updatedAt: settings.updatedAt,
+    });
+  } catch (error) {
+    console.error('Get point settings error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
 // Get user points and history (enhanced version)
 exports.getUserPointsNew = async (req, res) => {
   try {
@@ -239,14 +238,14 @@ exports.getUserPointsNew = async (req, res) => {
 
     const now = new Date();
     const lastSpin = points.spinWheelLastUsed;
-    const canSpinWheel = !lastSpin || (now - lastSpin) >= (48 * 60 * 60 * 1000);
+    const canSpinWheel = !lastSpin || (now - lastSpin) >= (24 * 60 * 60 * 1000);
 
     res.json({
       totalPoints: points.totalPoints,
       dailyLoginStreak: points.dailyLoginStreak,
       pointsHistory: points.pointsHistory.slice(-20), // Last 20 entries
       canSpinWheel,
-      nextSpinAvailable: lastSpin ? new Date(lastSpin.getTime() + 48 * 60 * 60 * 1000) : null
+      nextSpinAvailable: lastSpin ? new Date(lastSpin.getTime() + 24 * 60 * 60 * 1000) : null
     });
 
   } catch (error) {

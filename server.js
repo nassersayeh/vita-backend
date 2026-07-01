@@ -53,6 +53,7 @@ const doctorClaimRoutes = require('./routes/doctorClaimRoutes');
 const oversightRoutes = require('./routes/oversightRoutes');
 const aiRoutes = require('./routes/aiRoutes');
 const insuranceClaimsRoutes = require('./routes/insuranceClaimsAPI');
+const landingAnalyticsRoutes = require('./routes/landingAnalytics');
 
 // Firebase admin
 const admin = require('firebase-admin');
@@ -118,7 +119,7 @@ const providerRoutes = require('./routes/provider');
 const medicationRoutes = require('./routes/medication');
 const cartRoutes = require('./routes/cart');
 
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://vitaUser:Pop%401990@127.0.0.1:27017/vita?authSource=admin';
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://vitaUser:Pop%401990@127.0.0.1:27018/vita?authSource=admin';
 
 // Connect to MongoDB immediately on startup
 mongoose.connect(MONGODB_URI).then(() => {
@@ -184,6 +185,7 @@ app.use('/api/suppliers', supplierRoutes);
 
 // Mount new enhanced routes
 app.use('/api/points-new', pointsNewRoutes);
+app.use('/api/landing-analytics', landingAnalyticsRoutes);
 app.use('/api/provider', providerRoutes);
 app.use('/api/medication', medicationRoutes);
 app.use('/api/cart', cartRoutes);
