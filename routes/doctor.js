@@ -259,6 +259,7 @@ router.get('/:doctorId/trial-status', async (req, res) => {
       subscriptionStartDate: doctor.subscriptionStartDate,
       subscriptionEndDate: doctor.subscriptionEndDate,
       paymentMethod: doctor.paymentMethod,
+      planChangeRequest: doctor.planChangeRequest,
     });
   } catch (error) {
     console.error('Error fetching trial status:', error);

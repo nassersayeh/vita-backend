@@ -1,4 +1,5 @@
 const User = require('../models/User');
+const Notification = require('../models/Notification');
 
 const SUBSCRIPTION_PLANS = {
   core: { name: 'Core System', monthlyPrice: 100, yearlyPrice: 1000 },
@@ -120,6 +121,21 @@ exports.requestPlanChange = async (req, res) => {
     };
 
     await user.save({ validateBeforeSave: false });
+
+    try {
+      const admins = await User.find({ role: { $in: ['Admin', 'Superadmin'] } }).select('_id').lean();
+      if (admins.length) {
+        await Notification.insertMany(admins.map((admin) => ({
+          user: admin._id,
+          type: 'subscription',
+          relatedId: user._id,
+          message: `${user.fullName || 'A provider'} submitted a subscription renewal/change request for ${selectedPlan.name}.`,
+        })));
+      }
+    } catch (notificationErr) {
+      console.error('Failed to notify admins about plan change request:', notificationErr.message);
+    }
+
     const responseUser = user.toObject();
     delete responseUser.password;
     res.json({ message: 'Plan change request saved.', user: responseUser });

@@ -24,6 +24,57 @@ const formatWhatsAppDisplayName = (fullName = '', role = 'User', language = 'ar'
   return title ? `${title} ${name}` : name;
 };
 
+const SUBSCRIPTION_PLANS = {
+  core: { name: 'Core System', monthlyPrice: 100, yearlyPrice: 1000, trialDays: 7 },
+  growth: { name: 'Growth + AI', monthlyPrice: 500, yearlyPrice: 5000, trialDays: 0 },
+  premium: { name: 'Premium Media Growth', monthlyPrice: 1500, yearlyPrice: 15000, trialDays: 0 },
+};
+
+const getPlanPrice = (planKey, billingCycle) => {
+  const plan = SUBSCRIPTION_PLANS[planKey];
+  if (!plan) return null;
+  return billingCycle === 'yearly' ? plan.yearlyPrice : plan.monthlyPrice;
+};
+
+const applyPaidSubscription = (user, {
+  planKey = user.subscriptionPlanKey,
+  billingCycle = user.subscriptionBillingCycle,
+  paymentMethod = user.paymentMethod,
+  amount = null,
+} = {}) => {
+  const plan = SUBSCRIPTION_PLANS[planKey];
+  const normalizedCycle = billingCycle === 'yearly' ? 'yearly' : 'monthly';
+  const subscriptionStart = new Date();
+  const subscriptionEnd = new Date(subscriptionStart);
+
+  if (normalizedCycle === 'yearly') {
+    subscriptionEnd.setFullYear(subscriptionEnd.getFullYear() + 1);
+  } else {
+    subscriptionEnd.setMonth(subscriptionEnd.getMonth() + 1);
+  }
+
+  user.subscriptionPlanKey = planKey;
+  user.subscriptionPlanName = plan?.name || user.subscriptionPlanName;
+  user.subscriptionMonthlyPrice = plan?.monthlyPrice ?? user.subscriptionMonthlyPrice;
+  user.subscriptionYearlyPrice = plan?.yearlyPrice ?? user.subscriptionYearlyPrice;
+  user.subscriptionBillingCycle = normalizedCycle;
+  user.subscriptionSelectedPrice = amount ?? getPlanPrice(planKey, normalizedCycle);
+  user.subscriptionType = planKey;
+  user.paymentMethod = paymentMethod || user.paymentMethod;
+  user.paymentMethodSelectedAt = paymentMethod ? new Date() : user.paymentMethodSelectedAt;
+  user.isPaid = true;
+  user.subscriptionStatus = 'active';
+  user.subscriptionStartDate = subscriptionStart;
+  user.subscriptionEndDate = subscriptionEnd;
+  user.subscriptionPlanUnit = normalizedCycle === 'yearly' ? 'year' : 'month';
+  user.subscriptionPlanValue = 1;
+  user.lastPaymentAmount = user.subscriptionSelectedPrice;
+  user.lastPaymentAt = subscriptionStart;
+  user.trialStartDate = null;
+  user.trialEndDate = null;
+  user.trialUsed = false;
+};
+
 // Get user counts by role
 exports.getUserStats = async (req, res) => {
   try {
@@ -335,12 +386,29 @@ const getPotentialClientsData = async (forceRefresh = false) => {
 // Get pending provider approvals
 exports.getPendingApprovals = async (req, res) => {
   try {
-    const pendingUsers = await User.find({
+    const pendingRegistrationUsers = await User.find({
       activationStatus: 'pending',
       role: { $in: ['Doctor', 'Pharmacy', 'Lab', 'Institution', 'Hospital'] }
     }).select('-password').sort({ createdAt: -1 });
 
-    res.json(pendingUsers);
+    const pendingPlanRequests = await User.find({
+      role: { $in: ['Doctor', 'Pharmacy', 'Lab', 'Institution', 'Hospital'] },
+      activationStatus: 'active',
+      'planChangeRequest.status': 'pending',
+    }).select('-password').sort({ 'planChangeRequest.requestedAt': -1 });
+
+    const registrationRequests = pendingRegistrationUsers.map((user) => ({
+      ...user.toObject(),
+      approvalRequestType: 'registration',
+    }));
+
+    const planRequests = pendingPlanRequests.map((user) => ({
+      ...user.toObject(),
+      approvalRequestType: 'plan_change',
+      requestedAt: user.planChangeRequest?.requestedAt || user.updatedAt,
+    }));
+
+    res.json([...planRequests, ...registrationRequests]);
   } catch (error) {
     console.error('Get pending approvals error:', error);
     res.status(500).json({ message: 'Server error while fetching pending approvals' });
@@ -351,7 +419,7 @@ exports.getPendingApprovals = async (req, res) => {
 exports.approveUser = async (req, res) => {
   try {
     const { userId } = req.params;
-    const { status, adminId, rejectionReason, trialDays } = req.body;
+    const { status, adminId, rejectionReason, requestType } = req.body;
 
     if (!['active', 'declined'].includes(status)) {
       return res.status(400).json({ message: 'Invalid status' });
@@ -360,6 +428,51 @@ exports.approveUser = async (req, res) => {
     const user = await User.findById(userId);
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
+    }
+
+    const isPlanChangeRequest = requestType === 'plan_change' || (
+      user.activationStatus === 'active' && user.planChangeRequest?.status === 'pending'
+    );
+
+    if (isPlanChangeRequest) {
+      if (!user.planChangeRequest || user.planChangeRequest.status !== 'pending') {
+        return res.status(400).json({ message: 'No pending plan change request found.' });
+      }
+
+      if (status === 'active') {
+        applyPaidSubscription(user, {
+          planKey: user.planChangeRequest.requestedPlanKey,
+          billingCycle: user.planChangeRequest.requestedBillingCycle,
+          paymentMethod: user.planChangeRequest.paymentMethod,
+          amount: user.planChangeRequest.requestedPrice,
+        });
+        user.planChangeRequest.status = 'approved';
+      } else {
+        user.planChangeRequest.status = 'declined';
+        if (rejectionReason) user.rejectionReason = rejectionReason;
+      }
+
+      user.approvedBy = adminId;
+      user.approvedAt = new Date();
+      await user.save({ validateBeforeSave: false });
+
+      try {
+        const Notification = require('../models/Notification');
+        await Notification.create({
+          user: user._id,
+          type: 'subscription',
+          message: status === 'active'
+            ? `Your subscription renewal request was approved. Your ${user.subscriptionPlanName || 'selected plan'} is now active until ${user.subscriptionEndDate ? new Date(user.subscriptionEndDate).toLocaleDateString() : 'the subscription end date'}.`
+            : `Your subscription renewal request was declined${rejectionReason ? `: ${rejectionReason}` : '.'}`,
+        });
+      } catch (e) {
+        console.error('Failed to create plan request notification:', e.message);
+      }
+
+      return res.json({
+        message: status === 'active' ? 'Plan change request approved successfully' : 'Plan change request declined',
+        user,
+      });
     }
 
     user.activationStatus = status;
