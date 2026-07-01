@@ -25,10 +25,7 @@ router.get('/role/:role', async (req, res) => {
     }
     
     const users = await User.find(filter).select('-password'); // Exclude sensitive fields
-    if (!users || users.length === 0) {
-      return res.status(404).json({ message: `No users found for role: ${role}` });
-    }
-    res.json(users);
+    res.json(users || []);
   } catch (err) {
     console.error('Error fetching users by role:', err);
     res.status(500).json({ message: 'Server error fetching users by role' });
