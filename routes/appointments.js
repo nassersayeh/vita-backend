@@ -3,6 +3,34 @@ const router = express.Router();
 const appointmentController = require('../controllers/appointmentController');
 const Appointment = require('../models/Appointment');
 
+// GET /api/appointments - Get all appointments for admin dashboard
+router.get('/', async (req, res) => {
+  try {
+    const { status, doctorId, patientId, startDate, endDate } = req.query;
+    const filter = {};
+
+    if (status) filter.status = status;
+    if (doctorId) filter.doctorId = doctorId;
+    if (patientId) filter.patient = patientId;
+    if (startDate || endDate) {
+      filter.appointmentDateTime = {};
+      if (startDate) filter.appointmentDateTime.$gte = new Date(startDate);
+      if (endDate) filter.appointmentDateTime.$lte = new Date(endDate);
+    }
+
+    const appointments = await Appointment.find(filter)
+      .populate('doctorId', 'fullName specialty specialization city mobileNumber')
+      .populate('patient', 'fullName mobileNumber city')
+      .sort({ appointmentDateTime: -1 })
+      .lean();
+
+    res.json({ appointments });
+  } catch (error) {
+    console.error('Error fetching appointments:', error);
+    res.status(500).json({ message: 'Server error fetching appointments' });
+  }
+});
+
 // POST /api/appointments - Create a new appointment
 router.post('/', appointmentController.createAppointment);
 

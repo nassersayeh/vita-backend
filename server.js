@@ -54,6 +54,7 @@ const oversightRoutes = require('./routes/oversightRoutes');
 const aiRoutes = require('./routes/aiRoutes');
 const insuranceClaimsRoutes = require('./routes/insuranceClaimsAPI');
 const landingAnalyticsRoutes = require('./routes/landingAnalytics');
+const analyticsRoutes = require('./routes/analytics');
 
 // Firebase admin
 const admin = require('firebase-admin');
@@ -186,6 +187,7 @@ app.use('/api/suppliers', supplierRoutes);
 // Mount new enhanced routes
 app.use('/api/points-new', pointsNewRoutes);
 app.use('/api/landing-analytics', landingAnalyticsRoutes);
+app.use('/api/analytics', analyticsRoutes);
 app.use('/api/provider', providerRoutes);
 app.use('/api/medication', medicationRoutes);
 app.use('/api/cart', cartRoutes);
