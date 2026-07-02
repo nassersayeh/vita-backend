@@ -75,6 +75,54 @@ const applyPaidSubscription = (user, {
   user.trialUsed = false;
 };
 
+const getWhatsAppPhoneCandidates = (user) => {
+  const userPhone = user.mobileNumber || user.phone;
+  if (!userPhone) return [];
+
+  const normalizedCountry = String(user.country || '').trim().toLowerCase();
+  const countryCodes = normalizedCountry.includes('الأردن') || normalizedCountry.includes('اردن') || normalizedCountry.includes('jordan')
+    ? ['962']
+    : normalizedCountry.includes('قطر') || normalizedCountry.includes('qatar')
+      ? ['974']
+      : normalizedCountry.includes('السعود') || normalizedCountry.includes('saudi')
+        ? ['966']
+        : ['970', '972'];
+
+  let localPhone = String(userPhone).replace(/\D/g, '');
+  if (localPhone.startsWith('00')) localPhone = localPhone.slice(2);
+  const matchingCode = countryCodes.find((code) => localPhone.startsWith(code));
+  if (matchingCode) localPhone = localPhone.slice(matchingCode.length);
+  localPhone = localPhone.replace(/^0+/, '');
+
+  if (!localPhone) return [];
+  return Array.from(new Set(countryCodes.map((code) => `${code}${localPhone}`)));
+};
+
+const sendSubscriptionActivationWhatsApp = async (user) => {
+  try {
+    const { sendWhatsAppMessage, isWhatsAppReady } = require('../services/whatsappService');
+    const ready = await isWhatsAppReady();
+    const phoneCandidates = getWhatsAppPhoneCandidates(user);
+    console.log(`[SubscriptionApproval] WhatsApp ready: ${ready}, candidates: ${phoneCandidates.length}, userId: ${user._id}`);
+    if (!ready || !phoneCandidates.length) return;
+
+    const displayNameAr = formatWhatsAppDisplayName(user.fullName, user.role, 'ar');
+    const displayNameEn = formatWhatsAppDisplayName(user.fullName, user.role, 'en');
+    const planName = user.subscriptionPlanName || user.subscriptionPlanKey || 'Vita';
+    const endDate = user.subscriptionEndDate ? new Date(user.subscriptionEndDate).toLocaleDateString('en-GB') : '';
+    const billingCycleAr = user.subscriptionBillingCycle === 'yearly' ? 'سنوي' : 'شهري';
+    const billingCycleEn = user.subscriptionBillingCycle === 'yearly' ? 'yearly' : 'monthly';
+
+    const message = `مرحباً ${displayNameAr}\nتم تفعيل خدمة فيتا بنجاح ✅\n\nالخطة: ${planName}\nالفوترة: ${billingCycleAr}${endDate ? `\nصالحة حتى: ${endDate}` : ''}\n\nيمكنك الآن الدخول إلى حسابك واستخدام لوحة التحكم.\nللدعم والمساعدة تواصل معنا: 0568899090\n---\nHello ${displayNameEn},\nYour Vita service has been activated successfully ✅\n\nPlan: ${planName}\nBilling: ${billingCycleEn}${endDate ? `\nValid until: ${endDate}` : ''}\n\nYou can now log in and use your dashboard.\nFor support contact us: 0568899090`;
+
+    await Promise.all(phoneCandidates.map((phoneNumber) => sendWhatsAppMessage(phoneNumber, message).catch((err) => {
+      console.error(`Failed to send subscription activation WhatsApp to ${phoneNumber}:`, err.message);
+    })));
+  } catch (err) {
+    console.error('Subscription activation WhatsApp error:', err.message);
+  }
+};
+
 // Get user counts by role
 exports.getUserStats = async (req, res) => {
   try {
@@ -213,6 +261,10 @@ exports.updatePaymentStatus = async (req, res) => {
       console.error('Failed to create payment notification:', e.message);
     }
 
+    if (user.isPaid) {
+      await sendSubscriptionActivationWhatsApp(user);
+    }
+
     res.json({ 
       message: 'Payment status updated', 
       isPaid: user.isPaid,
@@ -235,11 +287,13 @@ const Financial = require('../models/Financial');
 const PotentialClientStatus = require('../models/PotentialClientStatus');
 const PointSettings = require('../models/PointSettings');
 const LandingAnalyticsEvent = require('../models/LandingAnalyticsEvent');
+const DemoRequest = require('../models/DemoRequest');
 const { assignDefaultInventory } = require('../utils/assignDefaultInventory');
 const axios = require('axios');
 const crypto = require('crypto');
 
 const leadStatusValues = ['none', 'contacted', 'subscribed', 'trial', 'rejected'];
+const demoRequestStatusValues = ['new', 'contacted', 'scheduled', 'closed'];
 const potentialClientsCache = {
   data: null,
   fetchedAt: 0,
@@ -467,6 +521,10 @@ exports.approveUser = async (req, res) => {
         });
       } catch (e) {
         console.error('Failed to create plan request notification:', e.message);
+      }
+
+      if (status === 'active') {
+        await sendSubscriptionActivationWhatsApp(user);
       }
 
       return res.json({
@@ -1240,6 +1298,101 @@ exports.updatePotentialClientStatus = async (req, res) => {
   } catch (error) {
     console.error('Update potential client status error:', error);
     res.status(500).json({ message: 'Server error while updating potential client status', error: error.message });
+  }
+};
+
+exports.getDemoRequests = async (req, res) => {
+  try {
+    const {
+      page = 1,
+      limit = 25,
+      status = 'all',
+      search = '',
+    } = req.query;
+
+    const currentPage = Math.max(Number(page) || 1, 1);
+    const pageLimit = Math.min(Math.max(Number(limit) || 25, 1), 100);
+    const query = {};
+
+    if (status !== 'all') {
+      if (!demoRequestStatusValues.includes(status)) {
+        return res.status(400).json({ message: 'Invalid demo request status' });
+      }
+      query.status = status;
+    }
+
+    const searchTerm = String(search || '').trim();
+    if (searchTerm) {
+      const searchRegex = new RegExp(searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      query.$or = [
+        { organization: searchRegex },
+        { contact: searchRegex },
+        { phone: searchRegex },
+        { email: searchRegex },
+        { country: searchRegex },
+        { type: searchRegex },
+        { size: searchRegex },
+        { time: searchRegex },
+        { message: searchRegex },
+      ];
+    }
+
+    const [requests, total] = await Promise.all([
+      DemoRequest.find(query)
+        .populate('handledBy', 'name email mobileNumber role')
+        .sort({ createdAt: -1 })
+        .skip((currentPage - 1) * pageLimit)
+        .limit(pageLimit)
+        .lean(),
+      DemoRequest.countDocuments(query),
+    ]);
+
+    res.json({
+      requests,
+      total,
+      totalPages: Math.max(Math.ceil(total / pageLimit), 1),
+      currentPage,
+      limit: pageLimit,
+    });
+  } catch (error) {
+    console.error('Get demo requests error:', error);
+    res.status(500).json({ message: 'Server error while fetching demo requests', error: error.message });
+  }
+};
+
+exports.updateDemoRequestStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, notes, adminId } = req.body;
+
+    if (!demoRequestStatusValues.includes(status)) {
+      return res.status(400).json({ message: 'Invalid demo request status' });
+    }
+
+    const update = {
+      status,
+      handledAt: new Date(),
+    };
+
+    if (typeof notes === 'string') {
+      update.notes = notes.trim();
+    }
+
+    if (adminId) {
+      update.handledBy = adminId;
+    }
+
+    const demoRequest = await DemoRequest.findByIdAndUpdate(id, update, { new: true })
+      .populate('handledBy', 'name email mobileNumber role');
+
+    if (!demoRequest) {
+      return res.status(404).json({ message: 'Demo request not found' });
+    }
+
+    res.json({ message: 'Demo request status updated', demoRequest });
+  } catch (error) {
+    console.error('Update demo request status error:', error);
+    res.status(500).json({ message: 'Server error while updating demo request status', error: error.message });
   }
 };
 

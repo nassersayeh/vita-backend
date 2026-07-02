@@ -33,6 +33,10 @@ router.get('/potential-clients', adminController.getPotentialClients);
 // Update potential client follow-up status
 router.put('/potential-clients/status', adminController.updatePotentialClientStatus);
 
+// Demo requests submitted from landing page
+router.get('/demo-requests', adminController.getDemoRequests);
+router.put('/demo-requests/:id/status', adminController.updateDemoRequestStatus);
+
 // Get notification history
 router.get('/notifications/history', adminController.getNotificationHistory);
 
