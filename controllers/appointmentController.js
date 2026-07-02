@@ -38,11 +38,85 @@ exports.rateProvider = async (req, res) => {
 const Appointment = require('../models/Appointment');
 const Financial = require('../models/Financial');
 const Points = require('../models/Points');
+const bcrypt = require('bcrypt');
 
 const admin = require('firebase-admin');
 const User = require('../models/User'); // If you need to fetch the user's device token
 const Notification = require('../models/Notification');
 const { sendWhatsAppMessage, isWhatsAppReady } = require('../services/whatsappService');
+
+const normalizeBookingMobile = (mobile = '') => {
+  let digits = String(mobile || '').replace(/\D/g, '');
+  if (digits.startsWith('00')) digits = digits.slice(2);
+  return digits;
+};
+
+const generatePatientUsername = (mobile = '') => (
+  `p${normalizeBookingMobile(mobile).slice(-7)}${Math.random().toString(36).slice(2, 6)}`
+);
+
+const findOrCreateBookingPatient = async (patientData = {}) => {
+  const mobileNumber = normalizeBookingMobile(patientData.mobileNumber || patientData.mobile || patientData.phone);
+  if (!mobileNumber) {
+    const error = new Error('Patient mobile number is required');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const existingPatient = await User.findOne({
+    role: 'User',
+    $or: [
+      { mobileNumber },
+      { mobileNumber: patientData.mobileNumber },
+      ...(patientData.idNumber ? [{ idNumber: patientData.idNumber }] : []),
+    ],
+  });
+
+  if (existingPatient) {
+    return { patient: existingPatient, created: false, temporaryPassword: null };
+  }
+
+  const requiredFields = ['fullName', 'country', 'city', 'idNumber', 'address'];
+  const missingFields = requiredFields.filter((field) => !String(patientData[field] || '').trim());
+  if (missingFields.length) {
+    const error = new Error(`Missing patient registration fields: ${missingFields.join(', ')}`);
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const temporaryPassword = String(patientData.password || '').trim() || Math.random().toString(36).slice(-10);
+  const hashedPassword = await bcrypt.hash(temporaryPassword, 10);
+  const patient = new User({
+    fullName: String(patientData.fullName).trim(),
+    mobileNumber,
+    country: String(patientData.country).trim(),
+    city: String(patientData.city).trim(),
+    idNumber: String(patientData.idNumber).trim(),
+    address: String(patientData.address).trim(),
+    sex: patientData.sex || undefined,
+    birthdate: patientData.birthdate || undefined,
+    role: 'User',
+    activationStatus: 'active',
+    isPaid: true,
+    termsAccepted: true,
+    termsAcceptedAt: new Date(),
+    email: patientData.email || `${mobileNumber}@vita.local`,
+    username: generatePatientUsername(mobileNumber),
+    password: hashedPassword,
+  });
+
+  await patient.save();
+  return { patient, created: true, temporaryPassword };
+};
+
+const getDoctorBookingWorkplaces = (doctor) => (
+  (doctor?.workplaces || []).filter((workplace) => (
+    workplace?.isActive !== false
+    && workplace?.name
+    && Array.isArray(workplace.schedule)
+    && workplace.schedule.some((day) => Array.isArray(day.timeSlots) && day.timeSlots.length > 0)
+  ))
+);
 
 // Helper function to format date for WhatsApp message (bilingual)
 const formatAppointmentDate = (date, lang = 'en') => {
@@ -662,6 +736,192 @@ exports.getAvailableTimeSlots = async (req, res) => {
   } catch (error) {
     console.error('Error fetching time slots:', error);
     res.status(500).json({ message: 'Server error while fetching time slots' });
+  }
+};
+
+exports.getPublicDoctorBookingProfile = async (req, res) => {
+  try {
+    const { doctorId } = req.params;
+    const doctor = await User.findOne({
+      _id: doctorId,
+      role: 'Doctor',
+      activationStatus: 'active',
+    }).select('fullName specialty specialization city country workplaces consultationFee profileImage');
+
+    if (!doctor) {
+      return res.status(404).json({ message: 'Doctor not found' });
+    }
+
+    const today = new Date();
+    const workplaces = getDoctorBookingWorkplaces(doctor).map((workplace) => {
+      const availableDates = [];
+      for (let index = 0; index < 30; index += 1) {
+        const date = new Date(today);
+        date.setDate(date.getDate() + index);
+        const dayName = date.toLocaleDateString('en-US', { weekday: 'long' });
+        const hasSlots = workplace.schedule.some((day) => (
+          String(day.day || '').toLowerCase() === dayName.toLowerCase()
+          && Array.isArray(day.timeSlots)
+          && day.timeSlots.length > 0
+        ));
+        if (hasSlots) availableDates.push(date.toISOString().slice(0, 10));
+      }
+
+      return {
+        name: workplace.name,
+        address: workplace.address,
+        availableDates,
+      };
+    });
+
+    res.json({
+      doctor: {
+        _id: doctor._id,
+        fullName: doctor.fullName,
+        specialty: doctor.specialty || doctor.specialization || '',
+        city: doctor.city,
+        country: doctor.country,
+        consultationFee: doctor.consultationFee || 0,
+        profileImage: doctor.profileImage || '',
+      },
+      workplaces,
+    });
+  } catch (error) {
+    console.error('Public booking profile error:', error);
+    res.status(500).json({ message: 'Server error while fetching booking profile' });
+  }
+};
+
+exports.createPublicDoctorBooking = async (req, res) => {
+  try {
+    const { doctorId } = req.params;
+    const {
+      patientId,
+      patient: patientData = {},
+      appointmentDate,
+      workplaceName,
+      workplaceAddress,
+      reason = 'حجز من رابط الطبيب',
+      notes = '',
+      durationMinutes = 30,
+    } = req.body;
+
+    if (!appointmentDate || !workplaceName) {
+      return res.status(400).json({ message: 'appointmentDate and workplaceName are required' });
+    }
+
+    const doctor = await User.findOne({
+      _id: doctorId,
+      role: 'Doctor',
+      activationStatus: 'active',
+    });
+    if (!doctor) {
+      return res.status(404).json({ message: 'Doctor not found' });
+    }
+
+    let patient;
+    let patientCreated = false;
+    let temporaryPassword = null;
+
+    if (patientId) {
+      patient = await User.findOne({ _id: patientId, role: 'User' });
+      if (!patient) {
+        return res.status(404).json({ message: 'Patient not found' });
+      }
+    } else {
+      const result = await findOrCreateBookingPatient(patientData);
+      patient = result.patient;
+      patientCreated = result.created;
+      temporaryPassword = result.temporaryPassword;
+    }
+
+    const appointmentDateTime = new Date(appointmentDate);
+    if (Number.isNaN(appointmentDateTime.getTime()) || appointmentDateTime <= new Date()) {
+      return res.status(400).json({ message: 'Appointment date must be a valid future date' });
+    }
+
+    const existingSlotAppointment = await Appointment.findOne({
+      doctorId,
+      appointmentDateTime,
+      workplaceName,
+      status: { $ne: 'cancelled' },
+    });
+    if (existingSlotAppointment) {
+      return res.status(400).json({ message: 'This time slot is already booked. Please select a different time.' });
+    }
+
+    const appointment = new Appointment({
+      doctorId,
+      patient: patient._id,
+      appointmentDateTime,
+      workplaceName,
+      workplaceAddress,
+      reason,
+      notes,
+      durationMinutes: durationMinutes === 60 ? 60 : 30,
+      urgency: 'normal',
+      status: 'confirmed',
+      ...(doctor.managedByClinic && doctor.clinicId ? { clinicId: doctor.clinicId } : {}),
+    });
+
+    await appointment.save();
+
+    try {
+      const { autoConnectPatientToDoctor } = require('./doctorPatientController');
+      await autoConnectPatientToDoctor(doctorId, patient._id.toString());
+    } catch (connectError) {
+      console.log('Public booking auto-connect note:', connectError.message);
+    }
+
+    try {
+      let userPoints = await Points.findOne({ userId: patient._id });
+      if (!userPoints) userPoints = new Points({ userId: patient._id });
+      userPoints.totalPoints += 10;
+      userPoints.pointsHistory.push({
+        points: 10,
+        action: 'appointment',
+        description: `Appointment points - Appointment #${appointment._id}`,
+        referenceId: appointment._id,
+      });
+      await userPoints.save();
+      patient.totalPoints = userPoints.totalPoints;
+      await patient.save({ validateBeforeSave: false });
+    } catch (pointsError) {
+      console.error('Public booking points error:', pointsError);
+    }
+
+    await Promise.all([
+      Notification.create({
+        user: doctorId,
+        type: 'appointment',
+        message: `لديك موعد جديد من رابط الحجز مع المريض ${patient.fullName} في ${workplaceName}`,
+        relatedId: appointment._id,
+      }),
+      Notification.create({
+        user: patient._id,
+        type: 'appointment',
+        message: `تم حجز موعدك مع د. ${doctor.fullName} بنجاح`,
+        relatedId: appointment._id,
+      }),
+    ]);
+
+    sendAppointmentWhatsAppNotifications(appointment, doctor, patient)
+      .catch((err) => console.error('Public booking WhatsApp error:', err));
+
+    res.status(201).json({
+      message: 'Appointment booked successfully',
+      appointment,
+      patient: {
+        _id: patient._id,
+        fullName: patient.fullName,
+        mobileNumber: patient.mobileNumber,
+      },
+      patientCreated,
+      temporaryPassword,
+    });
+  } catch (error) {
+    console.error('Public booking error:', error);
+    res.status(error.statusCode || 500).json({ message: error.message || 'Server error while booking appointment' });
   }
 };
 

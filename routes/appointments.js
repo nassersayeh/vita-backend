@@ -40,6 +40,10 @@ router.get('/available-dates', appointmentController.getAvailableDatesAndTimes);
 // GET /api/appointments/available-times - Get available time slots for a specific date and workplace
 router.get('/available-times', appointmentController.getAvailableTimeSlots);
 
+// Public doctor booking link
+router.get('/public-booking/:doctorId', appointmentController.getPublicDoctorBookingProfile);
+router.post('/public-booking/:doctorId/book', appointmentController.createPublicDoctorBooking);
+
 // GET /api/appointments/doctor/:doctorId/revenue/monthly - Get doctor's monthly revenue statistics (MUST BE BEFORE generic :doctorId route)
 router.get('/doctor/:doctorId/revenue/monthly', appointmentController.getDoctorRevenueByMonth);
 
