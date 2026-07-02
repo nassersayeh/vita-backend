@@ -1315,10 +1315,13 @@ exports.getDemoRequests = async (req, res) => {
     const query = {};
 
     if (status !== 'all') {
-      if (!demoRequestStatusValues.includes(status)) {
+      if (status === 'open') {
+        query.status = { $ne: 'closed' };
+      } else if (!demoRequestStatusValues.includes(status)) {
         return res.status(400).json({ message: 'Invalid demo request status' });
+      } else {
+        query.status = status;
       }
-      query.status = status;
     }
 
     const searchTerm = String(search || '').trim();
@@ -1337,7 +1340,7 @@ exports.getDemoRequests = async (req, res) => {
       ];
     }
 
-    const [requests, total] = await Promise.all([
+    const [requests, total, openTotal] = await Promise.all([
       DemoRequest.find(query)
         .populate('handledBy', 'name email mobileNumber role')
         .sort({ createdAt: -1 })
@@ -1345,11 +1348,13 @@ exports.getDemoRequests = async (req, res) => {
         .limit(pageLimit)
         .lean(),
       DemoRequest.countDocuments(query),
+      DemoRequest.countDocuments({ status: { $ne: 'closed' } }),
     ]);
 
     res.json({
       requests,
       total,
+      openTotal,
       totalPages: Math.max(Math.ceil(total / pageLimit), 1),
       currentPage,
       limit: pageLimit,
