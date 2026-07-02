@@ -685,6 +685,7 @@ exports.getAvailableTimeSlots = async (req, res) => {
 
       // Generate time slots
       const slots = [];
+      const now = new Date();
       daySchedule.timeSlots.forEach(slot => {
         const [startHour, startMin] = slot.start.split(':').map(Number);
         const [endHour, endMin] = slot.end.split(':').map(Number);
@@ -694,9 +695,18 @@ exports.getAvailableTimeSlots = async (req, res) => {
 
         while (currentHour < endHour || (currentHour === endHour && currentMin < endMin)) {
           const timeStr = `${String(currentHour).padStart(2, '0')}:${String(currentMin).padStart(2, '0')}`;
+          const slotDateTime = new Date(
+            selectedDate.getFullYear(),
+            selectedDate.getMonth(),
+            selectedDate.getDate(),
+            currentHour,
+            currentMin,
+            0,
+            0
+          );
           
-          // Check if slot is not already booked
-          if (!bookedTimes.includes(timeStr)) {
+          // Check if slot is not already booked and not in the past
+          if (!bookedTimes.includes(timeStr) && slotDateTime > now) {
             slots.push(timeStr);
           }
           
@@ -714,6 +724,7 @@ exports.getAvailableTimeSlots = async (req, res) => {
       console.error('Error fetching appointments:', error);
       // If error, show all possible slots
       const slots = [];
+      const now = new Date();
       daySchedule.timeSlots.forEach(slot => {
         const [startHour, startMin] = slot.start.split(':').map(Number);
         const [endHour, endMin] = slot.end.split(':').map(Number);
@@ -722,7 +733,18 @@ exports.getAvailableTimeSlots = async (req, res) => {
         let currentMin = startMin;
 
         while (currentHour < endHour || (currentHour === endHour && currentMin < endMin)) {
-          slots.push(`${String(currentHour).padStart(2, '0')}:${String(currentMin).padStart(2, '0')}`);
+          const slotDateTime = new Date(
+            selectedDate.getFullYear(),
+            selectedDate.getMonth(),
+            selectedDate.getDate(),
+            currentHour,
+            currentMin,
+            0,
+            0
+          );
+          if (slotDateTime > now) {
+            slots.push(`${String(currentHour).padStart(2, '0')}:${String(currentMin).padStart(2, '0')}`);
+          }
           
           currentMin += 30;
           if (currentMin >= 60) {
@@ -1848,6 +1870,8 @@ exports.getAvailableTimeSlots = async (req, res) => {
     
     console.log('Blocked time slots (minutes):', Array.from(blockedTimeSlots).sort((a, b) => a - b));
     
+    const now = new Date();
+
     // Generate slots based on requested duration from ALL collected time ranges
     const allTimeSlots = [];
     const addedSlotStarts = new Set(); // Prevent duplicate slots from overlapping workplace schedules
@@ -1864,6 +1888,8 @@ exports.getAvailableTimeSlots = async (req, res) => {
         const slotEnd = slotStart + requestedDuration;
         const startTime = formatMinutesToTime(slotStart);
         const endTime = formatMinutesToTime(slotEnd);
+        const slotDateTime = new Date(year, month - 1, day, Math.floor(slotStart / 60), slotStart % 60, 0, 0);
+        const isPastSlot = slotDateTime <= now;
         
         let isBooked = false;
         for (let checkTime = slotStart; checkTime < slotEnd; checkTime += 30) {
@@ -1872,12 +1898,14 @@ exports.getAvailableTimeSlots = async (req, res) => {
             break;
           }
         }
+
+        if (isBooked || isPastSlot) continue;
         
         allTimeSlots.push({
           start: startTime,
           end: endTime,
           display: `${startTime} - ${endTime}`,
-          isAvailable: !isBooked,
+          isAvailable: true,
           durationMinutes: requestedDuration
         });
       }
