@@ -38,12 +38,21 @@ exports.updateProfile = async (req, res) => {
       Object.entries(updates).filter(([_, value]) => value !== undefined)
     );
 
-    // Validate specialty against known list if provided and role is Doctor
+    // Validate specialty against known list if provided and normalize legacy Arabic/key values.
     if (validUpdates.specialty && req.body?.updates) {
       const SPECIALTIES = require('../utils/specialties');
-      if (!SPECIALTIES.includes(validUpdates.specialty)) {
+      const specialtyValue = String(validUpdates.specialty).trim();
+      const matchedSpecialty = (SPECIALTIES.MAP || []).find((specialty) => (
+        specialty.en === specialtyValue
+        || specialty.ar === specialtyValue
+        || specialty.key === specialtyValue
+      ));
+
+      if (!matchedSpecialty && !SPECIALTIES.includes(specialtyValue)) {
         return res.status(400).json({ message: 'Invalid specialty value.' });
       }
+
+      validUpdates.specialty = matchedSpecialty?.en || specialtyValue;
     }
 
     const updatedUser = await User.findByIdAndUpdate(
