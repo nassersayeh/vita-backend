@@ -51,12 +51,39 @@ const normalizeBookingMobile = (mobile = '') => {
   return digits;
 };
 
+const getBookingMobileLookupCandidates = (mobile = '', country = '') => {
+  const rawDigits = normalizeBookingMobile(mobile);
+  const dialingCodes = (() => {
+    const normalizedCountry = String(country || '').trim().toLowerCase();
+    if (normalizedCountry.includes('قطر') || normalizedCountry.includes('qatar')) return ['974'];
+    if (normalizedCountry.includes('الأردن') || normalizedCountry.includes('اردن') || normalizedCountry.includes('jordan')) return ['962'];
+    if (normalizedCountry.includes('السعود') || normalizedCountry.includes('saudi')) return ['966'];
+    return ['970', '972'];
+  })();
+  const withoutCode = dialingCodes.reduce((value, code) => (
+    value.startsWith(code) ? value.slice(code.length) : value
+  ), rawDigits).replace(/^0+/, '');
+  const localWithZero = withoutCode ? `0${withoutCode}` : '';
+
+  return Array.from(new Set([
+    mobile,
+    rawDigits,
+    withoutCode,
+    localWithZero,
+    ...dialingCodes.map((code) => `${code}${withoutCode}`),
+  ].filter(Boolean)));
+};
+
 const generatePatientUsername = (mobile = '') => (
   `p${normalizeBookingMobile(mobile).slice(-7)}${Math.random().toString(36).slice(2, 6)}`
 );
 
 const findOrCreateBookingPatient = async (patientData = {}) => {
   const mobileNumber = normalizeBookingMobile(patientData.mobileNumber || patientData.mobile || patientData.phone);
+  const mobileCandidates = getBookingMobileLookupCandidates(
+    patientData.mobileNumber || patientData.mobile || patientData.phone,
+    patientData.country
+  );
   if (!mobileNumber) {
     const error = new Error('Patient mobile number is required');
     error.statusCode = 400;
@@ -66,8 +93,7 @@ const findOrCreateBookingPatient = async (patientData = {}) => {
   const existingPatient = await User.findOne({
     role: 'User',
     $or: [
-      { mobileNumber },
-      { mobileNumber: patientData.mobileNumber },
+      { mobileNumber: { $in: mobileCandidates } },
       ...(patientData.idNumber ? [{ idNumber: patientData.idNumber }] : []),
     ],
   });
@@ -105,8 +131,21 @@ const findOrCreateBookingPatient = async (patientData = {}) => {
     password: hashedPassword,
   });
 
-  await patient.save();
-  return { patient, created: true, temporaryPassword };
+  try {
+    await patient.save();
+    return { patient, created: true, temporaryPassword };
+  } catch (error) {
+    if (error?.code === 11000 && error?.keyPattern?.mobileNumber) {
+      const duplicatePatient = await User.findOne({
+        role: 'User',
+        mobileNumber: { $in: mobileCandidates },
+      });
+      if (duplicatePatient) {
+        return { patient: duplicatePatient, created: false, temporaryPassword: null };
+      }
+    }
+    throw error;
+  }
 };
 
 const getDoctorBookingWorkplaces = (doctor) => (
