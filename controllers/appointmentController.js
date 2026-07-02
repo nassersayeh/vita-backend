@@ -157,6 +157,50 @@ const getDoctorBookingWorkplaces = (doctor) => (
   ))
 );
 
+const normalizeDurationMinutes = (value, fallback = 30) => {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 5 || parsed > 240) return fallback;
+  return parsed;
+};
+
+const normalizeDurationOptions = (options) => {
+  const durations = (Array.isArray(options) ? options : [30, 60])
+    .map((value) => normalizeDurationMinutes(value, null))
+    .filter((value) => value !== null);
+  const uniqueDurations = Array.from(new Set(durations)).sort((a, b) => a - b);
+  return uniqueDurations.length ? uniqueDurations : [30, 60];
+};
+
+const findOverlappingAppointment = async ({
+  doctorId,
+  workplaceName,
+  startDate,
+  durationMinutes,
+  excludeAppointmentId = null,
+}) => {
+  const appointmentStart = new Date(startDate);
+  const appointmentEnd = new Date(appointmentStart.getTime() + durationMinutes * 60000);
+  const dayStart = new Date(appointmentStart);
+  dayStart.setHours(0, 0, 0, 0);
+  const dayEnd = new Date(appointmentStart);
+  dayEnd.setHours(23, 59, 59, 999);
+
+  const query = {
+    doctorId,
+    workplaceName,
+    appointmentDateTime: { $gte: dayStart, $lte: dayEnd },
+    status: { $ne: 'cancelled' },
+  };
+  if (excludeAppointmentId) query._id = { $ne: excludeAppointmentId };
+
+  const appointments = await Appointment.find(query).select('appointmentDateTime durationMinutes');
+  return appointments.find((appointment) => {
+    const existingStart = new Date(appointment.appointmentDateTime);
+    const existingEnd = new Date(existingStart.getTime() + (appointment.durationMinutes || 30) * 60000);
+    return appointmentStart < existingEnd && appointmentEnd > existingStart;
+  });
+};
+
 // Helper function to format date for WhatsApp message (bilingual)
 const formatAppointmentDate = (date, lang = 'en') => {
   const options = { 
@@ -299,12 +343,14 @@ exports.createAppointment = async (req, res) => {
       return res.status(400).json({ message: 'Invalid urgency value. Must be "normal" or "urgent"' });
     }
 
-    // Check if this time slot is already booked (prevent double booking)
-    const existingSlotAppointment = await Appointment.findOne({
+    const requestedDuration = normalizeDurationMinutes(durationMinutes, 30);
+
+    // Check if this time slot overlaps another appointment (prevent double booking)
+    const existingSlotAppointment = await findOverlappingAppointment({
       doctorId,
-      appointmentDateTime,
       workplaceName,
-      status: { $ne: 'cancelled' }
+      startDate: appointmentDateTime,
+      durationMinutes: requestedDuration,
     });
     if (existingSlotAppointment) {
       return res.status(400).json({ message: 'This time slot is already booked. Please select a different time.' });
@@ -322,7 +368,7 @@ exports.createAppointment = async (req, res) => {
       workplaceAddress,
       reason,
       notes,
-      durationMinutes: durationMinutes === 60 ? 60 : 30, // Default to 30 minutes
+      durationMinutes: requestedDuration,
       urgency: urgency || 'normal',
       status: status || 'pending',
       // If doctor is clinic-managed, link the appointment to the clinic
@@ -824,7 +870,7 @@ exports.getPublicDoctorBookingProfile = async (req, res) => {
       _id: doctorId,
       role: 'Doctor',
       activationStatus: 'active',
-    }).select('fullName specialty specialization city country workplaces consultationFee profileImage allowPatientDurationChoice');
+    }).select('fullName specialty specialization city country workplaces consultationFee profileImage allowPatientDurationChoice appointmentDurationOptions');
 
     if (!doctor) {
       return res.status(404).json({ message: 'Doctor not found' });
@@ -862,6 +908,7 @@ exports.getPublicDoctorBookingProfile = async (req, res) => {
         consultationFee: doctor.consultationFee || 0,
         profileImage: doctor.profileImage || '',
         allowPatientDurationChoice: !!doctor.allowPatientDurationChoice,
+        appointmentDurationOptions: normalizeDurationOptions(doctor.appointmentDurationOptions),
       },
       workplaces,
     });
@@ -919,11 +966,17 @@ exports.createPublicDoctorBooking = async (req, res) => {
       return res.status(400).json({ message: 'Appointment date must be a valid future date' });
     }
 
-    const existingSlotAppointment = await Appointment.findOne({
+    const doctorDurationOptions = normalizeDurationOptions(doctor.appointmentDurationOptions);
+    const requestedDuration = normalizeDurationMinutes(durationMinutes, 30);
+    if (!doctorDurationOptions.includes(requestedDuration)) {
+      return res.status(400).json({ message: 'Invalid appointment duration.' });
+    }
+
+    const existingSlotAppointment = await findOverlappingAppointment({
       doctorId,
-      appointmentDateTime,
       workplaceName,
-      status: { $ne: 'cancelled' },
+      startDate: appointmentDateTime,
+      durationMinutes: requestedDuration,
     });
     if (existingSlotAppointment) {
       return res.status(400).json({ message: 'This time slot is already booked. Please select a different time.' });
@@ -937,7 +990,7 @@ exports.createPublicDoctorBooking = async (req, res) => {
       workplaceAddress,
       reason,
       notes,
-      durationMinutes: durationMinutes === 60 ? 60 : 30,
+      durationMinutes: requestedDuration,
       urgency: 'normal',
       status: 'confirmed',
       ...(doctor.managedByClinic && doctor.clinicId ? { clinicId: doctor.clinicId } : {}),
@@ -1146,13 +1199,15 @@ exports.updateAppointmentDateTime = async (req, res) => {
       return res.status(404).json({ message: 'Appointment not found' });
     }
 
-    // Check if new time slot is already booked (prevent double booking)
-    const existingAppointment = await Appointment.findOne({
+    const requestedDuration = normalizeDurationMinutes(durationMinutes, appointment.durationMinutes || 30);
+
+    // Check if new time slot overlaps another appointment (prevent double booking)
+    const existingAppointment = await findOverlappingAppointment({
       doctorId: appointment.doctorId,
-      appointmentDateTime: newDateTime,
       workplaceName: appointment.workplaceName,
-      status: { $ne: 'cancelled' },
-      _id: { $ne: appointmentId },
+      startDate: newDateTime,
+      durationMinutes: requestedDuration,
+      excludeAppointmentId: appointmentId,
     });
 
     if (existingAppointment) {
@@ -1161,9 +1216,7 @@ exports.updateAppointmentDateTime = async (req, res) => {
 
     // Reset reminder flags when rescheduling
     appointment.appointmentDateTime = newDateTime;
-    if (durationMinutes && [30, 60].includes(durationMinutes)) {
-      appointment.durationMinutes = durationMinutes;
-    }
+    appointment.durationMinutes = requestedDuration;
     appointment.reminderDaySent = false;
     appointment.reminder30MinSent = false;
     await appointment.save();
@@ -1801,7 +1854,7 @@ exports.getAvailableTimeSlots = async (req, res) => {
     const { doctorId, workplaceName, date, excludeAppointmentId, duration, clientDate, clientMinutes } = req.query;
     
     // Parse duration - defaults to 30 minutes
-    const requestedDuration = parseInt(duration) === 60 ? 60 : 30;
+    const requestedDuration = normalizeDurationMinutes(duration, 30);
     
     console.log('getAvailableTimeSlots called with:', { doctorId, workplaceName, date, duration: requestedDuration });
     
@@ -1912,20 +1965,18 @@ exports.getAvailableTimeSlots = async (req, res) => {
       return `${hours}:${minutes}`;
     };
     
-    // Build a set of all blocked 30-minute time slots (considering each appointment's duration)
-    const blockedTimeSlots = new Set();
-    existingAppointments.forEach(apt => {
+    // Build blocked intervals, supporting custom duration options like 15 or 20 minutes.
+    const blockedIntervals = existingAppointments.map(apt => {
       const aptTime = new Date(apt.appointmentDateTime);
       const aptStartMinutes = aptTime.getHours() * 60 + aptTime.getMinutes();
       const aptDuration = apt.durationMinutes || 30;
-      
-      for (let offset = 0; offset < aptDuration; offset += 30) {
-        const blockedMinutes = aptStartMinutes + offset;
-        blockedTimeSlots.add(blockedMinutes);
-      }
+      return {
+        start: aptStartMinutes,
+        end: aptStartMinutes + aptDuration,
+      };
     });
     
-    console.log('Blocked time slots (minutes):', Array.from(blockedTimeSlots).sort((a, b) => a - b));
+    console.log('Blocked intervals (minutes):', blockedIntervals);
     
     const now = new Date();
     const normalizedClientDate = String(clientDate || '');
@@ -1940,7 +1991,7 @@ exports.getAvailableTimeSlots = async (req, res) => {
       const scheduleStartMinutes = parseTimeToMinutes(scheduleSlot.start);
       const scheduleEndMinutes = parseTimeToMinutes(scheduleSlot.end);
       
-      for (let slotStart = scheduleStartMinutes; slotStart + requestedDuration <= scheduleEndMinutes; slotStart += 30) {
+      for (let slotStart = scheduleStartMinutes; slotStart + requestedDuration <= scheduleEndMinutes; slotStart += requestedDuration) {
         // Skip if already added from another workplace
         if (addedSlotStarts.has(slotStart)) continue;
         addedSlotStarts.add(slotStart);
@@ -1954,13 +2005,9 @@ exports.getAvailableTimeSlots = async (req, res) => {
         );
         const isPastSlot = hasClientClock ? isPastByClientClock : slotDateTime <= now;
         
-        let isBooked = false;
-        for (let checkTime = slotStart; checkTime < slotEnd; checkTime += 30) {
-          if (blockedTimeSlots.has(checkTime)) {
-            isBooked = true;
-            break;
-          }
-        }
+        const isBooked = blockedIntervals.some((interval) => (
+          slotStart < interval.end && slotEnd > interval.start
+        ));
 
         if (isBooked || isPastSlot) continue;
         

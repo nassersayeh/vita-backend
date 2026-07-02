@@ -117,6 +117,17 @@ const UserSchema = new mongoose.Schema({
   yearsOfExperience: { type: Number, default: 0 },
   consultationFee: { type: Number, default: 0 },
   allowPatientDurationChoice: { type: Boolean, default: false },
+  appointmentDurationOptions: {
+    type: [Number],
+    default: [30, 60],
+    validate: {
+      validator: function(options) {
+        if (!Array.isArray(options) || options.length === 0 || options.length > 8) return false;
+        return options.every((minutes) => Number.isInteger(minutes) && minutes >= 5 && minutes <= 240);
+      },
+      message: 'Appointment duration options must be between 5 and 240 minutes.',
+    },
+  },
   rating: { type: Number, default: 0 }, // Provider rating, always 0 or a number
   ratingsCount: { type: Number, default: 0 }, // Number of ratings received
   

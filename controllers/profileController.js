@@ -55,6 +55,23 @@ exports.updateProfile = async (req, res) => {
       validUpdates.specialty = matchedSpecialty?.en || specialtyValue;
     }
 
+    if (validUpdates.appointmentDurationOptions !== undefined) {
+      if (!Array.isArray(validUpdates.appointmentDurationOptions)) {
+        return res.status(400).json({ message: 'Appointment duration options must be an array.' });
+      }
+
+      const durationOptions = Array.from(new Set(
+        validUpdates.appointmentDurationOptions.map((value) => Number(value))
+      )).filter((value) => Number.isInteger(value) && value >= 5 && value <= 240)
+        .sort((a, b) => a - b);
+
+      if (durationOptions.length === 0 || durationOptions.length > 8) {
+        return res.status(400).json({ message: 'Please choose between 1 and 8 valid appointment durations.' });
+      }
+
+      validUpdates.appointmentDurationOptions = durationOptions;
+    }
+
     const updatedUser = await User.findByIdAndUpdate(
       id,
       { $set: validUpdates }, // Spread the updates object directly into $set

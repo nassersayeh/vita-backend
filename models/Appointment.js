@@ -8,7 +8,7 @@ const appointmentSchema = new mongoose.Schema({
   workplaceAddress: { type: String, default: '' }, // Workplace address for appointment
   reason: { type: String, required: true }, // Added reason field
   notes: { type: String },
-  durationMinutes: { type: Number, enum: [30, 60], default: 30 }, // Appointment duration: 30 or 60 minutes
+  durationMinutes: { type: Number, min: 5, max: 240, default: 30 }, // Appointment duration in minutes
   urgency: { type: String, enum: ['normal', 'urgent'], default: 'normal' }, // Added urgency field
   status: { type: String, enum: ['pending', 'confirmed', 'completed', 'cancelled'], default: 'pending' },
   isPaid: { type: Boolean, default: false }, // Payment status
