@@ -171,6 +171,79 @@ const normalizeDurationOptions = (options) => {
   return uniqueDurations.length ? uniqueDurations : [30, 60];
 };
 
+const parseTimeToMinutes = (timeStr = '') => {
+  const [hours, minutes = 0] = String(timeStr).split(':').map(Number);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+  return hours * 60 + minutes;
+};
+
+const formatLocalDateKey = (date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const getDateDayName = (date) => (
+  ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][date.getDay()]
+);
+
+const getWorkplaceDaySchedule = (workplace, date) => {
+  const dayName = getDateDayName(date).toLowerCase();
+  return (workplace.schedule || []).find((day) => (
+    String(day.day || '').trim().toLowerCase() === dayName
+  ));
+};
+
+const getBlockedIntervalsForDate = async ({ doctorId, workplaceName, date }) => {
+  const startOfDay = new Date(date);
+  startOfDay.setHours(0, 0, 0, 0);
+  const endOfDay = new Date(date);
+  endOfDay.setHours(23, 59, 59, 999);
+
+  const appointments = await Appointment.find({
+    doctorId,
+    workplaceName,
+    appointmentDateTime: { $gte: startOfDay, $lte: endOfDay },
+    $or: [
+      { status: { $nin: ['cancelled', 'no-show'] } },
+      { status: 'cancelled', blockedSlot: true },
+    ],
+  }).select('appointmentDateTime durationMinutes');
+
+  return appointments.map((appointment) => {
+    const appointmentTime = new Date(appointment.appointmentDateTime);
+    const start = appointmentTime.getHours() * 60 + appointmentTime.getMinutes();
+    const duration = normalizeDurationMinutes(appointment.durationMinutes, 30);
+    return { start, end: start + duration };
+  });
+};
+
+const hasAvailableSlotForDate = ({ daySchedule, date, durationMinutes, blockedIntervals, now = new Date() }) => {
+  if (!daySchedule || !Array.isArray(daySchedule.timeSlots)) return false;
+  const dateKey = formatLocalDateKey(date);
+  const todayKey = formatLocalDateKey(now);
+  const nowMinutes = now.getHours() * 60 + now.getMinutes();
+
+  return daySchedule.timeSlots.some((slot) => {
+    const scheduleStart = parseTimeToMinutes(slot.start);
+    const scheduleEnd = parseTimeToMinutes(slot.end);
+    if (scheduleStart === null || scheduleEnd === null || scheduleEnd <= scheduleStart) return false;
+
+    for (let slotStart = scheduleStart; slotStart + durationMinutes <= scheduleEnd; slotStart += durationMinutes) {
+      if (dateKey < todayKey) continue;
+      if (dateKey === todayKey && slotStart <= nowMinutes) continue;
+
+      const slotEnd = slotStart + durationMinutes;
+      const isBooked = blockedIntervals.some((interval) => (
+        slotStart < interval.end && slotEnd > interval.start
+      ));
+      if (!isBooked) return true;
+    }
+    return false;
+  });
+};
+
 const findOverlappingAppointment = async ({
   doctorId,
   workplaceName,
@@ -876,27 +949,43 @@ exports.getPublicDoctorBookingProfile = async (req, res) => {
       return res.status(404).json({ message: 'Doctor not found' });
     }
 
-    const today = new Date();
-    const workplaces = getDoctorBookingWorkplaces(doctor).map((workplace) => {
+    const now = new Date();
+    const today = new Date(now);
+    today.setHours(0, 0, 0, 0);
+    const durationOptions = normalizeDurationOptions(doctor.appointmentDurationOptions);
+    const defaultDuration = durationOptions[0] || 30;
+    const workplaces = [];
+
+    for (const workplace of getDoctorBookingWorkplaces(doctor)) {
       const availableDates = [];
       for (let index = 0; index < 30; index += 1) {
         const date = new Date(today);
         date.setDate(date.getDate() + index);
-        const dayName = date.toLocaleDateString('en-US', { weekday: 'long' });
-        const hasSlots = workplace.schedule.some((day) => (
-          String(day.day || '').toLowerCase() === dayName.toLowerCase()
-          && Array.isArray(day.timeSlots)
-          && day.timeSlots.length > 0
-        ));
-        if (hasSlots) availableDates.push(date.toISOString().slice(0, 10));
+        const daySchedule = getWorkplaceDaySchedule(workplace, date);
+        if (!daySchedule) continue;
+
+        const blockedIntervals = await getBlockedIntervalsForDate({
+          doctorId: doctor._id,
+          workplaceName: workplace.name,
+          date,
+        });
+        const hasSlots = hasAvailableSlotForDate({
+          daySchedule,
+          date,
+          durationMinutes: defaultDuration,
+          blockedIntervals,
+          now,
+        });
+
+        if (hasSlots) availableDates.push(formatLocalDateKey(date));
       }
 
-      return {
+      workplaces.push({
         name: workplace.name,
         address: workplace.address,
         availableDates,
-      };
-    });
+      });
+    }
 
     res.json({
       doctor: {
@@ -908,7 +997,7 @@ exports.getPublicDoctorBookingProfile = async (req, res) => {
         consultationFee: doctor.consultationFee || 0,
         profileImage: doctor.profileImage || '',
         allowPatientDurationChoice: !!doctor.allowPatientDurationChoice,
-        appointmentDurationOptions: normalizeDurationOptions(doctor.appointmentDurationOptions),
+        appointmentDurationOptions: durationOptions,
       },
       workplaces,
     });
@@ -1790,28 +1879,20 @@ exports.getAvailableDatesAndTimes = async (req, res) => {
             const day = String(date.getDate()).padStart(2, '0');
             const dateString = `${year}-${month}-${day}`;
             
-            // Get existing appointments for this date AT THIS WORKPLACE
-            const startOfDay = new Date(date);
-            startOfDay.setHours(0, 0, 0, 0);
-            const endOfDay = new Date(date);
-            endOfDay.setHours(23, 59, 59, 999);
-            
-            const existingAppointments = await Appointment.find({
+            const blockedIntervals = await getBlockedIntervalsForDate({
               doctorId: doctor._id,
               workplaceName: workplace.name,
-              appointmentDateTime: { $gte: startOfDay, $lte: endOfDay },
-              $or: [
-                { status: { $nin: ['cancelled', 'no-show'] } },
-                { status: 'cancelled', blockedSlot: true }
-              ]
+              date,
             });
-            
-            // Calculate available 30-minute slots (total - booked)
-            const totalSlots = calculateTotalSlots(daySchedule.timeSlots);
-            const bookedSlots = existingAppointments.length;
-            const slotsAvailable = Math.max(0, totalSlots - bookedSlots);
-            
-            if (slotsAvailable > 0) {
+            const defaultDuration = normalizeDurationOptions(doctor.appointmentDurationOptions)[0] || 30;
+            const hasSlotsAvailable = hasAvailableSlotForDate({
+              daySchedule,
+              date,
+              durationMinutes: defaultDuration,
+              blockedIntervals,
+            });
+
+            if (hasSlotsAvailable) {
               workplaceDates.push(dateString);
               allDatesSet.add(dateString);
             }
