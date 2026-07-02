@@ -1900,7 +1900,7 @@ exports.getAvailableTimeSlots = async (req, res) => {
       const scheduleStartMinutes = parseTimeToMinutes(scheduleSlot.start);
       const scheduleEndMinutes = parseTimeToMinutes(scheduleSlot.end);
       
-      for (let slotStart = scheduleStartMinutes; slotStart + requestedDuration <= scheduleEndMinutes; slotStart += requestedDuration) {
+      for (let slotStart = scheduleStartMinutes; slotStart + requestedDuration <= scheduleEndMinutes; slotStart += 30) {
         // Skip if already added from another workplace
         if (addedSlotStarts.has(slotStart)) continue;
         addedSlotStarts.add(slotStart);
