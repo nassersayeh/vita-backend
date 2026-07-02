@@ -618,7 +618,7 @@ exports.getAvailableDatesAndTimes = async (req, res) => {
 // Get available time slots for a specific date and workplace
 exports.getAvailableTimeSlots = async (req, res) => {
   try {
-    const { doctorId, workplaceName, date, excludeAppointmentId } = req.query;
+    const { doctorId, workplaceName, date, excludeAppointmentId, clientDate, clientMinutes } = req.query;
 
     if (!doctorId || !workplaceName || !date) {
       return res.status(400).json({ message: 'doctorId, workplaceName, and date are required' });
@@ -686,6 +686,9 @@ exports.getAvailableTimeSlots = async (req, res) => {
       // Generate time slots
       const slots = [];
       const now = new Date();
+      const normalizedClientDate = String(clientDate || '');
+      const parsedClientMinutes = Number(clientMinutes);
+      const hasClientClock = /^\d{4}-\d{2}-\d{2}$/.test(normalizedClientDate) && Number.isFinite(parsedClientMinutes);
       daySchedule.timeSlots.forEach(slot => {
         const [startHour, startMin] = slot.start.split(':').map(Number);
         const [endHour, endMin] = slot.end.split(':').map(Number);
@@ -704,9 +707,15 @@ exports.getAvailableTimeSlots = async (req, res) => {
             0,
             0
           );
+          const slotMinutes = currentHour * 60 + currentMin;
+          const isPastByClientClock = hasClientClock && (
+            date < normalizedClientDate || (date === normalizedClientDate && slotMinutes <= parsedClientMinutes)
+          );
           
+          const isPastSlot = hasClientClock ? isPastByClientClock : slotDateTime <= now;
+
           // Check if slot is not already booked and not in the past
-          if (!bookedTimes.includes(timeStr) && slotDateTime > now) {
+          if (!bookedTimes.includes(timeStr) && !isPastSlot) {
             slots.push(timeStr);
           }
           
@@ -725,6 +734,9 @@ exports.getAvailableTimeSlots = async (req, res) => {
       // If error, show all possible slots
       const slots = [];
       const now = new Date();
+      const normalizedClientDate = String(clientDate || '');
+      const parsedClientMinutes = Number(clientMinutes);
+      const hasClientClock = /^\d{4}-\d{2}-\d{2}$/.test(normalizedClientDate) && Number.isFinite(parsedClientMinutes);
       daySchedule.timeSlots.forEach(slot => {
         const [startHour, startMin] = slot.start.split(':').map(Number);
         const [endHour, endMin] = slot.end.split(':').map(Number);
@@ -742,7 +754,12 @@ exports.getAvailableTimeSlots = async (req, res) => {
             0,
             0
           );
-          if (slotDateTime > now) {
+          const slotMinutes = currentHour * 60 + currentMin;
+          const isPastByClientClock = hasClientClock && (
+            date < normalizedClientDate || (date === normalizedClientDate && slotMinutes <= parsedClientMinutes)
+          );
+          const isPastSlot = hasClientClock ? isPastByClientClock : slotDateTime <= now;
+          if (!isPastSlot) {
             slots.push(`${String(currentHour).padStart(2, '0')}:${String(currentMin).padStart(2, '0')}`);
           }
           
@@ -1741,7 +1758,7 @@ exports.getAvailableDatesAndTimes = async (req, res) => {
 // Get available time slots for a specific date and workplace
 exports.getAvailableTimeSlots = async (req, res) => {
   try {
-    const { doctorId, workplaceName, date, excludeAppointmentId, duration } = req.query;
+    const { doctorId, workplaceName, date, excludeAppointmentId, duration, clientDate, clientMinutes } = req.query;
     
     // Parse duration - defaults to 30 minutes
     const requestedDuration = parseInt(duration) === 60 ? 60 : 30;
@@ -1871,6 +1888,9 @@ exports.getAvailableTimeSlots = async (req, res) => {
     console.log('Blocked time slots (minutes):', Array.from(blockedTimeSlots).sort((a, b) => a - b));
     
     const now = new Date();
+    const normalizedClientDate = String(clientDate || '');
+    const parsedClientMinutes = Number(clientMinutes);
+    const hasClientClock = /^\d{4}-\d{2}-\d{2}$/.test(normalizedClientDate) && Number.isFinite(parsedClientMinutes);
 
     // Generate slots based on requested duration from ALL collected time ranges
     const allTimeSlots = [];
@@ -1889,7 +1909,10 @@ exports.getAvailableTimeSlots = async (req, res) => {
         const startTime = formatMinutesToTime(slotStart);
         const endTime = formatMinutesToTime(slotEnd);
         const slotDateTime = new Date(year, month - 1, day, Math.floor(slotStart / 60), slotStart % 60, 0, 0);
-        const isPastSlot = slotDateTime <= now;
+        const isPastByClientClock = hasClientClock && (
+          date < normalizedClientDate || (date === normalizedClientDate && slotStart <= parsedClientMinutes)
+        );
+        const isPastSlot = hasClientClock ? isPastByClientClock : slotDateTime <= now;
         
         let isBooked = false;
         for (let checkTime = slotStart; checkTime < slotEnd; checkTime += 30) {
