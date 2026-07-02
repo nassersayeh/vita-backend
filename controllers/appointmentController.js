@@ -824,7 +824,7 @@ exports.getPublicDoctorBookingProfile = async (req, res) => {
       _id: doctorId,
       role: 'Doctor',
       activationStatus: 'active',
-    }).select('fullName specialty specialization city country workplaces consultationFee profileImage');
+    }).select('fullName specialty specialization city country workplaces consultationFee profileImage allowPatientDurationChoice');
 
     if (!doctor) {
       return res.status(404).json({ message: 'Doctor not found' });
@@ -861,6 +861,7 @@ exports.getPublicDoctorBookingProfile = async (req, res) => {
         country: doctor.country,
         consultationFee: doctor.consultationFee || 0,
         profileImage: doctor.profileImage || '',
+        allowPatientDurationChoice: !!doctor.allowPatientDurationChoice,
       },
       workplaces,
     });

@@ -116,6 +116,7 @@ const UserSchema = new mongoose.Schema({
   licenseNumber: { type: String }, // For doctors and pharmacies
   yearsOfExperience: { type: Number, default: 0 },
   consultationFee: { type: Number, default: 0 },
+  allowPatientDurationChoice: { type: Boolean, default: false },
   rating: { type: Number, default: 0 }, // Provider rating, always 0 or a number
   ratingsCount: { type: Number, default: 0 }, // Number of ratings received
   
