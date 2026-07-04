@@ -257,18 +257,35 @@ exports.signup = async (req, res) => {
         if (await isWhatsAppReady()) {
           const displayNameAr = formatWhatsAppDisplayName(fullName, role, 'ar');
           const displayNameEn = formatWhatsAppDisplayName(fullName, role, 'en');
-          const welcomeMsg =
-            `مرحباً ${displayNameAr} 👋\n` +
-            `أهلاً وسهلاً بك في نظام *فيتا الصحي* 🏥\n\n` +
-            `تم تسجيلك بنجاح في نظام فيتا لاستقبال المواعيد وإدارة العيادات. أوسع شبكة طبية والتي تضم أكثر من ١٠ آلاف مريض مسجل.\n` +
-            `سيتم إرسال بيانات تسجيل الدخول قريباً.\n\n` +
-            `لأي استفسار أو دعم فني، يمكنك التواصل معنا مباشرةً على هذا الرقم وسيتولى فريقنا مساعدتك. 💬\n\n` +
-            `---\n` +
-            `Hello ${displayNameEn} 👋\n` +
-            `Welcome to *Vita Health System* 🏥\n\n` +
-            `You have been registered successfully on Vita for receiving appointments and managing clinics. Vita is the widest medical network, with more than 10,000 registered patients.\n` +
-            `Your login details will be sent soon.\n\n` +
-            `For any inquiries or technical support, feel free to message us on this number and our team will assist you. 💬`;
+          const welcomeMsg = role === 'Pharmacy'
+            ? (
+              `مرحباً ${displayNameAr} 👋\n` +
+              `أهلاً وسهلاً بك في نظام *فيتا الصحي* 🏥\n\n` +
+              `تم تسجيل صيدليتك بنجاح في فيتا، نظام إدارة القطاع الصحي الذي يربط الأطباء والصيدليات والمرضى في شبكة واحدة.\n` +
+              `تنضم الآن إلى شبكة تضم أكثر من ١٠٠٠ طبيب، و١٠٠ صيدلية، و١٠ آلاف مستخدم.\n` +
+              `سيتم إرسال بيانات تسجيل الدخول قريباً.\n\n` +
+              `لأي استفسار أو دعم فني، يمكنك التواصل معنا مباشرةً على هذا الرقم وسيتولى فريقنا مساعدتك. 💬\n\n` +
+              `---\n` +
+              `Hello ${displayNameEn} 👋\n` +
+              `Welcome to *Vita Health System* 🏥\n\n` +
+              `Your pharmacy has been registered successfully on Vita, a healthcare management system connecting doctors, pharmacies, and patients in one network.\n` +
+              `You are now joining a network of more than 1,000 doctors, 100 pharmacies, and 10,000 users.\n` +
+              `Your login details will be sent soon.\n\n` +
+              `For any inquiries or technical support, feel free to message us on this number and our team will assist you. 💬`
+            )
+            : (
+              `مرحباً ${displayNameAr} 👋\n` +
+              `أهلاً وسهلاً بك في نظام *فيتا الصحي* 🏥\n\n` +
+              `تم تسجيلك بنجاح في نظام فيتا لاستقبال المواعيد وإدارة العيادات. أوسع شبكة طبية والتي تضم أكثر من ١٠ آلاف مريض مسجل.\n` +
+              `سيتم إرسال بيانات تسجيل الدخول قريباً.\n\n` +
+              `لأي استفسار أو دعم فني، يمكنك التواصل معنا مباشرةً على هذا الرقم وسيتولى فريقنا مساعدتك. 💬\n\n` +
+              `---\n` +
+              `Hello ${displayNameEn} 👋\n` +
+              `Welcome to *Vita Health System* 🏥\n\n` +
+              `You have been registered successfully on Vita for receiving appointments and managing clinics. Vita is the widest medical network, with more than 10,000 registered patients.\n` +
+              `Your login details will be sent soon.\n\n` +
+              `For any inquiries or technical support, feel free to message us on this number and our team will assist you. 💬`
+            );
 
           for (const phoneNumber of getCountryDialingCodes(country).map((code) => `${code}${normalizedMobile.replace(/^0+/, '')}`)) {
             try { await sendWhatsAppMessage(phoneNumber, welcomeMsg); } catch {}

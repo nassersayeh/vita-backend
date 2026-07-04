@@ -621,7 +621,7 @@ exports.approveUser = async (req, res) => {
         if (matchingCode) localPhone = localPhone.slice(matchingCode.length);
         localPhone = localPhone.replace(/^0+/, '');
         const phoneCandidates = Array.from(new Set(countryCodes.map((code) => `${code}${localPhone}`)));
-        const loginPhone = `+${phoneCandidates[0]}`;
+        const loginPhone = localPhone ? `0${localPhone}` : String(userPhone).trim();
         const displayNameAr = formatWhatsAppDisplayName(user.fullName, user.role, 'ar');
         const displayNameEn = formatWhatsAppDisplayName(user.fullName, user.role, 'en');
         if (status === 'active') {
