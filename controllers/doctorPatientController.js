@@ -149,6 +149,8 @@ exports.createPatient = async (req, res) => {
               `📱 بيانات تسجيل الدخول:\n` +
               `رقم الهاتف: ${mobileNumber}\n` +
               `كلمة المرور: ${randomPassword}\n\n` +
+              `🔗 رابط تسجيل الدخول:\n` +
+              `https://www.vita.ps/login\n\n` +
               `📲 حمّل التطبيق الآن:\n` +
               `Android: https://play.google.com/store/apps/details?id=ps.vita.health\n` +
               `iOS: https://apps.apple.com/eg/app/vita-%D9%81%D9%8A%D8%AA%D8%A7/id6754179480?l=ar`;
@@ -477,6 +479,8 @@ exports.resetPatientPassword = async (req, res) => {
           `📱 بيانات تسجيل الدخول:\n` +
           `رقم الهاتف: ${patient.mobileNumber}\n` +
           `كلمة المرور: ${newPassword}\n\n` +
+          `🔗 رابط تسجيل الدخول:\n` +
+          `https://www.vita.ps/login\n\n` +
           `📲 حمّل التطبيق الآن:\n` +
           `Android: https://play.google.com/store/apps/details?id=com.vita.health\n` +
           `iOS: https://apps.apple.com/app/vita-health/id123456789\n\n` +
