@@ -56,6 +56,7 @@ const insuranceClaimsRoutes = require('./routes/insuranceClaimsAPI');
 const landingAnalyticsRoutes = require('./routes/landingAnalytics');
 const marketingRoutes = require('./routes/marketing');
 const analyticsRoutes = require('./routes/analytics');
+const whatsappWebhookRoutes = require('./routes/whatsappWebhook');
 
 // Firebase admin
 const admin = require('firebase-admin');
@@ -190,6 +191,7 @@ app.use('/api/points-new', pointsNewRoutes);
 app.use('/api/landing-analytics', landingAnalyticsRoutes);
 app.use('/api/marketing', marketingRoutes);
 app.use('/api/analytics', analyticsRoutes);
+app.use('/api/whatsapp/webhook', whatsappWebhookRoutes);
 app.use('/api/provider', providerRoutes);
 app.use('/api/medication', medicationRoutes);
 app.use('/api/cart', cartRoutes);
