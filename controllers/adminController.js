@@ -24,6 +24,20 @@ const formatWhatsAppDisplayName = (fullName = '', role = 'User', language = 'ar'
   return title ? `${title} ${name}` : name;
 };
 
+
+const DEFAULT_DOCTOR_WORKPLACE_SCHEDULE = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+  .map((day) => ({
+    day,
+    timeSlots: [{ start: '08:00', end: '16:00' }],
+  }));
+
+const createDefaultDoctorWorkplace = (fullName, address) => ({
+  name: `${fullName || 'Doctor'}'s Clinic`,
+  address: address || '',
+  schedule: DEFAULT_DOCTOR_WORKPLACE_SCHEDULE,
+  isActive: true,
+});
+
 const SUBSCRIPTION_PLANS = {
   core: { name: 'Core System', monthlyPrice: 100, yearlyPrice: 1000, trialDays: 7 },
   growth: { name: 'Growth + AI', monthlyPrice: 500, yearlyPrice: 5000, trialDays: 0 },
@@ -930,6 +944,10 @@ exports.createUser = async (req, res) => {
     
     if (existingUser) {
       return res.status(400).json({ message: 'User with this email, mobile number, or ID already exists' });
+    }
+
+    if (userData.role === 'Doctor' && (!Array.isArray(userData.workplaces) || userData.workplaces.length === 0)) {
+      userData.workplaces = [createDefaultDoctorWorkplace(userData.fullName, userData.address)];
     }
 
     // Hash password before saving

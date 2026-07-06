@@ -6,6 +6,19 @@ const nodemailer = require('nodemailer');
 const { send2FACode, sendWhatsAppMessage, isWhatsAppReady } = require('../services/whatsappService');
 require('dotenv').config();
 
+const DEFAULT_DOCTOR_WORKPLACE_SCHEDULE = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+  .map((day) => ({
+    day,
+    timeSlots: [{ start: '08:00', end: '16:00' }],
+  }));
+
+const createDefaultDoctorWorkplace = (fullName, address) => ({
+  name: `${fullName}'s Clinic`,
+  address,
+  schedule: DEFAULT_DOCTOR_WORKPLACE_SCHEDULE,
+  isActive: true,
+});
+
 // Create email transporter
 const transporter = nodemailer.createTransport({
   service: 'gmail', // or your email service
@@ -225,11 +238,7 @@ exports.signup = async (req, res) => {
       termsAcceptedAt: new Date(),
       termsVersion: '1.0',
       // Add default workplace for doctors
-      workplaces: role === 'Doctor' ? [{
-        name: `${fullName}'s Clinic`,
-        address: address,
-        isActive: true
-      }] : undefined,
+      workplaces: role === 'Doctor' ? [createDefaultDoctorWorkplace(fullName, address)] : undefined,
       // Initialize subscription for new pharmacies
       isPaid: PLAN_REQUIRED_ROLES.includes(role) ? false : undefined,
       subscriptionPlanKey: selectedPlan ? subscriptionPlan : undefined,
