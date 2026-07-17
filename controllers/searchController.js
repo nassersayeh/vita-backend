@@ -67,7 +67,7 @@ exports.searchUsers = async (req, res) => {
 // Comprehensive unified search across all categories
 exports.unifiedSearch = async (req, res) => {
   try {
-    const { query, category, city, limit = 20 } = req.query;
+    const { query, category, city, limit = 20, page = 1 } = req.query;
 
     const allowedCategories = ['all', 'doctors', 'pharmacies', 'labs', 'hospitals', 'medications', 'tests'];
     const normalizedCategory = allowedCategories.includes(category) ? category : 'all';
@@ -85,6 +85,9 @@ exports.unifiedSearch = async (req, res) => {
     const safeSearchTerm = escapeRegex(searchTerm);
     const parsedLimit = Number.parseInt(limit, 10);
     const searchLimit = Number.isFinite(parsedLimit) ? Math.min(Math.max(parsedLimit, 1), 50) : 20;
+    const parsedPage = Number.parseInt(page, 10);
+    const currentPage = Number.isFinite(parsedPage) ? Math.max(parsedPage, 1) : 1;
+    const skip = (currentPage - 1) * searchLimit;
     const results = {
       doctors: [],
       pharmacies: [],
@@ -92,6 +95,14 @@ exports.unifiedSearch = async (req, res) => {
       hospitals: [],
       medications: [],
       tests: [],
+    };
+    const totalCounts = {
+      doctors: 0,
+      pharmacies: 0,
+      labs: 0,
+      hospitals: 0,
+      medications: 0,
+      tests: 0,
     };
 
     // Build city filter if provided
@@ -120,21 +131,33 @@ exports.unifiedSearch = async (req, res) => {
       doctorSearchPatterns = [/قلب/i, /cardio/i, /heart/i];
     }
 
+    const normalizedTestTerm = normalizedDoctorTerm;
+    let testSearchPatterns = [new RegExp(safeSearchTerm, 'i')];
+    if (/فحص\s*دم|تحاليل?\s*دم|blood\s*(test|work)|cbc/.test(normalizedTestTerm)) {
+      testSearchPatterns = [/دم/i, /blood/i, /cbc/i];
+    } else if (/اشعه\s*سينيه|اشعه|x[\s-]?ray|radiograph/.test(normalizedTestTerm)) {
+      testSearchPatterns = [/أشعة/i, /اشعة/i, /x[\s-]?ray/i, /radiograph/i];
+    }
+
     // Search Doctors
     if (categoriesToSearch.includes('doctors')) {
-      const doctors = await User.find({
+      const doctorFilter = {
         role: 'Doctor',
         isActive: { $ne: false },
-        $or: doctorSearchPatterns.flatMap(pattern => [
+        ...(searchTerm ? { $or: doctorSearchPatterns.flatMap(pattern => [
           { fullName: pattern },
           { specialty: pattern },
           { bio: pattern },
-        ]),
+        ]) } : {}),
         ...cityFilter
-      })
-      .select('fullName specialty profileImage city address rating workplaces consultationFee')
-      .limit(searchLimit)
-      .lean();
+      };
+      const [doctors, doctorCount] = await Promise.all([
+        User.find(doctorFilter)
+          .select('fullName specialty profileImage city address rating workplaces consultationFee')
+          .sort({ _id: 1 }).skip(skip).limit(searchLimit).lean(),
+        User.countDocuments(doctorFilter),
+      ]);
+      totalCounts.doctors = doctorCount;
 
       results.doctors = doctors.map(doc => ({
         id: doc._id,
@@ -152,18 +175,21 @@ exports.unifiedSearch = async (req, res) => {
 
     // Search Pharmacies
     if (categoriesToSearch.includes('pharmacies')) {
-      const pharmacies = await User.find({
+      const pharmacyFilter = {
         role: 'Pharmacy',
         isActive: { $ne: false },
-        $or: [
+        ...(searchTerm ? { $or: [
           { fullName: { $regex: safeSearchTerm, $options: "i" } },
           { address: { $regex: safeSearchTerm, $options: "i" } },
-        ],
+        ] } : {}),
         ...cityFilter
-      })
-      .select('fullName profileImage city address mobileNumber workingSchedule')
-      .limit(searchLimit)
-      .lean();
+      };
+      const [pharmacies, pharmacyCount] = await Promise.all([
+        User.find(pharmacyFilter).select('fullName profileImage city address mobileNumber workingSchedule')
+          .sort({ _id: 1 }).skip(skip).limit(searchLimit).lean(),
+        User.countDocuments(pharmacyFilter),
+      ]);
+      totalCounts.pharmacies = pharmacyCount;
 
       results.pharmacies = pharmacies.map(pharm => ({
         id: pharm._id,
@@ -180,18 +206,21 @@ exports.unifiedSearch = async (req, res) => {
 
     // Search Labs
     if (categoriesToSearch.includes('labs')) {
-      const labs = await User.find({
+      const labFilter = {
         role: 'Lab',
         isActive: { $ne: false },
-        $or: [
+        ...(searchTerm ? { $or: [
           { fullName: { $regex: safeSearchTerm, $options: "i" } },
           { address: { $regex: safeSearchTerm, $options: "i" } },
-        ],
+        ] } : {}),
         ...cityFilter
-      })
-      .select('fullName profileImage city address mobileNumber')
-      .limit(searchLimit)
-      .lean();
+      };
+      const [labs, labCount] = await Promise.all([
+        User.find(labFilter).select('fullName profileImage city address mobileNumber')
+          .sort({ _id: 1 }).skip(skip).limit(searchLimit).lean(),
+        User.countDocuments(labFilter),
+      ]);
+      totalCounts.labs = labCount;
 
       results.labs = labs.map(lab => ({
         id: lab._id,
@@ -207,18 +236,21 @@ exports.unifiedSearch = async (req, res) => {
 
     // Search Hospitals/Institutions
     if (categoriesToSearch.includes('hospitals')) {
-      const hospitals = await User.find({
+      const hospitalFilter = {
         role: { $in: ['Hospital', 'Institution'] },
         isActive: { $ne: false },
-        $or: [
+        ...(searchTerm ? { $or: [
           { fullName: { $regex: safeSearchTerm, $options: "i" } },
           { address: { $regex: safeSearchTerm, $options: "i" } },
-        ],
+        ] } : {}),
         ...cityFilter
-      })
-      .select('fullName profileImage city address mobileNumber')
-      .limit(searchLimit)
-      .lean();
+      };
+      const [hospitals, hospitalCount] = await Promise.all([
+        User.find(hospitalFilter).select('fullName profileImage city address mobileNumber')
+          .sort({ _id: 1 }).skip(skip).limit(searchLimit).lean(),
+        User.countDocuments(hospitalFilter),
+      ]);
+      totalCounts.hospitals = hospitalCount;
 
       results.hospitals = hospitals.map(hosp => ({
         id: hosp._id,
@@ -234,18 +266,21 @@ exports.unifiedSearch = async (req, res) => {
 
     // Search Medications (Drugs)
     if (categoriesToSearch.includes('medications')) {
-      const medications = await Drug.find({
+      const medicationFilter = {
         isActive: { $ne: false },
-        $or: [
+        ...(searchTerm ? { $or: [
           { name: { $regex: safeSearchTerm, $options: "i" } },
           { genericName: { $regex: safeSearchTerm, $options: "i" } },
           { category: { $regex: safeSearchTerm, $options: "i" } },
           { manufacturer: { $regex: safeSearchTerm, $options: "i" } },
-        ]
-      })
-      .select('name genericName category dosageForm strength manufacturer unitSellingPrice')
-      .limit(searchLimit)
-      .lean();
+        ] } : {})
+      };
+      const [medications, medicationCount] = await Promise.all([
+        Drug.find(medicationFilter).select('name genericName category dosageForm strength manufacturer unitSellingPrice')
+          .sort({ _id: 1 }).skip(skip).limit(searchLimit).lean(),
+        Drug.countDocuments(medicationFilter),
+      ]);
+      totalCounts.medications = medicationCount;
 
       results.medications = medications.map(med => ({
         id: med._id,
@@ -262,17 +297,20 @@ exports.unifiedSearch = async (req, res) => {
 
     // Search Medical Tests
     if (categoriesToSearch.includes('tests')) {
-      const tests = await MedicalTest.find({
+      const testFilter = {
         isActive: { $ne: false },
-        $or: [
-          { name: { $regex: safeSearchTerm, $options: "i" } },
-          { category: { $regex: safeSearchTerm, $options: "i" } },
-          { description: { $regex: safeSearchTerm, $options: "i" } },
-        ]
-      })
-      .select('name type category description preparationInstructions estimatedDuration')
-      .limit(searchLimit)
-      .lean();
+        ...(searchTerm ? { $or: testSearchPatterns.flatMap(pattern => [
+          { name: pattern },
+          { category: pattern },
+          { description: pattern },
+        ]) } : {})
+      };
+      const [tests, testCount] = await Promise.all([
+        MedicalTest.find(testFilter).select('name type category description preparationInstructions estimatedDuration')
+          .sort({ _id: 1 }).skip(skip).limit(searchLimit).lean(),
+        MedicalTest.countDocuments(testFilter),
+      ]);
+      totalCounts.tests = testCount;
 
       results.tests = tests.map(test => ({
         id: test._id,
@@ -288,7 +326,7 @@ exports.unifiedSearch = async (req, res) => {
     }
 
     // Calculate total count
-    const totalCount = Object.values(results).reduce((sum, arr) => sum + arr.length, 0);
+    const totalCount = Object.values(totalCounts).reduce((sum, count) => sum + count, 0);
 
     // Combine all results into a flat array if searching all categories
     let allResults = [];
@@ -311,7 +349,17 @@ exports.unifiedSearch = async (req, res) => {
       category: normalizedCategory,
       totalCount,
       results: normalizedCategory !== 'all' ? results[normalizedCategory] || [] : results,
-      allResults: allResults.slice(0, searchLimit),
+      allResults,
+      pagination: {
+        page: currentPage,
+        limit: searchLimit,
+        totalCount,
+        totalPages: normalizedCategory === 'all'
+          ? Math.max(1, ...categoriesToSearch.map(key => Math.ceil(totalCounts[key] / searchLimit)))
+          : Math.max(1, Math.ceil(totalCount / searchLimit)),
+        hasNextPage: categoriesToSearch.some(key => totalCounts[key] > currentPage * searchLimit),
+        countsByCategory: totalCounts,
+      },
     });
 
   } catch (error) {
