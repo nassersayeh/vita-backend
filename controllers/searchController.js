@@ -69,14 +69,19 @@ exports.unifiedSearch = async (req, res) => {
   try {
     const { query, category, city, limit = 20 } = req.query;
 
-    if (!query || query.trim().length < 2) {
+    const allowedCategories = ['all', 'doctors', 'pharmacies', 'labs', 'hospitals', 'medications', 'tests'];
+    const normalizedCategory = allowedCategories.includes(category) ? category : 'all';
+    const rawSearchTerm = String(query || '').trim();
+    const isBrowseRequest = normalizedCategory !== 'all' && rawSearchTerm.length === 0;
+
+    if (!isBrowseRequest && rawSearchTerm.length < 2) {
       return res.status(400).json({ 
         success: false, 
         message: "Search query must be at least 2 characters." 
       });
     }
 
-    const searchTerm = query.trim();
+    const searchTerm = rawSearchTerm;
     const safeSearchTerm = escapeRegex(searchTerm);
     const parsedLimit = Number.parseInt(limit, 10);
     const searchLimit = Number.isFinite(parsedLimit) ? Math.min(Math.max(parsedLimit, 1), 50) : 20;
@@ -95,20 +100,36 @@ exports.unifiedSearch = async (req, res) => {
       : {};
 
     // Define which categories to search
-    const categoriesToSearch = category && category !== 'all' 
-      ? [category] 
+    const categoriesToSearch = normalizedCategory !== 'all'
+      ? [normalizedCategory]
       : ['doctors', 'pharmacies', 'labs', 'hospitals', 'medications', 'tests'];
+
+    const normalizedDoctorTerm = searchTerm
+      .toLowerCase()
+      .replace(/[أإآ]/g, 'ا')
+      .replace(/[ة]/g, 'ه')
+      .replace(/[ًٌٍَُِّْـ]/g, '');
+    let doctorSearchPatterns = [new RegExp(safeSearchTerm, 'i')];
+    if (/طبيب\s*(ال)?اسنان|طب\s*(ال)?اسنان|dentist|dental/.test(normalizedDoctorTerm)) {
+      doctorSearchPatterns = [/أسنان/i, /اسنان/i, /dentist/i, /dental/i];
+    } else if (/طبيب\s*عام|طب\s*عام|general\s*(physician|practice|doctor)/.test(normalizedDoctorTerm)) {
+      doctorSearchPatterns = [/طب عام/i, /طبيب عام/i, /general practice/i, /general physician/i, /general doctor/i];
+    } else if (/طبيب\s*(ال)?اطفال|اطفال|pediatr|child/.test(normalizedDoctorTerm)) {
+      doctorSearchPatterns = [/أطفال/i, /اطفال/i, /pediatr/i, /child/i];
+    } else if (/طبيب\s*(ال)?قلب|امراض\s*(ال)?قلب|قلب|cardio|heart/.test(normalizedDoctorTerm)) {
+      doctorSearchPatterns = [/قلب/i, /cardio/i, /heart/i];
+    }
 
     // Search Doctors
     if (categoriesToSearch.includes('doctors')) {
       const doctors = await User.find({
         role: 'Doctor',
         isActive: { $ne: false },
-        $or: [
-          { fullName: { $regex: safeSearchTerm, $options: "i" } },
-          { specialty: { $regex: safeSearchTerm, $options: "i" } },
-          { bio: { $regex: safeSearchTerm, $options: "i" } },
-        ],
+        $or: doctorSearchPatterns.flatMap(pattern => [
+          { fullName: pattern },
+          { specialty: pattern },
+          { bio: pattern },
+        ]),
         ...cityFilter
       })
       .select('fullName specialty profileImage city address rating workplaces consultationFee')
@@ -271,8 +292,8 @@ exports.unifiedSearch = async (req, res) => {
 
     // Combine all results into a flat array if searching all categories
     let allResults = [];
-    if (category && category !== 'all') {
-      allResults = results[category] || [];
+    if (normalizedCategory !== 'all') {
+      allResults = results[normalizedCategory] || [];
     } else {
       allResults = [
         ...results.doctors,
@@ -287,9 +308,9 @@ exports.unifiedSearch = async (req, res) => {
     res.json({
       success: true,
       query: searchTerm,
-      category: category || 'all',
+      category: normalizedCategory,
       totalCount,
-      results: category && category !== 'all' ? results[category] || [] : results,
+      results: normalizedCategory !== 'all' ? results[normalizedCategory] || [] : results,
       allResults: allResults.slice(0, searchLimit),
     });
 
