@@ -45,6 +45,45 @@ const User = require('../models/User'); // If you need to fetch the user's devic
 const Notification = require('../models/Notification');
 const { sendWhatsAppMessage, isWhatsAppReady } = require('../services/whatsappService');
 
+const APPOINTMENT_REWARD_POINTS = 10;
+
+const reverseAppointmentPoints = async (appointment) => {
+  const patientId = appointment.patient?._id || appointment.patient;
+  if (!patientId) return { pointsDeducted: 0, totalPoints: null };
+
+  const points = await Points.findOne({ userId: patientId });
+  if (!points) return { pointsDeducted: 0, totalPoints: 0 };
+
+  const appointmentId = appointment._id.toString();
+  const alreadyReversed = points.pointsHistory.some(entry => (
+    entry.action === 'appointment_cancelled'
+    && entry.referenceId?.toString() === appointmentId
+  ));
+  if (alreadyReversed) {
+    return { pointsDeducted: 0, totalPoints: points.totalPoints };
+  }
+
+  const awardEntry = points.pointsHistory.find(entry => (
+    entry.action === 'appointment'
+    && entry.referenceId?.toString() === appointmentId
+    && entry.points > 0
+  ));
+  if (!awardEntry) return { pointsDeducted: 0, totalPoints: points.totalPoints };
+
+  const pointsDeducted = Math.min(Number(awardEntry.points) || 0, points.totalPoints);
+  points.totalPoints = Math.max(0, points.totalPoints - pointsDeducted);
+  points.pointsHistory.push({
+    points: -pointsDeducted,
+    action: 'appointment_cancelled',
+    description: `Points reversed - cancelled appointment #${appointment._id}`,
+    referenceId: appointment._id,
+  });
+  await points.save();
+  await User.findByIdAndUpdate(patientId, { totalPoints: points.totalPoints });
+
+  return { pointsDeducted, totalPoints: points.totalPoints };
+};
+
 const normalizeBookingMobile = (mobile = '') => {
   let digits = String(mobile || '').replace(/\D/g, '');
   if (digits.startsWith('00')) digits = digits.slice(2);
@@ -478,14 +517,15 @@ exports.createAppointment = async (req, res) => {
       await appointment.save();
     }
 
-    // Award 10 points to the patient for creating an appointment
+    // Award points to the patient for creating an appointment
+    let pointsAwarded = 0;
     try {
       let userPoints = await Points.findOne({ userId: patientId });
       if (!userPoints) {
         userPoints = new Points({ userId: patientId });
       }
 
-      const appointmentPoints = 10;
+      const appointmentPoints = APPOINTMENT_REWARD_POINTS;
       userPoints.totalPoints += appointmentPoints;
       userPoints.pointsHistory.push({
         points: appointmentPoints,
@@ -495,6 +535,7 @@ exports.createAppointment = async (req, res) => {
       });
 
       await userPoints.save();
+      pointsAwarded = appointmentPoints;
 
       // Update user's total points
       const patientAccount = await User.findById(patientId);
@@ -527,7 +568,11 @@ exports.createAppointment = async (req, res) => {
         .catch(err => console.error('WhatsApp notification error:', err));
     }
 
-    res.status(201).json({ message: 'Appointment created successfully', appointment });
+    res.status(201).json({
+      message: 'Appointment created successfully',
+      appointment,
+      pointsAwarded,
+    });
   } catch (error) {
     console.error('Error creating appointment:', error);
     res.status(500).json({ message: 'Server error while creating appointment' });
@@ -577,6 +622,11 @@ exports.updateAppointment = async (req, res) => {
       return res.status(400).json({ message: 'Invalid urgency value' });
     }
 
+    const existingAppointment = await Appointment.findById(appointmentId);
+    if (!existingAppointment) {
+      return res.status(404).json({ message: 'Appointment not found' });
+    }
+
     const appointment = await Appointment.findByIdAndUpdate(
       appointmentId,
       { appointmentDateTime, reason, notes, urgency, status },
@@ -587,6 +637,15 @@ exports.updateAppointment = async (req, res) => {
 
     if (!appointment) {
       return res.status(404).json({ message: 'Appointment not found' });
+    }
+
+    let pointsResult = { pointsDeducted: 0, totalPoints: null };
+    if (status === 'cancelled' && existingAppointment.status !== 'cancelled') {
+      try {
+        pointsResult = await reverseAppointmentPoints(appointment);
+      } catch (pointsError) {
+        console.error('Error reversing appointment points:', pointsError);
+      }
     }
 
     // If appointment is updated to cancelled, automatically mark as paid with 0 amount
@@ -647,7 +706,7 @@ exports.updateAppointment = async (req, res) => {
       }
     }
 
-    res.json({ message: 'Appointment updated successfully', appointment });
+    res.json({ message: 'Appointment updated successfully', appointment, ...pointsResult });
   } catch (error) {
     console.error('Error updating appointment:', error);
     res.status(500).json({ message: 'Server error while updating appointment' });
@@ -1199,6 +1258,15 @@ exports.updateAppointmentStatus = async (req, res) => {
       return res.status(404).json({ message: 'Appointment not found' });
     }
 
+    let pointsResult = { pointsDeducted: 0, totalPoints: null };
+    if (status === 'cancelled' && existingAppointment.status !== 'cancelled') {
+      try {
+        pointsResult = await reverseAppointmentPoints(appointment);
+      } catch (pointsError) {
+        console.error('Error reversing appointment points:', pointsError);
+      }
+    }
+
     // If appointment is confirmed, auto-add patient to doctor's patient list
     if (status === 'confirmed') {
       try {
@@ -1257,7 +1325,7 @@ exports.updateAppointmentStatus = async (req, res) => {
       );
     }
 
-    res.json({ message: `Appointment ${status} successfully`, appointment });
+    res.json({ message: `Appointment ${status} successfully`, appointment, ...pointsResult });
   } catch (error) {
     console.error('Error updating appointment status:', error);
     res.status(500).json({ message: 'Server error while updating appointment status' });

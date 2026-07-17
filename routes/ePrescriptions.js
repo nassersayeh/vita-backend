@@ -242,6 +242,16 @@ router.post('/:prescriptionId/renewal', async (req, res) => {
       return res.status(404).json({ message: "Prescription not found" });
     }
 
+    const expiryDate = prescription.expiryDate ? new Date(prescription.expiryDate) : null;
+    const isExpired = prescription.isValid === false
+      || (expiryDate && !Number.isNaN(expiryDate.getTime()) && expiryDate <= new Date());
+
+    if (!isExpired) {
+      return res.status(400).json({
+        message: "This prescription is still active and cannot be renewed before it expires"
+      });
+    }
+
     // Check if there's already a pending renewal request
     const hasPendingRequest = prescription.renewalRequests.some(request => request.status === 'pending');
     if (hasPendingRequest) {
