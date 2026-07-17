@@ -476,7 +476,7 @@ exports.getPatients = async (req, res) => {
       .map(d => d.doctorId);
 
     const doctors = await User.find({ _id: { $in: doctorIds } })
-      .populate('patients', 'fullName email mobileNumber profileImage city address birthdate sex');
+      .populate('patients', 'fullName email mobileNumber profileImage city address birthdate sex createdAt');
 
     const patientsMap = new Map();
     for (const doctor of doctors) {
