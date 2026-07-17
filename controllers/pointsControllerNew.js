@@ -257,18 +257,41 @@ exports.getUserPointsNew = async (req, res) => {
 // Get points leaderboard
 exports.getLeaderboard = async (req, res) => {
   try {
-    const { limit = 10 } = req.query;
-    
-    const leaderboard = await Points.find()
-      .populate('userId', 'fullName profileImage')
-      .sort({ totalPoints: -1 })
-      .limit(parseInt(limit));
+    const parsedLimit = Number.parseInt(req.query.limit, 10);
+    const limit = Number.isFinite(parsedLimit) ? Math.min(Math.max(parsedLimit, 1), 100) : 10;
+
+    // Join users before applying the limit so orphaned point records belonging
+    // to deleted users cannot crash the response or reduce the leaderboard size.
+    const leaderboard = await Points.aggregate([
+      { $match: { userId: { $ne: null } } },
+      {
+        $lookup: {
+          from: User.collection.name,
+          localField: 'userId',
+          foreignField: '_id',
+          as: 'user',
+        },
+      },
+      { $unwind: '$user' },
+      { $sort: { totalPoints: -1, _id: 1 } },
+      { $limit: limit },
+      {
+        $project: {
+          _id: 0,
+          userId: '$user._id',
+          fullName: { $ifNull: ['$user.fullName', 'User'] },
+          profileImage: { $ifNull: ['$user.profileImage', ''] },
+          totalPoints: { $ifNull: ['$totalPoints', 0] },
+          dailyLoginStreak: { $ifNull: ['$dailyLoginStreak', 0] },
+        },
+      },
+    ]);
 
     const formattedLeaderboard = leaderboard.map((entry, index) => ({
       rank: index + 1,
-      userId: entry.userId._id,
-      fullName: entry.userId.fullName,
-      profileImage: entry.userId.profileImage,
+      userId: entry.userId,
+      fullName: entry.fullName,
+      profileImage: entry.profileImage,
       totalPoints: entry.totalPoints,
       dailyLoginStreak: entry.dailyLoginStreak
     }));
