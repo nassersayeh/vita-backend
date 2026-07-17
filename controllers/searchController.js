@@ -4,6 +4,8 @@ const Drug = require('../models/Drug');
 const MedicalTest = require('../models/MedicalTest');
 const Product = require('../models/Product');
 
+const escapeRegex = (value = '') => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 exports.searchUsers = async (req, res) => {
   try {
     const { role, city, country, keyword } = req.query;
@@ -75,7 +77,9 @@ exports.unifiedSearch = async (req, res) => {
     }
 
     const searchTerm = query.trim();
-    const searchLimit = Math.min(parseInt(limit), 50);
+    const safeSearchTerm = escapeRegex(searchTerm);
+    const parsedLimit = Number.parseInt(limit, 10);
+    const searchLimit = Number.isFinite(parsedLimit) ? Math.min(Math.max(parsedLimit, 1), 50) : 20;
     const results = {
       doctors: [],
       pharmacies: [],
@@ -87,7 +91,7 @@ exports.unifiedSearch = async (req, res) => {
 
     // Build city filter if provided
     const cityFilter = city && city.trim() !== "" 
-      ? { city: { $regex: city.trim(), $options: "i" } }
+      ? { city: { $regex: escapeRegex(city.trim()), $options: "i" } }
       : {};
 
     // Define which categories to search
@@ -101,9 +105,9 @@ exports.unifiedSearch = async (req, res) => {
         role: 'Doctor',
         isActive: { $ne: false },
         $or: [
-          { fullName: { $regex: searchTerm, $options: "i" } },
-          { specialty: { $regex: searchTerm, $options: "i" } },
-          { bio: { $regex: searchTerm, $options: "i" } },
+          { fullName: { $regex: safeSearchTerm, $options: "i" } },
+          { specialty: { $regex: safeSearchTerm, $options: "i" } },
+          { bio: { $regex: safeSearchTerm, $options: "i" } },
         ],
         ...cityFilter
       })
@@ -131,8 +135,8 @@ exports.unifiedSearch = async (req, res) => {
         role: 'Pharmacy',
         isActive: { $ne: false },
         $or: [
-          { fullName: { $regex: searchTerm, $options: "i" } },
-          { address: { $regex: searchTerm, $options: "i" } },
+          { fullName: { $regex: safeSearchTerm, $options: "i" } },
+          { address: { $regex: safeSearchTerm, $options: "i" } },
         ],
         ...cityFilter
       })
@@ -159,8 +163,8 @@ exports.unifiedSearch = async (req, res) => {
         role: 'Lab',
         isActive: { $ne: false },
         $or: [
-          { fullName: { $regex: searchTerm, $options: "i" } },
-          { address: { $regex: searchTerm, $options: "i" } },
+          { fullName: { $regex: safeSearchTerm, $options: "i" } },
+          { address: { $regex: safeSearchTerm, $options: "i" } },
         ],
         ...cityFilter
       })
@@ -186,8 +190,8 @@ exports.unifiedSearch = async (req, res) => {
         role: { $in: ['Hospital', 'Institution'] },
         isActive: { $ne: false },
         $or: [
-          { fullName: { $regex: searchTerm, $options: "i" } },
-          { address: { $regex: searchTerm, $options: "i" } },
+          { fullName: { $regex: safeSearchTerm, $options: "i" } },
+          { address: { $regex: safeSearchTerm, $options: "i" } },
         ],
         ...cityFilter
       })
@@ -212,10 +216,10 @@ exports.unifiedSearch = async (req, res) => {
       const medications = await Drug.find({
         isActive: { $ne: false },
         $or: [
-          { name: { $regex: searchTerm, $options: "i" } },
-          { genericName: { $regex: searchTerm, $options: "i" } },
-          { category: { $regex: searchTerm, $options: "i" } },
-          { manufacturer: { $regex: searchTerm, $options: "i" } },
+          { name: { $regex: safeSearchTerm, $options: "i" } },
+          { genericName: { $regex: safeSearchTerm, $options: "i" } },
+          { category: { $regex: safeSearchTerm, $options: "i" } },
+          { manufacturer: { $regex: safeSearchTerm, $options: "i" } },
         ]
       })
       .select('name genericName category dosageForm strength manufacturer unitSellingPrice')
@@ -240,9 +244,9 @@ exports.unifiedSearch = async (req, res) => {
       const tests = await MedicalTest.find({
         isActive: { $ne: false },
         $or: [
-          { name: { $regex: searchTerm, $options: "i" } },
-          { category: { $regex: searchTerm, $options: "i" } },
-          { description: { $regex: searchTerm, $options: "i" } },
+          { name: { $regex: safeSearchTerm, $options: "i" } },
+          { category: { $regex: safeSearchTerm, $options: "i" } },
+          { description: { $regex: safeSearchTerm, $options: "i" } },
         ]
       })
       .select('name type category description preparationInstructions estimatedDuration')
@@ -267,7 +271,9 @@ exports.unifiedSearch = async (req, res) => {
 
     // Combine all results into a flat array if searching all categories
     let allResults = [];
-    if (!category || category === 'all') {
+    if (category && category !== 'all') {
+      allResults = results[category] || [];
+    } else {
       allResults = [
         ...results.doctors,
         ...results.pharmacies,

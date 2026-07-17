@@ -46,7 +46,7 @@ exports.getProviderDetails = async (req, res) => {
       address: provider.address,
       phone: provider.mobileNumber,
       type: type,
-      workingHours: provider.workplace?.schedule || [],
+      workingHours: provider.workingSchedule || [],
       location: provider.address,
     };
 
@@ -74,7 +74,7 @@ exports.getProviderDetails = async (req, res) => {
       const patientId = req.user?.id || req.query.patientId; // Get patient ID from auth or query
       if (patientId) {
         // Check if patient is already in doctor's patients list
-        const isPatient = provider.patients && provider.patients.includes(patientId);
+        const isPatient = provider.patients?.some(patient => patient.toString() === patientId.toString());
         if (isPatient) {
           details.connectionStatus = 'connected';
         } else {
