@@ -217,6 +217,7 @@ app.use('/api/ai', aiRoutes);
 app.use('/api/insurance-claims', insuranceClaimsRoutes);
 app.use('/api/notifications', require('./routes/notifications'));
 app.use('/api/vitatai', vitatAIRoutes);
+app.use('/api/healthy-food', require('./routes/healthyFoodRoutes'));
 
 // Clinic routes
 const clinicRoutes = require('./routes/clinicRoutes');
