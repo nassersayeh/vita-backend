@@ -38,17 +38,24 @@ router.post('/program', auth, async (req, res, next) => {
     if (!height || !weight) return res.status(422).json({ message: 'الطول والوزن مطلوبان' });
     req.user.height = height; req.user.weight = weight; await req.user.save();
     const catalog = await zestRequest('/vita/catalog');
-    const plans = catalog.subscriptions || [];
-    if (!plans.length) return res.status(422).json({ message: 'لا توجد اشتراكات صحية متاحة في زيست حاليًا' });
-    if (!catalog.menu?.length) return res.status(422).json({ message: 'لا توجد وجبات متاحة لبناء البرنامج حاليًا' });
+    const allowedCategories = /شرقي|الطبيخ|صحي|صحية|الصحيه|ساندويش|سندويش|سلطات|سلطة|oriental|healthy|sandwich|salad/i;
+    const eligible = (catalog.menu || []).filter((product) => allowedCategories.test(product.category?.name || ''));
+    const withNutrition = eligible.filter((product) => ['calories', 'protein', 'carbs', 'fat'].every((key) => product.nutrition?.[key] != null && Number.isFinite(Number(product.nutrition[key]))));
+    if (!eligible.length) return res.status(422).json({ message: 'لا توجد أصناف ضمن الوجبات الشرقية والصحية والسندويشات والسلطات' });
+    if (!withNutrition.length) return res.status(422).json({ message: 'يجب إدخال السعرات والبروتين والكارب والدهون للأصناف المؤهلة من لوحة Zest أولًا' });
     const bmi = weight / Math.pow(height / 100, 2);
-    const recommended = plans[Math.min(plans.length - 1, bmi >= 30 ? 0 : bmi < 20 ? plans.length - 1 : Math.floor(plans.length / 2))];
     const offset = bmi >= 30 ? 0 : bmi < 20 ? 2 : 1;
     const days = Array.from({ length: 30 }, (_, index) => ({
       day: index + 1,
-      meal: catalog.menu[(index + offset) % catalog.menu.length],
+      meal: withNutrition[(index + offset) % withNutrition.length],
     }));
-    res.json({ durationDays: 30, bmi: Number(bmi.toFixed(1)), recommended, days, price: recommended.sellingPrice, message: 'اقتراح عام مبني على القياسات، وليس بديلاً عن أخصائي تغذية.' });
+    const price = days.reduce((sum, day) => sum + Number(day.meal.sellingPrice || 0), 0);
+    const nutritionTotals = days.reduce((totals, day) => {
+      ['calories', 'protein', 'carbs', 'fat', 'fiber'].forEach((key) => { totals[key] += Number(day.meal.nutrition?.[key] || 0); });
+      return totals;
+    }, { calories: 0, protein: 0, carbs: 0, fat: 0, fiber: 0 });
+    const dailyAverage = Object.fromEntries(Object.entries(nutritionTotals).map(([key, value]) => [key, Number((value / 30).toFixed(1))]));
+    res.json({ durationDays: 30, bmi: Number(bmi.toFixed(1)), days, price, dailyAverage, eligibleMeals: withNutrition.length, missingNutrition: eligible.length - withNutrition.length, message: 'السعر هو مجموع أسعار وجبات الأيام الثلاثين من منيو زيست، دون سعر مفترض أو خصم.' });
   } catch (error) { next(error); }
 });
 
