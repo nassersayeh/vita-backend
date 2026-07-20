@@ -59,6 +59,15 @@ router.post('/program', auth, async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+router.get('/orders', auth, async (req, res, next) => {
+  try {
+    const orders = await HealthyFoodOrder.find({ userId: req.user._id })
+      .sort({ createdAt: -1 })
+      .lean();
+    res.json({ orders });
+  } catch (error) { next(error); }
+});
+
 router.post('/orders', auth, async (req, res, next) => {
   try {
     const payload = {
