@@ -94,6 +94,38 @@ router.post('/orders', auth, async (req, res, next) => {
   } catch (error) { res.status(error.status || 500).json({ message: error.message }); }
 });
 
+router.patch('/orders/:orderId/cancel', auth, async (req, res) => {
+  try {
+    const order = await HealthyFoodOrder.findOne({ _id: req.params.orderId, userId: req.user._id });
+    if (!order) return res.status(404).json({ message: 'الطلب غير موجود' });
+    if (order.status === 'Cancelled') return res.json({ order });
+    if (!['Pending', 'New'].includes(order.status)) {
+      return res.status(422).json({ message: 'لا يمكن إلغاء الطلب بعد بدء تحضيره' });
+    }
+
+    await zestRequest(`/vita/orders/${order.zestOrderId}/cancel`, {
+      method: 'PATCH',
+      body: JSON.stringify({ cancellationReason: req.body.cancellationReason || 'أُلغي من تطبيق Vita' }),
+    });
+
+    if (!order.pointsReversed) {
+      const points = await Points.findOneAndUpdate(
+        { userId: order.userId },
+        {
+          $inc: { totalPoints: -order.pointsAwarded },
+          $push: { pointsHistory: { points: -order.pointsAwarded, action: 'zest_order_cancelled', description: `إلغاء طلب زيست ${order.invoiceNumber}`, referenceId: order._id } },
+        },
+        { new: true }
+      );
+      if (points) await User.findByIdAndUpdate(order.userId, { totalPoints: points.totalPoints });
+      order.pointsReversed = true;
+    }
+    order.status = 'Cancelled';
+    await order.save();
+    res.json({ order });
+  } catch (error) { res.status(error.status || 500).json({ message: error.message }); }
+});
+
 router.post('/webhook/cancelled', async (req, res, next) => {
   try {
     if (req.header('X-Vita-Key') !== (process.env.VITA_ZEST_SHARED_KEY || 'change-me')) return res.status(401).json({ message: 'Unauthorized' });
