@@ -322,7 +322,8 @@ module.exports = app;
 
 // Only listen when running locally (not on Vercel)
 if (!process.env.VERCEL) {
-  const PORT = process.env.PORT || 5050;
+  // Keep the default aligned with nginx, Vite and the production API upstream.
+  const PORT = process.env.PORT || 5000;
   app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
     
