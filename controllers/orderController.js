@@ -278,23 +278,21 @@ exports.getPharmacyOrders = async (req, res) => {
         path: 'user',
         select: 'fullName email mobileNumber' // جلب كافة بيانات المستخدم المطلوبة
       })
-      .populate({
-        path: 'items.item',
-        refPath: 'items.onModel', // يحدد النموذج بناءً على قيمة onModel
-        match: { onModel: 'Product' }, // Populate only for Product
-        select: 'name price' // جلب الحقول من Product
-      })
+      // Item names and prices are embedded in the order. Product population made
+      // this list endpoint increasingly slow as order history grew.
+      .limit(500)
       .lean() // للحصول على البيانات ككائنات عادية
       .exec();
 
     // تعديل البيانات لتضمين كافة التفاصيل
     const enrichedOrders = orders.map(order => {
       order.items = order.items.map(item => {
-        if (item.onModel === 'Product' && item.item) {
+        if (item.onModel === 'Product') {
           return {
             ...item,
             details: {
-              ...item.item, // Include Product details (name, price, etc.)
+              name: item.name,
+              price: item.price,
               quantity: item.quantity
             }
           };
