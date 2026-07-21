@@ -8,6 +8,7 @@ const path = require('path');
 const fs = require('fs');
 const Drug = require('../models/Drug');
 const { extractPrescriptionMedications } = require('../services/aiService');
+const auth = require('../middleware/auth');
 
 // Configure multer storage for prescription uploads
 const storage = multer.diskStorage({
@@ -180,6 +181,7 @@ router.get('/pharmacy/:pharmacyId', OrderController.getPharmacyOrders);
 
 // Get medicine orders assigned to admin review
 router.get('/admin/all', OrderController.getAdminOrders);
+router.put('/:orderId/admin-review', auth, OrderController.reviewOrderByAdmin);
 
 // Get all orders for a user
 router.get('/user/:userId', OrderController.getUserOrders);

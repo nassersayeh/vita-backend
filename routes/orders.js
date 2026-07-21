@@ -129,6 +129,8 @@ router.post('/pos', auth, async (req, res) => {
       paymentMethod: req.body.paymentMethod || 'Cash',
       insuranceCompany: req.body.insuranceCompany,
       status: status || 'paid',
+      adminApprovalStatus: 'approved',
+      adminApprovedAt: new Date(),
       orderType: 'manual'
     });
 

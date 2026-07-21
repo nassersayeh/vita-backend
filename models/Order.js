@@ -43,6 +43,11 @@ const OrderSchema = new mongoose.Schema({
   vatApplied: { type: Boolean, default: false },
   vatRate: { type: Number, default: 0 },
   status: { type: String, enum: ['pending', 'accepted', 'declined', 'preparing', 'ready', 'delivery_assigned', 'shipped', 'delivered', 'completed', 'cancelled', 'paid'], default: 'pending' },
+  // Patient orders must be reviewed by Vita before they become visible to a pharmacy.
+  adminApprovalStatus: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending', index: true },
+  adminApprovedAt: { type: Date },
+  adminApprovedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  adminRejectionReason: { type: String, trim: true },
   // Status tracking timestamps
   acceptedAt: { type: Date },
   preparingStartedAt: { type: Date },

@@ -123,7 +123,9 @@ exports.createOrder = async (req, res) => {
       user,
       items: processedItems,
       total: finalTotal,
-      status: status || 'pending',
+      // Never trust a patient-supplied status. Every mobile order starts in admin review.
+      status: 'pending',
+      adminApprovalStatus: 'pending',
       orderType: orderType || 'manual',
       prescriptionId: prescriptionId || null,
       prescriptionImage: prescriptionImage || null,
@@ -189,23 +191,14 @@ exports.createOrder = async (req, res) => {
     }
 
     console.log('Creating notification with patient name:', patientName);
-    if (pharmacyId) {
-      await Notification.create({
-        user: pharmacyId,
+    const admins = await User.find({ role: { $in: ['Admin', 'Superadmin'] } }).select('_id').lean();
+    if (admins.length > 0) {
+      await Notification.insertMany(admins.map(admin => ({
+        user: admin._id,
         type: 'order',
-        message: `لديك طلب جديد من المستخدم ${patientName}`,
+        message: `طلب أدوية جديد بانتظار موافقة الإدارة من ${patientName}${city ? ` - ${city}` : ''}`,
         relatedId: newOrder._id
-      });
-    } else {
-      const admins = await User.find({ role: { $in: ['Admin', 'Superadmin'] } }).select('_id').lean();
-      if (admins.length > 0) {
-        await Notification.insertMany(admins.map(admin => ({
-          user: admin._id,
-          type: 'order',
-          message: `طلب أدوية جديد من ${patientName}${city ? ` - ${city}` : ''}`,
-          relatedId: newOrder._id
-        })));
-      }
+      })));
     }
 
     res.status(201).json({ message: 'تم إنشاء الطلب بنجاح', order: newOrder });
@@ -219,8 +212,9 @@ exports.getAdminOrders = async (req, res) => {
   try {
     const orders = await Order.find({
       $or: [
-        { pharmacyId: null },
-        { pharmacyId: { $exists: false } }
+        { adminApprovalStatus: { $in: ['pending', 'approved', 'rejected'] } },
+        { pharmacyId: null, adminApprovalStatus: { $exists: false } },
+        { pharmacyId: { $exists: false }, adminApprovalStatus: { $exists: false } }
       ]
     })
       .populate('user', 'fullName email mobileNumber idNumber city address')
@@ -253,7 +247,15 @@ exports.getPharmacyOrders = async (req, res) => {
     const { pharmacyId } = req.params;
     const { date } = req.query;
 
-    let query = { pharmacyId: pharmacyId };
+    // Keep orders invisible to the pharmacy until an admin explicitly approves them.
+    // Orders created before this workflow have no approval field and remain visible.
+    let query = {
+      pharmacyId: pharmacyId,
+      $or: [
+        { adminApprovalStatus: 'approved' },
+        { adminApprovalStatus: { $exists: false } }
+      ]
+    };
 
     // Add date filter if date is provided
     if (date) {
@@ -270,6 +272,8 @@ exports.getPharmacyOrders = async (req, res) => {
     }
 
     const orders = await Order.find(query)
+      // "Latest" for the pharmacy means the latest order released by admin.
+      .sort({ adminApprovedAt: -1, createdAt: -1 })
       .populate({
         path: 'user',
         select: 'fullName email mobileNumber' // جلب كافة بيانات المستخدم المطلوبة
@@ -362,6 +366,13 @@ exports.updateOrderStatus = async (req, res) => {
     const order = await Order.findById(orderId).populate('user', 'fullName mobileNumber');
     if (!order) {
       return res.status(404).json({ message: 'الطلب غير موجود' });
+    }
+
+    if (order.adminApprovalStatus === 'pending' && status !== 'cancelled') {
+      return res.status(403).json({ message: 'الطلب ما زال بانتظار موافقة الإدارة' });
+    }
+    if (order.adminApprovalStatus === 'rejected') {
+      return res.status(403).json({ message: 'تم رفض الطلب من الإدارة' });
     }
 
     // Validate status transitions
@@ -602,6 +613,60 @@ exports.updateOrderStatus = async (req, res) => {
   } catch (err) {
     console.error('Error updating order status:', err);
     res.status(500).json({ message: 'خطأ في الخادم أثناء تحديث الطلب.' });
+  }
+};
+
+exports.reviewOrderByAdmin = async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    const { action, reason, pharmacyId } = req.body;
+    if (!['Admin', 'Superadmin'].includes(req.user?.role)) {
+      return res.status(403).json({ message: 'هذا الإجراء متاح للإدارة فقط' });
+    }
+    if (!['approve', 'reject'].includes(action)) {
+      return res.status(400).json({ message: 'الإجراء يجب أن يكون approve أو reject' });
+    }
+
+    const order = await Order.findById(orderId).populate('user', 'fullName');
+    if (!order) return res.status(404).json({ message: 'الطلب غير موجود' });
+    if (order.adminApprovalStatus !== 'pending') {
+      return res.status(409).json({ message: 'تمت مراجعة هذا الطلب مسبقاً' });
+    }
+
+    if (action === 'approve') {
+      const targetPharmacy = pharmacyId || order.pharmacyId;
+      if (!targetPharmacy) {
+        return res.status(400).json({ message: 'يجب اختيار صيدلية قبل الموافقة على الطلب' });
+      }
+      order.pharmacyId = targetPharmacy;
+      order.adminApprovalStatus = 'approved';
+      order.adminApprovedAt = new Date();
+      order.adminApprovedBy = req.user._id;
+      await order.save();
+
+      await Notification.create({
+        user: targetPharmacy,
+        type: 'order',
+        message: `طلب جديد وافقت عليه الإدارة من ${order.user?.fullName || 'مريض'}`,
+        relatedId: order._id
+      });
+      return res.json({ message: 'تمت الموافقة وإرسال الطلب إلى الصيدلية', order });
+    }
+
+    order.adminApprovalStatus = 'rejected';
+    order.adminRejectionReason = reason || '';
+    order.status = 'declined';
+    await order.save();
+    await Notification.create({
+      user: order.user._id,
+      type: 'order',
+      message: `تم رفض طلبك رقم #${orderId.slice(-6)} من الإدارة${reason ? `: ${reason}` : ''}`,
+      relatedId: order._id
+    });
+    return res.json({ message: 'تم رفض الطلب', order });
+  } catch (err) {
+    console.error('Error reviewing order by admin:', err);
+    res.status(500).json({ message: 'خطأ في الخادم أثناء مراجعة الطلب' });
   }
 };
 
