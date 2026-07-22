@@ -38,7 +38,8 @@ exports.createOrder = async (req, res) => {
       return res.status(400).json({ message: 'City is required for admin medicine orders.' });
     }
 
-    if (!Array.isArray(items) || items.length === 0) {
+    const isUploadedPrescriptionOrder = orderType === 'upload' && prescriptionImage;
+    if ((!Array.isArray(items) || items.length === 0) && !isUploadedPrescriptionOrder) {
       return res.status(400).json({ message: 'Items array is required and must not be empty.' });
     }
 
@@ -111,7 +112,7 @@ exports.createOrder = async (req, res) => {
       }
     }
 
-    if (processedItems.length === 0) {
+    if (processedItems.length === 0 && !isUploadedPrescriptionOrder) {
       console.error('No valid items after processing:', items);
       return res.status(400).json({ message: 'No valid items to process.' });
     }
