@@ -218,6 +218,7 @@ exports.getAdminOrders = async (req, res) => {
       ]
     })
       .populate('user', 'fullName email mobileNumber idNumber city address')
+      .populate('pharmacyId', 'fullName city address')
       .sort({ createdAt: -1 })
       .limit(200)
       .lean()
@@ -632,11 +633,12 @@ exports.reviewOrderByAdmin = async (req, res) => {
     }
 
     if (action === 'approve') {
-      const targetPharmacy = pharmacyId || order.pharmacyId;
+      // The patient chooses the pharmacy when placing the order. Admin only
+      // approves or rejects and must not redirect it to another pharmacy.
+      const targetPharmacy = order.pharmacyId;
       if (!targetPharmacy) {
-        return res.status(400).json({ message: 'يجب اختيار صيدلية قبل الموافقة على الطلب' });
+        return res.status(400).json({ message: 'هذا الطلب القديم لا يحتوي على صيدلية مختارة من المريض' });
       }
-      order.pharmacyId = targetPharmacy;
       order.adminApprovalStatus = 'approved';
       order.adminApprovedAt = new Date();
       order.adminApprovedBy = req.user._id;
