@@ -11,9 +11,11 @@ const { extractPrescriptionMedications } = require('../services/aiService');
 const auth = require('../middleware/auth');
 
 // Configure multer storage for prescription uploads
+const prescriptionsUploadDir = path.join(__dirname, '..', 'uploads', 'prescriptions');
+fs.mkdirSync(prescriptionsUploadDir, { recursive: true });
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, 'uploads/prescriptions/'); // Ensure this folder exists
+    cb(null, prescriptionsUploadDir);
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);

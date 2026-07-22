@@ -118,6 +118,15 @@ exports.createOrder = async (req, res) => {
     }
 
     const finalTotal = Number(total);
+    if (!Number.isFinite(finalTotal) || finalTotal < 0) {
+      return res.status(400).json({ message: 'قيمة إجمالي الطلب غير صالحة' });
+    }
+    const normalizedPrescriptionImage = prescriptionImage ? {
+      filename: prescriptionImage.filename,
+      filePath: prescriptionImage.filePath,
+      fileUrl: prescriptionImage.fileUrl,
+      uploadedAt: prescriptionImage.uploadedAt || new Date(),
+    } : null;
     const newOrder = new Order({
       pharmacyId: pharmacyId || null,
       city: city || deliveryAddress?.city || '',
@@ -129,7 +138,7 @@ exports.createOrder = async (req, res) => {
       adminApprovalStatus: 'pending',
       orderType: orderType || 'manual',
       prescriptionId: prescriptionId || null,
-      prescriptionImage: prescriptionImage || null,
+      prescriptionImage: normalizedPrescriptionImage,
       prescriptionNotes: prescriptionNotes || '',
       paymentMethod: paymentMethod || 'Cash',
       deliveryMethod: deliveryMethod || 'pickup',
@@ -191,15 +200,21 @@ exports.createOrder = async (req, res) => {
       console.error('Error looking up patient name:', userLookupError);
     }
 
-    console.log('Creating notification with patient name:', patientName);
-    const admins = await User.find({ role: { $in: ['Admin', 'Superadmin'] } }).select('_id').lean();
-    if (admins.length > 0) {
-      await Notification.insertMany(admins.map(admin => ({
-        user: admin._id,
-        type: 'order',
-        message: `طلب أدوية جديد بانتظار موافقة الإدارة من ${patientName}${city ? ` - ${city}` : ''}`,
-        relatedId: newOrder._id
-      })));
+    try {
+      console.log('Creating notification with patient name:', patientName);
+      const admins = await User.find({ role: { $in: ['Admin', 'Superadmin'] } }).select('_id').lean();
+      if (admins.length > 0) {
+        await Notification.insertMany(admins.map(admin => ({
+          user: admin._id,
+          type: 'order',
+          message: `طلب أدوية جديد بانتظار موافقة الإدارة من ${patientName}${city ? ` - ${city}` : ''}`,
+          relatedId: newOrder._id
+        })));
+      }
+    } catch (notificationError) {
+      // The order is already saved; notification failure must not make the
+      // client retry and accidentally create a duplicate order.
+      console.error('Error notifying admins about new order:', notificationError);
     }
 
     res.status(201).json({ message: 'تم إنشاء الطلب بنجاح', order: newOrder });
