@@ -38,7 +38,17 @@ exports.createOrder = async (req, res) => {
       return res.status(400).json({ message: 'City is required for admin medicine orders.' });
     }
 
-    const isUploadedPrescriptionOrder = orderType === 'upload' && prescriptionImage;
+    const hasUploadedPrescriptionFile = Boolean(
+      prescriptionImage
+      && typeof prescriptionImage === 'object'
+      && prescriptionImage.fileUrl
+    );
+    if (orderType === 'upload' && !hasUploadedPrescriptionFile) {
+      return res.status(400).json({
+        message: 'لم يتم رفع ملف الروشيتة إلى السيرفر. يرجى إعادة اختيار الصورة والمحاولة مرة أخرى.'
+      });
+    }
+    const isUploadedPrescriptionOrder = orderType === 'upload' && hasUploadedPrescriptionFile;
     if ((!Array.isArray(items) || items.length === 0) && !isUploadedPrescriptionOrder) {
       return res.status(400).json({ message: 'Items array is required and must not be empty.' });
     }
@@ -65,7 +75,7 @@ exports.createOrder = async (req, res) => {
     // Process and validate items
     const processedItems = [];
     for (const item of items) {
-      if (!item.onModel || !item.quantity || !item.name || !item.price) {
+      if (!item.onModel || !item.quantity || !item.name || item.price === undefined || item.price === null) {
         console.warn(`Invalid item structure: ${JSON.stringify(item)}`);
         continue; // Skip invalid items but allow order to proceed
       }
@@ -649,12 +659,11 @@ exports.reviewOrderByAdmin = async (req, res) => {
     }
 
     if (action === 'approve') {
-      // The patient chooses the pharmacy when placing the order. Admin only
-      // approves or rejects and must not redirect it to another pharmacy.
-      const targetPharmacy = order.pharmacyId;
+      const targetPharmacy = pharmacyId || order.pharmacyId;
       if (!targetPharmacy) {
-        return res.status(400).json({ message: 'هذا الطلب القديم لا يحتوي على صيدلية مختارة من المريض' });
+        return res.status(400).json({ message: 'يجب اختيار صيدلية قبل الموافقة على الطلب' });
       }
+      order.pharmacyId = targetPharmacy;
       order.adminApprovalStatus = 'approved';
       order.adminApprovedAt = new Date();
       order.adminApprovedBy = req.user._id;
