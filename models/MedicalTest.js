@@ -4,6 +4,8 @@ const NormalRangeSchema = new mongoose.Schema({
   gender: { type: String, enum: ['male', 'female', 'all'], default: 'all' },
   ageMin: { type: Number, default: 0 },   // in years
   ageMax: { type: Number, default: 999 }, // in years
+  weekMin: { type: Number, min: 1, max: 42 }, // pregnancy week (BHCG Quantitative only)
+  weekMax: { type: Number, min: 1, max: 42 },
   range: { type: String },
   unit: { type: String },
 }, { _id: false });
