@@ -150,10 +150,17 @@ exports.spinWheel = async (req, res) => {
 exports.awardPoints = async (req, res) => {
   try {
     const userId = req.user._id; // Get from authenticated user
-    const { action, points: pointsToAdd, description, referenceId } = req.body;
+    const { action, points: pointsToAdd, description, referenceId, steps } = req.body;
+    const configuredActionPoints = {
+      book_appointment: 10,
+      lab_request: 10,
+      image_request: 10,
+      daily_steps_8000: 10,
+      profile_completion: 50,
+    };
 
-    if (!action || pointsToAdd === undefined) {
-      return res.status(400).json({ message: 'action and points are required' });
+    if (!action) {
+      return res.status(400).json({ message: 'action is required' });
     }
 
     const user = await User.findById(userId);
@@ -166,7 +173,45 @@ exports.awardPoints = async (req, res) => {
       points = new Points({ userId });
     }
 
-    const numPoints = Number(pointsToAdd);
+    // Completion is a one-time reward; the walking target is once per day.
+    if (
+      action === 'profile_completion'
+      && points.pointsHistory.some(entry => entry.action === action)
+    ) {
+      return res.json({
+        message: 'Reward already claimed',
+        pointsEarned: 0,
+        totalPoints: points.totalPoints,
+        alreadyClaimed: true,
+      });
+    }
+    let calculatedWalkingPoints = null;
+    if (action === 'daily_steps_8000') {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const numericSteps = Number(steps);
+      const totalRewardForSteps = numericSteps >= 8000
+        ? 10 + Math.floor((numericSteps - 8000) / 1000)
+        : 0;
+      const awardedToday = points.pointsHistory
+        .filter(entry => entry.action === action && new Date(entry.date) >= today)
+        .reduce((total, entry) => total + Number(entry.points || 0), 0);
+      calculatedWalkingPoints = Math.max(totalRewardForSteps - awardedToday, 0);
+      if (calculatedWalkingPoints === 0) {
+        return res.json({
+          message: 'No new walking reward available',
+          pointsEarned: 0,
+          totalPoints: points.totalPoints,
+          alreadyClaimed: true,
+          awardedToday,
+          nextRewardAt: numericSteps < 8000
+            ? 8000
+            : 8000 + ((totalRewardForSteps - 9) * 1000),
+        });
+      }
+    }
+
+    const numPoints = Number(calculatedWalkingPoints ?? configuredActionPoints[action] ?? pointsToAdd);
     if (isNaN(numPoints) || numPoints < 0) {
       return res.status(400).json({ message: 'Points must be a non-negative number' });
     }
