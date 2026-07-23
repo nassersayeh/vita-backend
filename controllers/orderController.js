@@ -663,14 +663,22 @@ exports.reviewOrderByAdmin = async (req, res) => {
       if (!targetPharmacy) {
         return res.status(400).json({ message: 'يجب اختيار صيدلية قبل الموافقة على الطلب' });
       }
-      order.pharmacyId = targetPharmacy;
+      const pharmacy = await User.findOne({
+        _id: targetPharmacy,
+        role: { $regex: /^pharmacy$/i }
+      }).select('_id fullName');
+      if (!pharmacy) {
+        return res.status(400).json({ message: 'الصيدلية المختارة غير موجودة أو غير صالحة' });
+      }
+
+      order.pharmacyId = pharmacy._id;
       order.adminApprovalStatus = 'approved';
       order.adminApprovedAt = new Date();
       order.adminApprovedBy = req.user._id;
       await order.save();
 
       await Notification.create({
-        user: targetPharmacy,
+        user: pharmacy._id,
         type: 'order',
         message: `طلب جديد وافقت عليه الإدارة من ${order.user?.fullName || 'مريض'}`,
         relatedId: order._id
