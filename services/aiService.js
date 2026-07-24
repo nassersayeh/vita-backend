@@ -13,6 +13,61 @@ function getMimeAndData(fileData) {
   return { mimeType: 'application/octet-stream', fileBase64: fileData };
 }
 
+function parseJsonObject(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+  if (typeof value !== 'string') return null;
+
+  const cleaned = value
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim();
+
+  try {
+    const parsed = JSON.parse(cleaned);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch (_) {
+    const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return null;
+    try {
+      const parsed = JSON.parse(jsonMatch[0]);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+    } catch (_) {
+      return null;
+    }
+  }
+}
+
+function extractAssistantText(value, fallback) {
+  let current = value;
+
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (current && typeof current === 'object') {
+      current = current.assistantMessage
+        || current.message
+        || current.plainExplanation
+        || current.summary;
+      continue;
+    }
+
+    if (typeof current !== 'string') return fallback;
+
+    const nested = parseJsonObject(current);
+    if (nested) {
+      current = nested;
+      continue;
+    }
+
+    const text = current
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```$/i, '')
+      .trim();
+    return text || fallback;
+  }
+
+  return fallback;
+}
+
 /**
  * Generate clinical SOAP notes from symptoms and patient info
  * @param {Object} params - Input parameters
@@ -748,6 +803,7 @@ ${noAdviceText}
           topK: 20,
           topP: 0.9,
           maxOutputTokens: 1536,
+          responseMimeType: 'application/json',
         }
       })
     });
@@ -764,11 +820,14 @@ ${noAdviceText}
       throw new Error('No response generated');
     }
 
-    const jsonMatch = generatedText.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
+    const parsed = parseJsonObject(generatedText);
+    if (!parsed) {
       return {
         responseType: 'general',
-        assistantMessage: generatedText,
+        assistantMessage: extractAssistantText(
+          generatedText,
+          isArabic ? 'تعذر تجهيز الرد، حاول مرة أخرى.' : 'Unable to prepare the response. Please try again.'
+        ),
         needsCity: false,
         city: city || '',
         needsDoctorReferral: false,
@@ -780,10 +839,10 @@ ${noAdviceText}
       };
     }
 
-    const parsed = JSON.parse(jsonMatch[0]);
+    const fallbackMessage = isArabic ? 'تم تحليل طلبك.' : 'Your request was analyzed.';
     return {
       responseType: parsed.responseType || 'general',
-      assistantMessage: parsed.assistantMessage || (isArabic ? 'تم تحليل طلبك.' : 'Your request was analyzed.'),
+      assistantMessage: extractAssistantText(parsed.assistantMessage, fallbackMessage),
       needsCity: !!parsed.needsCity,
       city: parsed.city || city || '',
       needsDoctorReferral: !!parsed.needsDoctorReferral,
