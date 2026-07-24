@@ -6,13 +6,13 @@ const {
   checkDrugInteractions, 
   generatePatientSummary, 
   suggestDiagnosis,
-  patientAssistantChat,
   analyzePatientReportOrImage,
   doctorAssistantChat,
   doctorAssistantAnalyzeFile,
   pharmacyDrugCheck,
   pharmacyAssistantChat
 } = require('../services/aiService');
+const { patientAssistantChat } = require('../services/patientAIService');
 const User = require('../models/User');
 const MedicalRecord = require('../models/MedicalRecord');
 const EPrescription = require('../models/EPrescription');
@@ -366,28 +366,18 @@ router.post('/patient-assistant/chat', verifyPatient, async (req, res) => {
     const [medicalRecords, legacyRecords, prescriptions, labResults, imageRequests] = await Promise.all([
       MedicalRecord.find({ patient: patientId })
         .sort({ date: -1, createdAt: -1 })
-        .limit(12)
-        .select('date title chiefComplaint historyOfPresentIllness pastMedicalHistory medications allergies diagnosis preliminaryDiagnosis examinationFindings clinicalExamination investigations treatmentPlan treatment recommendations requiredTests followUpNotes notes vitals')
         .lean(),
       Record.find({ patientId })
         .sort({ appointmentDate: -1, createdAt: -1 })
-        .limit(10)
-        .select('appointmentDate issueDescription treatmentPlan ePrescription createdAt')
         .lean(),
       EPrescription.find({ patientId })
         .sort({ date: -1, createdAt: -1 })
-        .limit(10)
-        .select('date diagnosis products medicalTests notes isValid expiryDate')
         .lean(),
-      LabRequest.find({ patientId, status: 'completed' })
+      LabRequest.find({ patientId })
         .sort({ completedDate: -1, updatedAt: -1 })
-        .limit(10)
-        .select('completedDate notes testName results')
         .lean(),
-      ImageRequest.find({ patientId, status: 'completed' })
+      ImageRequest.find({ patientId })
         .sort({ completedDate: -1, updatedAt: -1 })
-        .limit(10)
-        .select('completedDate imageType bodyPart findings radiologistNotes notes images.fileUrl images.notes')
         .lean()
     ]);
 
