@@ -38,6 +38,34 @@ function parseJsonObject(value) {
   }
 }
 
+function extractLooseJsonString(value, fieldName) {
+  if (typeof value !== 'string') return '';
+  const fieldPattern = new RegExp(`"${fieldName}"\\s*:\\s*"`, 'i');
+  const match = fieldPattern.exec(value);
+  if (!match) return '';
+
+  const start = match.index + match[0].length;
+  let result = '';
+  let escaped = false;
+
+  for (let index = start; index < value.length; index += 1) {
+    const character = value[index];
+    if (escaped) {
+      const replacements = { n: '\n', r: '\r', t: '\t', '"': '"', '\\': '\\' };
+      result += replacements[character] ?? character;
+      escaped = false;
+    } else if (character === '\\') {
+      escaped = true;
+    } else if (character === '"') {
+      break;
+    } else {
+      result += character;
+    }
+  }
+
+  return result.trim();
+}
+
 function extractAssistantText(value, fallback) {
   let current = value;
 
@@ -55,6 +83,12 @@ function extractAssistantText(value, fallback) {
     const nested = parseJsonObject(current);
     if (nested) {
       current = nested;
+      continue;
+    }
+
+    const looseMessage = extractLooseJsonString(current, 'assistantMessage');
+    if (looseMessage) {
+      current = looseMessage;
       continue;
     }
 
@@ -704,6 +738,7 @@ async function patientAssistantChat({
 
   const profile = patientContext?.profile || {};
   const medicalRecords = (patientContext?.medicalRecords || []).slice(0, 12);
+  const prescriptions = (patientContext?.prescriptions || []).slice(0, 10);
   const labResults = (patientContext?.labResults || []).slice(0, 10);
   const imageRequests = (patientContext?.imageRequests || []).slice(0, 10);
 
@@ -727,6 +762,9 @@ ${JSON.stringify(profile, null, 2)}
 
 السجلات الطبية:
 ${JSON.stringify(medicalRecords, null, 2)}
+
+الوصفات الطبية:
+${JSON.stringify(prescriptions, null, 2)}
 
 نتائج المختبر:
 ${JSON.stringify(labResults, null, 2)}
@@ -754,6 +792,9 @@ ${JSON.stringify(profile, null, 2)}
 
 Medical records:
 ${JSON.stringify(medicalRecords, null, 2)}
+
+Prescriptions:
+${JSON.stringify(prescriptions, null, 2)}
 
 Lab results:
 ${JSON.stringify(labResults, null, 2)}
@@ -802,8 +843,29 @@ ${noAdviceText}
           temperature: 0.3,
           topK: 20,
           topP: 0.9,
-          maxOutputTokens: 1536,
+          maxOutputTokens: 2048,
           responseMimeType: 'application/json',
+          responseSchema: {
+            type: 'OBJECT',
+            properties: {
+              responseType: { type: 'STRING' },
+              assistantMessage: { type: 'STRING' },
+              needsCity: { type: 'BOOLEAN' },
+              city: { type: 'STRING' },
+              needsDoctorReferral: { type: 'BOOLEAN' },
+              detectedSpecialty: { type: 'STRING' },
+              specialtyReason: { type: 'STRING' },
+              historySummary: { type: 'STRING' },
+              reportsSummary: { type: 'STRING' },
+              confidence: { type: 'STRING' },
+            },
+            required: [
+              'responseType',
+              'assistantMessage',
+              'needsCity',
+              'needsDoctorReferral',
+            ],
+          },
         }
       })
     });

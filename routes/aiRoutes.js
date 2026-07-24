@@ -330,7 +330,7 @@ router.post('/patient-assistant/chat', verifyPatient, async (req, res) => {
     }
 
     const patient = await User.findById(patientId)
-      .select('fullName sex birthdate city bloodType allergies chronicConditions medications pastIllnesses hasChronicDiseases chronicDiseasesText hasSurgeries surgeriesText hasFamilyDiseases familyDiseasesText bloodPressure heartRate temperature bloodSugar smoking previousDiseases disabilities')
+      .select('fullName sex birthdate city bloodType height weight allergies chronicConditions medications pastIllnesses hasChronicDiseases chronicDiseasesText hasSurgeries surgeriesText hasFamilyDiseases familyDiseasesText hasDrugAllergies drugAllergiesText hasFoodAllergies foodAllergiesText bloodPressure heartRate temperature bloodSugar smoking previousDiseases disabilities')
       .lean();
 
     if (!patient) {
@@ -340,11 +340,16 @@ router.post('/patient-assistant/chat', verifyPatient, async (req, res) => {
       });
     }
 
-    const [medicalRecords, labResults, imageRequests] = await Promise.all([
+    const [medicalRecords, prescriptions, labResults, imageRequests] = await Promise.all([
       MedicalRecord.find({ patient: patientId })
         .sort({ date: -1, createdAt: -1 })
         .limit(12)
-        .select('date title chiefComplaint historyOfPresentIllness diagnosis preliminaryDiagnosis examinationFindings investigations treatmentPlan followUpNotes notes vitals')
+        .select('date title chiefComplaint historyOfPresentIllness pastMedicalHistory medications allergies diagnosis preliminaryDiagnosis examinationFindings clinicalExamination investigations treatmentPlan treatment recommendations requiredTests followUpNotes notes vitals')
+        .lean(),
+      EPrescription.find({ patientId })
+        .sort({ date: -1, createdAt: -1 })
+        .limit(10)
+        .select('date diagnosis products medicalTests notes isValid expiryDate')
         .lean(),
       LabRequest.find({ patientId, status: 'completed' })
         .sort({ completedDate: -1, updatedAt: -1 })
@@ -369,6 +374,7 @@ router.post('/patient-assistant/chat', verifyPatient, async (req, res) => {
       patientContext: {
         profile: patient,
         medicalRecords,
+        prescriptions,
         labResults,
         imageRequests
       }
