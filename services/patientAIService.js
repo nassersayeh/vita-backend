@@ -149,6 +149,109 @@ function factualFallback(context, language) {
     : `Recorded information: ${values.join(', ') || 'No basic measurements recorded'}.\nAvailable records: ${counts.medicalRecords + counts.legacyMedicalRecords} medical records, ${counts.prescriptions} prescriptions, ${counts.labResults} lab requests, and ${counts.imagingResults} imaging reports. Review the details with your doctor for final evaluation.`;
 }
 
+const displayValue = (value) => {
+  if (value === undefined || value === null || value === '') return '';
+  if (Array.isArray(value)) return value.map(displayValue).filter(Boolean).join('، ');
+  if (typeof value === 'object') {
+    return Object.entries(value)
+      .map(([key, item]) => {
+        const displayed = displayValue(item);
+        return displayed ? `${key}: ${displayed}` : '';
+      })
+      .filter(Boolean)
+      .join('، ');
+  }
+  return String(value);
+};
+
+const recordDate = (item = {}) => {
+  const value = item.date || item.appointmentDate || item.completedDate || item.requestDate || item.createdAt;
+  if (!value) return '';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value) : date.toISOString().slice(0, 10);
+};
+
+function buildCompleteSummary(context, language) {
+  const isArabic = language === 'ar';
+  const profile = context.profile || {};
+  const sections = [];
+  const addSection = (title, lines) => {
+    const valid = lines.filter(Boolean);
+    sections.push(`${title}\n${valid.length ? valid.join('\n') : (isArabic ? 'لا توجد بيانات مسجلة.' : 'No recorded data.')}`);
+  };
+
+  addSection(isArabic ? 'المعلومات الأساسية' : 'Basic information', [
+    profile.fullName && (isArabic ? `الاسم: ${profile.fullName}` : `Name: ${profile.fullName}`),
+    profile.age !== undefined && (isArabic ? `العمر: ${profile.age} سنة` : `Age: ${profile.age}`),
+    profile.sex && (isArabic ? `الجنس: ${profile.sex}` : `Sex: ${profile.sex}`),
+    profile.bloodType && (isArabic ? `فصيلة الدم: ${profile.bloodType}` : `Blood type: ${profile.bloodType}`),
+    profile.height && (isArabic ? `الطول: ${profile.height} سم` : `Height: ${profile.height} cm`),
+    profile.weight && (isArabic ? `الوزن: ${profile.weight} كغم` : `Weight: ${profile.weight} kg`),
+    profile.bmi && `BMI: ${profile.bmi}`,
+    profile.bloodPressure && (isArabic ? `ضغط الدم المسجل: ${profile.bloodPressure}` : `Recorded blood pressure: ${profile.bloodPressure}`),
+    profile.bloodSugar && (isArabic ? `سكر الدم المسجل: ${profile.bloodSugar}` : `Recorded blood sugar: ${profile.bloodSugar}`),
+  ]);
+
+  addSection(isArabic ? 'التاريخ الصحي' : 'Health history', [
+    displayValue(profile.chronicConditions) && `${isArabic ? 'الأمراض المزمنة' : 'Chronic conditions'}: ${displayValue(profile.chronicConditions)}`,
+    profile.chronicDiseasesText && `${isArabic ? 'تفاصيل الأمراض المزمنة' : 'Chronic disease details'}: ${profile.chronicDiseasesText}`,
+    displayValue(profile.pastIllnesses) && `${isArabic ? 'الأمراض السابقة' : 'Past illnesses'}: ${displayValue(profile.pastIllnesses)}`,
+    profile.previousDiseases && `${isArabic ? 'تاريخ مرضي إضافي' : 'Additional history'}: ${profile.previousDiseases}`,
+    profile.surgeriesText && `${isArabic ? 'العمليات' : 'Surgeries'}: ${profile.surgeriesText}`,
+    displayValue(profile.allergies) && `${isArabic ? 'الحساسيات' : 'Allergies'}: ${displayValue(profile.allergies)}`,
+    profile.drugAllergiesText && `${isArabic ? 'حساسية الأدوية' : 'Drug allergies'}: ${profile.drugAllergiesText}`,
+    profile.foodAllergiesText && `${isArabic ? 'حساسية الطعام' : 'Food allergies'}: ${profile.foodAllergiesText}`,
+    displayValue(profile.medications) && `${isArabic ? 'الأدوية الحالية' : 'Current medications'}: ${displayValue(profile.medications)}`,
+  ]);
+
+  const modernRecords = (context.medicalRecords || []).map((record, index) => {
+    const details = [
+      record.diagnosis || record.preliminaryDiagnosis,
+      record.chiefComplaint,
+      record.examinationFindings || record.clinicalExamination,
+      record.investigations,
+      record.notes,
+    ].map(displayValue).filter(Boolean);
+    return `${index + 1}. ${recordDate(record) || (isArabic ? 'دون تاريخ' : 'No date')}: ${details.join(' — ') || (isArabic ? 'سجل دون تفاصيل نصية' : 'Record without text details')}`;
+  });
+  const legacyRecords = (context.legacyMedicalRecords || []).map((record, index) => {
+    const details = [record.issueDescription, record.treatmentPlan, record.ePrescription].map(displayValue).filter(Boolean);
+    return `${modernRecords.length + index + 1}. ${recordDate(record) || (isArabic ? 'دون تاريخ' : 'No date')}: ${details.join(' — ')}`;
+  });
+  addSection(isArabic ? 'السجلات والزيارات الطبية' : 'Medical records and visits', [...modernRecords, ...legacyRecords]);
+
+  addSection(isArabic ? 'الوصفات الطبية' : 'Prescriptions', (context.prescriptions || []).map((prescription, index) => {
+    const products = (prescription.products || []).map((product) =>
+      [product.name, product.dose, product.instructions].filter(Boolean).join(' - ')
+    ).filter(Boolean);
+    return `${index + 1}. ${recordDate(prescription) || (isArabic ? 'دون تاريخ' : 'No date')}: ${products.join('، ') || displayValue(prescription.notes) || (isArabic ? 'لا توجد أدوية مفصلة' : 'No detailed medications')}`;
+  }));
+
+  addSection(isArabic ? 'الفحوصات المخبرية' : 'Laboratory tests', (context.labRequestsAndResults || []).map((request, index) => {
+    const results = (request.results || []).map((result) => {
+      const name = result.testName || result.name || result.testId?.name || request.testName || '';
+      return [name, result.result, result.normalRange && `${isArabic ? 'الطبيعي' : 'normal'}: ${result.normalRange}`, result.unit].filter(Boolean).join(' ');
+    }).filter(Boolean);
+    return `${index + 1}. ${recordDate(request) || (isArabic ? 'دون تاريخ' : 'No date')} (${request.status || ''}): ${results.join('، ') || displayValue(request.notes) || (isArabic ? 'لا توجد نتيجة نصية مسجلة' : 'No textual result recorded')}`;
+  }));
+
+  addSection(isArabic ? 'الأشعة والتصوير' : 'Imaging', (context.imagingRequestsAndResults || []).map((request, index) => {
+    const details = [
+      request.imageType,
+      request.bodyPart,
+      request.findings,
+      request.radiologistNotes,
+      request.notes,
+    ].map(displayValue).filter(Boolean);
+    return `${index + 1}. ${recordDate(request) || (isArabic ? 'دون تاريخ' : 'No date')} (${request.status || ''}): ${details.join(' — ') || (isArabic ? 'لا توجد نتيجة نصية مسجلة' : 'No textual result recorded')}`;
+  }));
+
+  sections.push(isArabic
+    ? 'هذا ملخص للمعلومات المسجلة في منصة Vita، وليس تشخيصًا جديدًا. يمكنني شرح أي بند منه إذا سألتني عنه.'
+    : 'This summarizes information recorded in Vita and is not a new diagnosis. Ask me to explain any item.');
+  return sections.join('\n\n');
+}
+
 function isSummaryRequest(message) {
   return /ملخص|لخص|حالتي الصحية|ملفي الصحي|health summary|summari[sz]e|medical file/i.test(message);
 }
@@ -251,32 +354,7 @@ async function patientAssistantChat({
   }
 
   if (isSummaryRequest(message)) {
-    const fallback = factualFallback(context, language);
-    const prompt = isArabic ? `
-أنت مساعد طبي للمريض داخل منصة Vita. أنشئ ملخصًا صحيًا شاملاً ودقيقًا من البيانات أدناه فقط.
-
-المطلوب:
-- ابدأ بالمعلومات الأساسية والقياسات.
-- لخّص الأمراض المزمنة والحساسيات والعمليات والتاريخ المرضي.
-- لخّص التشخيصات والزيارات من الأحدث إلى الأقدم.
-- لخّص الأدوية والوصفات المسجلة.
-- لخّص نتائج المختبر والأشعة، وميّز الطبيعي من غير الطبيعي فقط عندما تكون النتيجة مكتوبة صراحة.
-- إذا كان قسم بلا بيانات، قل بوضوح إنه لا توجد بيانات مسجلة فيه.
-- لا تخترع نتيجة، ولا تقدم تشخيصًا جديدًا أو علاجًا.
-- استخدم نصًا عربيًا واضحًا بعناوين عادية دون Markdown أو نجوم.
-- اختم بأن الملخص معلوماتي ويحتاج مراجعة الطبيب.
-
-أعداد المصادر: ${JSON.stringify(counts)}
-بيانات المريض الكاملة:
-${contextJson}
-` : `
-Create a comprehensive factual health summary using only the patient data below. Cover demographics and measurements, chronic conditions, allergies, surgeries, diagnoses and visits, prescriptions, labs, and imaging. Explicitly say when a section has no recorded data. Never invent findings, diagnose, or prescribe. Use plain text without Markdown and finish with a medical-review notice.
-
-Source counts: ${JSON.stringify(counts)}
-Complete patient data:
-${contextJson}
-`;
-    const assistantMessage = await generatePlainText(prompt, fallback);
+    const assistantMessage = buildCompleteSummary(context, language);
     return {
       responseType: 'history_explanation',
       assistantMessage,
