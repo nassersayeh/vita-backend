@@ -18,6 +18,7 @@ const MedicalRecord = require('../models/MedicalRecord');
 const EPrescription = require('../models/EPrescription');
 const LabRequest = require('../models/LabRequest');
 const ImageRequest = require('../models/ImageRequest');
+const Record = require('../models/Record');
 
 // Middleware to verify doctor role
 const verifyDoctor = async (req, res, next) => {
@@ -65,6 +66,12 @@ const asksForAdvice = (message = '') => {
   const text = String(message || '').toLowerCase();
   const advicePattern = /(نصيحة|نصائح|شو اعمل|ماذا افعل|بماذا تنصح|اعطني علاج|اعطيني علاج|treatment advice|what should i do|medical advice|advice)/i;
   return advicePattern.test(text);
+};
+
+const asksForSymptomsBeforeDoctor = (message = '') => {
+  const text = String(message || '').trim().toLowerCase();
+  return /^(بدي|أريد|اريد|بدّي).*(طبيب|دكتور).*(حسب|بناء.*على).*(الأعراض|اعراض)$/.test(text)
+    || /^(i need|find me).*(doctor).*(based on|by).*(symptoms)$/.test(text);
 };
 
 /**
@@ -329,6 +336,22 @@ router.post('/patient-assistant/chat', verifyPatient, async (req, res) => {
       });
     }
 
+    if (asksForSymptomsBeforeDoctor(message)) {
+      return res.json({
+        success: true,
+        data: {
+          responseType: 'ask_symptoms',
+          assistantMessage: lang === 'ar'
+            ? 'أكيد. اكتب لي الأعراض التي تشعر بها، منذ متى بدأت، ومدى شدتها. بعدها أساعدك في تحديد التخصص المناسب والبحث عن طبيب في مدينتك.'
+            : 'Of course. Tell me your symptoms, when they started, and how severe they are. I will then identify the suitable specialty and find a doctor in your city.',
+          needsCity: false,
+          city: req.patient.city || null,
+          needsDoctorReferral: false,
+          doctors: []
+        }
+      });
+    }
+
     const patient = await User.findById(patientId)
       .select('fullName sex birthdate city bloodType height weight allergies chronicConditions medications pastIllnesses hasChronicDiseases chronicDiseasesText hasSurgeries surgeriesText hasFamilyDiseases familyDiseasesText hasDrugAllergies drugAllergiesText hasFoodAllergies foodAllergiesText bloodPressure heartRate temperature bloodSugar smoking previousDiseases disabilities')
       .lean();
@@ -340,11 +363,16 @@ router.post('/patient-assistant/chat', verifyPatient, async (req, res) => {
       });
     }
 
-    const [medicalRecords, prescriptions, labResults, imageRequests] = await Promise.all([
+    const [medicalRecords, legacyRecords, prescriptions, labResults, imageRequests] = await Promise.all([
       MedicalRecord.find({ patient: patientId })
         .sort({ date: -1, createdAt: -1 })
         .limit(12)
         .select('date title chiefComplaint historyOfPresentIllness pastMedicalHistory medications allergies diagnosis preliminaryDiagnosis examinationFindings clinicalExamination investigations treatmentPlan treatment recommendations requiredTests followUpNotes notes vitals')
+        .lean(),
+      Record.find({ patientId })
+        .sort({ appointmentDate: -1, createdAt: -1 })
+        .limit(10)
+        .select('appointmentDate issueDescription treatmentPlan ePrescription createdAt')
         .lean(),
       EPrescription.find({ patientId })
         .sort({ date: -1, createdAt: -1 })
@@ -365,6 +393,13 @@ router.post('/patient-assistant/chat', verifyPatient, async (req, res) => {
 
     console.log(`🤖 AI Chat Request: message="${message}", city="${city}", language="${lang}"`);
     console.log(`👤 Patient city: ${patient.city}`);
+    console.log('📚 AI patient context counts:', {
+      medicalRecords: medicalRecords.length,
+      legacyRecords: legacyRecords.length,
+      prescriptions: prescriptions.length,
+      labResults: labResults.length,
+      imageRequests: imageRequests.length
+    });
     
     const aiResult = await patientAssistantChat({
       message,
@@ -374,6 +409,7 @@ router.post('/patient-assistant/chat', verifyPatient, async (req, res) => {
       patientContext: {
         profile: patient,
         medicalRecords,
+        legacyRecords,
         prescriptions,
         labResults,
         imageRequests
@@ -421,6 +457,13 @@ router.post('/patient-assistant/chat', verifyPatient, async (req, res) => {
     
     // Standardize city name using mapping
     const finalCity = cityMapping[extractedCity] || extractedCity;
+    const cityAliases = {
+      Ramallah: ['Ramallah', 'رام الله'],
+      Nablus: ['Nablus', 'نابلس'],
+      Hebron: ['Hebron', 'الخليل']
+    };
+    const cityValues = cityAliases[finalCity] || [finalCity];
+    const cityPattern = new RegExp(`^(${cityValues.map(escapeRegExp).join('|')})$`, 'i');
     console.log(`City extraction: message="${message}" -> extracted="${extractedCity}" -> final="${finalCity}"`);
     
     let doctors = [];
@@ -434,7 +477,7 @@ router.post('/patient-assistant/chat', verifyPatient, async (req, res) => {
       doctors = await User.find({
         role: 'Doctor',
         activationStatus: 'active',
-        city: finalCity
+        city: cityPattern
       })
         .select('_id fullName city specialty address mobileNumber rating ratingsCount yearsOfExperience consultationFee workplaces profileImage')
         .sort({ specialty: 1, rating: -1, ratingsCount: -1 })
@@ -477,7 +520,7 @@ router.post('/patient-assistant/chat', verifyPatient, async (req, res) => {
       doctors = await User.find({
         role: 'Doctor',
         activationStatus: 'active',
-        city: finalCity,
+        city: cityPattern,
         specialty: specialtyPattern
       })
         .select('_id fullName city specialty address mobileNumber rating ratingsCount yearsOfExperience consultationFee workplaces profileImage')

@@ -741,6 +741,7 @@ async function patientAssistantChat({
   const prescriptions = (patientContext?.prescriptions || []).slice(0, 10);
   const labResults = (patientContext?.labResults || []).slice(0, 10);
   const imageRequests = (patientContext?.imageRequests || []).slice(0, 10);
+  const legacyRecords = (patientContext?.legacyRecords || []).slice(0, 10);
 
   const noAdviceText = isArabic
     ? 'توجه لطبيب مختص حسب حالتك، وإذا بتحب احكيلي حالتك وأنا بساعدك عند مين تروح.'
@@ -756,12 +757,26 @@ async function patientAssistantChat({
 4. اذكر دائماً ضرورة مراجعة الطبيب للتشخيص النهائي
 5. تجنب إثارة القلق أو الهلع
 6. اعتمد على المعلومات المتوفرة فقط
+7. لا تدّعي وجود فحوصات أو تشخيصات غير موجودة في البيانات أدناه
+8. اجعل الرد بين جملتين وخمس جمل كاملة، وبحد أقصى 700 حرف
+9. لا تنه الرد في منتصف جملة
+
+مصادر البيانات المتوفرة فعلياً:
+- الملف الشخصي: ${Object.keys(profile).length ? 'متوفر' : 'غير متوفر'}
+- السجلات الطبية: ${medicalRecords.length}
+- السجلات القديمة: ${legacyRecords.length}
+- الوصفات الطبية: ${prescriptions.length}
+- نتائج المختبر: ${labResults.length}
+- تقارير الأشعة: ${imageRequests.length}
 
 الملف الطبي للمريض:
 ${JSON.stringify(profile, null, 2)}
 
 السجلات الطبية:
 ${JSON.stringify(medicalRecords, null, 2)}
+
+السجلات الطبية القديمة:
+${JSON.stringify(legacyRecords, null, 2)}
 
 الوصفات الطبية:
 ${JSON.stringify(prescriptions, null, 2)}
@@ -786,12 +801,26 @@ Important rules:
 4. Always mention the need to see a doctor for final diagnosis
 5. Avoid causing anxiety or panic
 6. Only use available information
+7. Never claim that a test or diagnosis exists unless it is present in the data below
+8. Write two to five complete sentences, with no more than 700 characters
+9. Never stop in the middle of a sentence
+
+Data sources actually available:
+- Profile: ${Object.keys(profile).length ? 'available' : 'unavailable'}
+- Medical records: ${medicalRecords.length}
+- Legacy records: ${legacyRecords.length}
+- Prescriptions: ${prescriptions.length}
+- Lab results: ${labResults.length}
+- Imaging reports: ${imageRequests.length}
 
 Patient medical profile:
 ${JSON.stringify(profile, null, 2)}
 
 Medical records:
 ${JSON.stringify(medicalRecords, null, 2)}
+
+Legacy medical records:
+${JSON.stringify(legacyRecords, null, 2)}
 
 Prescriptions:
 ${JSON.stringify(prescriptions, null, 2)}
@@ -815,7 +844,7 @@ ${noAdviceText}
 
 أجب فقط بتنسيق JSON التالي:
 {
-  "responseType": "general | doctor_referral | history_explanation | report_explanation",
+  "responseType": "general | ask_symptoms | ask_city | list_doctors | doctor_referral | history_explanation | report_explanation",
   "assistantMessage": "الرد المفصل للمريض",
   "needsCity": false,
   "city": "${city || ''}",
@@ -828,55 +857,62 @@ ${noAdviceText}
 }`;
 
   try {
-    const response = await fetch(`${GEMINI_API_URL}?key=${GEMINI_API_KEY}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        contents: [{
-          parts: [{
-            text: prompt
-          }]
-        }],
-        generationConfig: {
-          temperature: 0.3,
-          topK: 20,
-          topP: 0.9,
-          maxOutputTokens: 2048,
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: 'OBJECT',
-            properties: {
-              responseType: { type: 'STRING' },
-              assistantMessage: { type: 'STRING' },
-              needsCity: { type: 'BOOLEAN' },
-              city: { type: 'STRING' },
-              needsDoctorReferral: { type: 'BOOLEAN' },
-              detectedSpecialty: { type: 'STRING' },
-              specialtyReason: { type: 'STRING' },
-              historySummary: { type: 'STRING' },
-              reportsSummary: { type: 'STRING' },
-              confidence: { type: 'STRING' },
+    let generatedText = '';
+    let finishReason = '';
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const attemptPrompt = attempt === 0
+        ? prompt
+        : `${prompt}\n\nمهم جداً: المحاولة السابقة كانت ناقصة. أعد الرد من البداية بجمل كاملة ومختصرة جداً ولا تتجاوز 500 حرف.`;
+      const response = await fetch(`${GEMINI_API_URL}?key=${GEMINI_API_KEY}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: attemptPrompt }] }],
+          generationConfig: {
+            temperature: 0.2,
+            topK: 20,
+            topP: 0.9,
+            maxOutputTokens: 2048,
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: 'OBJECT',
+              properties: {
+                responseType: { type: 'STRING' },
+                assistantMessage: { type: 'STRING' },
+                needsCity: { type: 'BOOLEAN' },
+                city: { type: 'STRING' },
+                needsDoctorReferral: { type: 'BOOLEAN' },
+                detectedSpecialty: { type: 'STRING' },
+                specialtyReason: { type: 'STRING' },
+                historySummary: { type: 'STRING' },
+                reportsSummary: { type: 'STRING' },
+                confidence: { type: 'STRING' },
+              },
+              required: ['responseType', 'assistantMessage', 'needsCity', 'needsDoctorReferral'],
             },
-            required: [
-              'responseType',
-              'assistantMessage',
-              'needsCity',
-              'needsDoctorReferral',
-            ],
-          },
-        }
-      })
-    });
+          }
+        })
+      });
 
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error?.message || 'Failed to process patient assistant chat');
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error?.message || 'Failed to process patient assistant chat');
+      }
+
+      const data = await response.json();
+      generatedText = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      finishReason = data.candidates?.[0]?.finishReason || '';
+      console.log('🤖 Patient AI generation:', {
+        attempt: attempt + 1,
+        finishReason: finishReason || 'unknown',
+        outputLength: generatedText.length
+      });
+      const candidate = parseJsonObject(generatedText);
+      if (candidate?.assistantMessage && (!finishReason || finishReason === 'STOP')) break;
     }
-
-    const data = await response.json();
-    const generatedText = data.candidates?.[0]?.content?.parts?.[0]?.text;
 
     if (!generatedText) {
       throw new Error('No response generated');
