@@ -171,6 +171,121 @@ const recordDate = (item = {}) => {
   return Number.isNaN(date.getTime()) ? String(value) : date.toISOString().slice(0, 10);
 };
 
+const LAB_LABELS_AR = {
+  result: 'النتيجة',
+  color: 'اللون',
+  appearance: 'المظهر',
+  specificGravity: 'الكثافة النوعية',
+  ph: 'درجة الحموضة (pH)',
+  leukocytes: 'كريات الدم البيضاء في البول',
+  urobilinogen: 'يوروبيلينوجين',
+  bilirubin: 'بيليروبين',
+  blood: 'دم في البول',
+  nitrite: 'نيتريت',
+  protein: 'بروتين',
+  glucose: 'سكر',
+  ketone: 'كيتونات',
+  rbcs: 'كريات الدم الحمراء',
+  wbcs: 'كريات الدم البيضاء',
+  epithelialCells: 'خلايا طلائية',
+  bacteria: 'بكتيريا',
+  mucus: 'مخاط',
+  crystals: 'بلورات',
+  amorphous: 'رواسب غير متبلورة',
+  casts: 'أسطوانات بولية',
+  wbc: 'كريات الدم البيضاء (WBC)',
+  rbc: 'كريات الدم الحمراء (RBC)',
+  hemoglobin: 'الهيموغلوبين',
+  hematocrit: 'الهيماتوكريت',
+  platelets: 'الصفائح الدموية',
+  lymphocytes: 'الخلايا اللمفاوية',
+  granulocytes: 'الخلايا المحببة',
+  mid: 'الخلايا المتوسطة (MID)',
+  mcv: 'متوسط حجم الكرية (MCV)',
+  mch: 'متوسط هيموغلوبين الكرية (MCH)',
+  mchc: 'تركيز هيموغلوبين الكرية (MCHC)',
+  rdw: 'تباين حجم الكريات (RDW)',
+  mpv: 'متوسط حجم الصفائح (MPV)',
+};
+
+const LAB_TEST_NAMES_AR = {
+  'creatinine, serum': 'كرياتينين الدم',
+  creatinine: 'الكرياتينين',
+  urinalysis: 'تحليل البول',
+  cbc: 'صورة الدم الكاملة (CBC)',
+  glucose: 'سكر الدم',
+  'fasting blood sugar': 'سكر الدم الصائم',
+};
+
+function parseLabResult(value) {
+  let current = value;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (current && typeof current === 'object' && !Array.isArray(current)) return current;
+    if (typeof current !== 'string') return current;
+    const text = current.trim();
+    if (!text.startsWith('{') && !text.startsWith('[') && !text.startsWith('"')) return current;
+    try {
+      current = JSON.parse(text);
+    } catch (_) {
+      return current;
+    }
+  }
+  return current;
+}
+
+function humanizeKey(key, isArabic) {
+  if (isArabic && LAB_LABELS_AR[key]) return LAB_LABELS_AR[key];
+  return String(key)
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function humanizeLabValue(value, isArabic) {
+  if (!isArabic) return displayValue(value);
+  const translations = {
+    Yellow: 'أصفر',
+    Cloudy: 'عكر',
+    Clear: 'صافي',
+    Positive: 'إيجابي',
+    Negative: 'سلبي',
+    Few: 'قليل',
+    Many: 'كثير',
+    Moderate: 'متوسط',
+    Seen: 'موجود',
+    'Not Seen': 'غير موجود',
+    Normal: 'طبيعي',
+    Abnormal: 'غير طبيعي',
+    'Granular Cast': 'أسطوانات حبيبية',
+    'Amorphous Urate': 'يورات غير متبلورة',
+  };
+  const text = displayValue(value);
+  return translations[text]
+    || text
+      .replace(/\bMen\s*:/gi, 'الرجال:')
+      .replace(/\bWomen\s*:/gi, 'النساء:')
+      .replace(/\bMale\s*:/gi, 'الذكور:')
+      .replace(/\bFemale\s*:/gi, 'الإناث:');
+}
+
+function humanizeTestName(value, isArabic) {
+  const text = String(value || '').trim();
+  if (!isArabic) return text;
+  return LAB_TEST_NAMES_AR[text.toLowerCase()] || text;
+}
+
+function labEntryTone(key, value, fallbackTone) {
+  const text = String(value || '').trim().toLowerCase();
+  const plusValue = /^\+\d|^\d\+$/.test(text);
+  if (
+    (key === 'appearance' && /cloudy|عكر/.test(text))
+    || (key === 'nitrite' && /positive|إيجابي/.test(text))
+    || (['leukocytes', 'blood', 'protein', 'glucose', 'ketone', 'bilirubin'].includes(key) && plusValue)
+    || (key === 'casts' && text && !/not seen|none|negative|غير موجود/.test(text))
+  ) return 'warning';
+  return fallbackTone;
+}
+
 function buildCompleteSummary(context, language) {
   const isArabic = language === 'ar';
   const profile = context.profile || {};
@@ -331,22 +446,47 @@ function buildSummaryDetails(context, language) {
       .filter(Boolean);
     const resultRows = (request.results || []).flatMap((result, resultIndex) => {
       const test = result.testId && typeof result.testId === 'object' ? result.testId : {};
-      const name = test.nameAr || test.name || test.nameEn || result.testName || result.name
+      const rawName = test.nameAr || test.name || test.nameEn || result.testName || result.name
         || requestTestNames[resultIndex] || request.testName || `${isArabic ? 'نتيجة' : 'Result'} ${resultIndex + 1}`;
+      const name = humanizeTestName(rawName, isArabic);
       const normalRange = result.normalRange || test.normalRange;
       const unit = result.unit || test.unit || '';
-      const value = [result.result, unit].filter(Boolean).join(' ');
       const tone = result.isNormal === false ? 'warning' : result.isNormal === true ? 'good' : 'neutral';
+      const parsedResult = parseLabResult(result.result);
+      const structuredEntries = parsedResult && typeof parsedResult === 'object' && !Array.isArray(parsedResult)
+        ? Object.entries(parsedResult)
+        : [];
+
+      if (structuredEntries.length > 1 || (structuredEntries.length === 1 && structuredEntries[0][0] !== 'result')) {
+        return [
+          ...structuredEntries.map(([key, value]) => row(
+            humanizeKey(key, isArabic),
+            humanizeLabValue(value, isArabic),
+            labEntryTone(key, value, tone)
+          )),
+          result.notes ? row(isArabic ? 'ملاحظة المختبر' : 'Lab note', result.notes) : null,
+        ].filter(Boolean);
+      }
+
+      const scalarValue = structuredEntries.length === 1 ? structuredEntries[0][1] : parsedResult;
+      const value = [humanizeLabValue(scalarValue, isArabic), unit].filter(Boolean).join(' ');
       return [
         row(name, value || (isArabic ? 'لم تُسجل قيمة' : 'No value recorded'), tone),
-        normalRange ? row(isArabic ? `المعدل الطبيعي لـ ${name}` : `Normal range for ${name}`, normalRange) : null,
+        normalRange ? row(
+          isArabic ? `المعدل الطبيعي لـ ${name}` : `Normal range for ${name}`,
+          humanizeLabValue(normalRange, isArabic)
+        ) : null,
         result.notes ? row(isArabic ? `ملاحظة على ${name}` : `Note for ${name}`, result.notes) : null,
       ].filter(Boolean);
     });
     return {
       id: `lab-${requestIndex}`,
-      title: request.testName || requestTestNames.join('، ') || (isArabic ? `فحص مخبري ${requestIndex + 1}` : `Lab test ${requestIndex + 1}`),
-      subtitle: [recordDate(request), request.status].filter(Boolean).join(' • '),
+      title: humanizeTestName(request.testName || requestTestNames.join('، '), isArabic)
+        || (isArabic ? `فحص مخبري ${requestIndex + 1}` : `Lab test ${requestIndex + 1}`),
+      subtitle: [
+        recordDate(request),
+        isArabic && request.status === 'completed' ? 'مكتمل' : request.status,
+      ].filter(Boolean).join(' • '),
       rows: resultRows.length ? resultRows : [
         row(isArabic ? 'النتيجة' : 'Result', isArabic ? 'لم تُسجل نتيجة بعد' : 'No result recorded yet'),
       ],
