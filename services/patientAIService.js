@@ -161,16 +161,28 @@ function isDoctorRequest(message, conversationHistory) {
   return direct || assistantAskedSymptoms;
 }
 
-function containsActualSymptoms(message) {
-  if (SPECIALTIES.some(({ pattern }) => pattern.test(message))) return true;
-  return /عندي|أشعر|بعاني|يؤلمني|وجع|ألم|اعراضي|أعراضي|symptom|i have|i feel|pain/i.test(message);
+function isPharmacyRequest(message) {
+  return /صيدلي|صيدلية|صيدليات|pharmacy|pharmacies|pharmacist/i.test(message);
+}
+
+function conversationText(message, conversationHistory) {
+  return [
+    message,
+    ...(conversationHistory || [])
+      .filter((item) => item.role === 'user')
+      .slice(-4)
+      .map((item) => item.text || ''),
+  ].join(' ');
+}
+
+function containsActualSymptoms(message, conversationHistory) {
+  const combined = conversationText(message, conversationHistory);
+  if (SPECIALTIES.some(({ pattern }) => pattern.test(combined))) return true;
+  return /عندي|أشعر|بعاني|يؤلمني|وجع|ألم|اعراضي|أعراضي|صداع|دوخة|symptom|i have|i feel|pain|ache/i.test(combined);
 }
 
 function detectSpecialty(message, context, conversationHistory) {
-  const combined = [
-    message,
-    ...(conversationHistory || []).filter((item) => item.role === 'user').slice(-3).map((item) => item.text),
-  ].join(' ');
+  const combined = conversationText(message, conversationHistory);
   const direct = SPECIALTIES.find(({ pattern }) => pattern.test(combined));
   if (direct) return direct.name;
 
@@ -193,8 +205,23 @@ async function patientAssistantChat({
   const counts = dataCounts(context);
   const contextJson = JSON.stringify(context);
 
+  if (isPharmacyRequest(message)) {
+    return {
+      responseType: 'pharmacy_search',
+      assistantMessage: isArabic
+        ? `هذه الصيدليات المسجلة في شبكة Vita والمتوفرة في ${city || 'مدينتك'}.`
+        : `These are the pharmacies registered in the Vita network and available in ${city || 'your city'}.`,
+      needsCity: !city,
+      city: city || '',
+      needsDoctorReferral: false,
+      needsPharmacyReferral: true,
+      detectedSpecialty: '',
+      confidence: 'high',
+    };
+  }
+
   if (isDoctorRequest(message, conversationHistory)) {
-    if (!containsActualSymptoms(message)) {
+    if (!containsActualSymptoms(message, conversationHistory)) {
       return {
         responseType: 'ask_symptoms',
         assistantMessage: isArabic
@@ -268,20 +295,24 @@ ${contextJson}
 أنت مساعد طبي للمريض داخل منصة Vita. أجب عن سؤال المريض اعتمادًا حصريًا على ملفه الصحي أدناه.
 
 قواعد إلزامية:
-- أجب مباشرة عن السؤال، وبنص عربي واضح وكامل دون JSON أو Markdown.
-- اذكر من أي سجل أو فحص جاءت المعلومة عندما يكون ذلك ممكنًا.
-- إذا لم توجد المعلومة في الملف، قل: "هذه المعلومة غير مسجلة في ملفك الصحي".
-- لا تخترع نتائج ولا تقدم تشخيصًا جديدًا أو دواءً أو خطة علاج.
-- يمكنك شرح المصطلحات والنتائج المسجلة بلغة بسيطة.
-- اختم عند الحاجة بضرورة مراجعة الطبيب للتقييم النهائي.
+- أجب مباشرة وبسرعة، وبنص عربي واضح وكامل دون JSON أو Markdown.
+- استخدم الملف الصحي للمعلومات الشخصية والنتائج المسجلة، واستخدم معرفتك الطبية العامة لشرحها والإجابة عن الأسئلة العامة.
+- ميّز بوضوح بين ما هو مسجل في الملف وبين المعلومات الطبية العامة.
+- اذكر السجل أو الفحص الذي جاءت منه المعلومة عندما يكون ذلك مفيدًا.
+- إذا سأل عن معلومة شخصية غير موجودة، قل إنها غير مسجلة، ثم قدّم شرحًا طبيًا عامًا مفيدًا إن أمكن.
+- لا تخترع نتيجة شخصية، ولا تجزم بتشخيص، ولا تصف دواءً أو جرعة.
+- لا تكرر عبارة مراجعة الطبيب في كل رد؛ استخدمها فقط عند وجود أعراض تحتاج تقييمًا أو علامة تحذيرية.
+- راعِ سياق المحادثة السابقة ولا تعيد السؤال الذي أجاب عنه المريض.
 
 سؤال المريض: ${message}
+المحادثة السابقة: ${JSON.stringify(conversationHistory)}
 بيانات المريض:
 ${contextJson}
 ` : `
-Answer the patient's question using only the health record below. Use complete plain text without JSON or Markdown. Cite the relevant record or result when possible. If the information is absent, say it is not recorded. Do not invent findings, diagnose, prescribe, or provide a treatment plan.
+Answer directly and concisely in plain text. Use the health record for personal facts and your general medical knowledge to explain them and answer general questions. Clearly distinguish recorded facts from general information. Do not invent personal findings, make a definitive diagnosis, or prescribe medication. Use the previous conversation and do not repeat questions already answered. Only recommend medical review when relevant, not in every response.
 
 Patient question: ${message}
+Previous conversation: ${JSON.stringify(conversationHistory)}
 Patient data:
 ${contextJson}
 `;

@@ -363,7 +363,7 @@ router.post('/patient-assistant/chat', verifyPatient, async (req, res) => {
       });
     }
 
-    const [medicalRecords, legacyRecords, prescriptions, labResults, imageRequests] = await Promise.all([
+    const [medicalRecords, legacyRecords, prescriptions, labResults, imageRequests, networkCities] = await Promise.all([
       MedicalRecord.find({ patient: patientId })
         .sort({ date: -1, createdAt: -1 })
         .lean(),
@@ -378,8 +378,34 @@ router.post('/patient-assistant/chat', verifyPatient, async (req, res) => {
         .lean(),
       ImageRequest.find({ patientId })
         .sort({ completedDate: -1, updatedAt: -1 })
-        .lean()
+        .lean(),
+      User.distinct('city', {
+        role: { $in: ['Doctor', 'Pharmacy'] },
+        activationStatus: 'active'
+      })
     ]);
+
+    const normalizedMessage = String(message).toLowerCase();
+    const cityFromMessage = networkCities
+      .filter(Boolean)
+      .sort((a, b) => String(b).length - String(a).length)
+      .find((networkCity) => normalizedMessage.includes(String(networkCity).toLowerCase()));
+    const commonCityAliases = {
+      'نابلس': 'Nablus',
+      'رام الله': 'Ramallah',
+      'الخليل': 'Hebron',
+      'القدس': 'Jerusalem',
+      'بيت لحم': 'Bethlehem',
+      'جنين': 'Jenin',
+      'طولكرم': 'Tulkarm',
+      'قلقيلية': 'Qalqilya',
+      'أريحا': 'Jericho',
+      'اريحا': 'Jericho',
+      'سلفيت': 'Salfit'
+    };
+    const aliasedCityFromMessage = Object.entries(commonCityAliases)
+      .find(([alias]) => normalizedMessage.includes(alias))?.[1];
+    const requestedCity = cityFromMessage || aliasedCityFromMessage || city || patient.city || '';
 
     console.log(`🤖 AI Chat Request: message="${message}", city="${city}", language="${lang}"`);
     console.log(`👤 Patient city: ${patient.city}`);
@@ -394,7 +420,7 @@ router.post('/patient-assistant/chat', verifyPatient, async (req, res) => {
     const aiResult = await patientAssistantChat({
       message,
       language: lang,
-      city: city || patient.city || '',
+      city: requestedCity,
       conversationHistory: Array.isArray(conversationHistory) ? conversationHistory.slice(-8) : [],
       patientContext: {
         profile: patient,
@@ -421,7 +447,7 @@ router.post('/patient-assistant/chat', verifyPatient, async (req, res) => {
     };
 
     // Extract city from AI result or message
-    let extractedCity = aiResult.city || city || patient.city || '';
+    let extractedCity = aiResult.city || requestedCity || '';
     
     // If no city found, try to extract from the message
     if (!extractedCity && message) {
@@ -457,6 +483,7 @@ router.post('/patient-assistant/chat', verifyPatient, async (req, res) => {
     console.log(`City extraction: message="${message}" -> extracted="${extractedCity}" -> final="${finalCity}"`);
     
     let doctors = [];
+    let pharmacies = [];
 
     // Handle different response types - be more selective about when to show doctors
     console.log(`AI Response Type: ${aiResult.responseType}, needsDoctorReferral: ${aiResult.needsDoctorReferral}, detectedSpecialty: ${aiResult.detectedSpecialty}`);
@@ -523,6 +550,26 @@ router.post('/patient-assistant/chat', verifyPatient, async (req, res) => {
       // If no exact specialty match found, don't fallback to all doctors
       if (!doctors.length) {
         console.log(`No doctors found for specialty "${aiResult.detectedSpecialty}" in "${finalCity}"`);
+        aiResult.assistantMessage = lang === 'ar'
+          ? `حددت أن التخصص الأقرب هو ${aiResult.detectedSpecialty}، لكن لا يوجد حاليًا طبيب مفعّل بهذا التخصص في شبكة Vita داخل ${finalCity}. يمكنك ذكر مدينة أخرى لأبحث فيها.`
+          : `The closest specialty is ${aiResult.detectedSpecialty}, but Vita currently has no active doctor in that specialty in ${finalCity}. Tell me another city to search.`;
+      }
+    }
+
+    if (aiResult.responseType === 'pharmacy_search' && finalCity) {
+      pharmacies = await User.find({
+        role: 'Pharmacy',
+        activationStatus: 'active',
+        city: cityPattern
+      })
+        .select('_id fullName city address mobileNumber rating ratingsCount profileImage workingSchedule')
+        .sort({ rating: -1, ratingsCount: -1, fullName: 1 })
+        .limit(10)
+        .lean();
+      if (!pharmacies.length) {
+        aiResult.assistantMessage = lang === 'ar'
+          ? `لا توجد حاليًا صيدلية مفعّلة في شبكة Vita داخل ${finalCity}. اذكر مدينة أخرى لأبحث فيها.`
+          : `Vita currently has no active pharmacy in ${finalCity}. Tell me another city to search.`;
       }
     }
 
@@ -533,7 +580,8 @@ router.post('/patient-assistant/chat', verifyPatient, async (req, res) => {
       data: {
         ...aiResult,
         city: finalCity || null,
-        doctors
+        doctors,
+        pharmacies
       },
       message: lang === 'ar' ? 'تمت معالجة طلب المساعد الذكي بنجاح' : 'Patient assistant request processed successfully'
     });
