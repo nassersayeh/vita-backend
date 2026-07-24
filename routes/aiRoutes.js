@@ -19,6 +19,7 @@ const EPrescription = require('../models/EPrescription');
 const LabRequest = require('../models/LabRequest');
 const ImageRequest = require('../models/ImageRequest');
 const Record = require('../models/Record');
+const SpecialistDemand = require('../models/SpecialistDemand');
 
 // Middleware to verify doctor role
 const verifyDoctor = async (req, res, next) => {
@@ -552,9 +553,53 @@ router.post('/patient-assistant/chat', verifyPatient, async (req, res) => {
       // If no exact specialty match found, don't fallback to all doctors
       if (!doctors.length) {
         console.log(`No doctors found for specialty "${aiResult.detectedSpecialty}" in "${finalCity}"`);
-        aiResult.assistantMessage = lang === 'ar'
-          ? `حددت أن التخصص الأقرب هو ${aiResult.detectedSpecialty}، لكن لا يوجد حاليًا طبيب مفعّل بهذا التخصص في شبكة Vita داخل ${finalCity}. يمكنك ذكر مدينة أخرى لأبحث فيها.`
-          : `The closest specialty is ${aiResult.detectedSpecialty}, but Vita currently has no active doctor in that specialty in ${finalCity}. Tell me another city to search.`;
+        doctors = await User.find({
+          role: 'Doctor',
+          activationStatus: 'active',
+          specialty: specialtyPattern
+        })
+          .select('_id fullName city specialty address mobileNumber rating ratingsCount yearsOfExperience consultationFee workplaces profileImage')
+          .sort({ rating: -1, ratingsCount: -1, yearsOfExperience: -1 })
+          .limit(5)
+          .lean();
+
+        if (doctors.length) {
+          const alternativeCities = [...new Set(doctors.map((doctor) => doctor.city).filter(Boolean))];
+          aiResult.doctorSearchScope = 'other_cities';
+          aiResult.assistantMessage = lang === 'ar'
+            ? `حللت الأعراض وحددت أن التخصص الأنسب هو ${aiResult.detectedSpecialty}. لا يوجد طبيب بهذا التخصص في ${finalCity} حاليًا، لذلك أعرض لك أطباء من شبكة Vita في ${alternativeCities.join('، ')}.`
+            : `The most suitable specialty is ${aiResult.detectedSpecialty}. No matching doctor is currently available in ${finalCity}, so here are Vita doctors from ${alternativeCities.join(', ')}.`;
+        } else {
+          aiResult.doctorSearchScope = 'unavailable';
+          try {
+            await SpecialistDemand.findOneAndUpdate(
+              {
+                patientId,
+                specialty: aiResult.detectedSpecialty,
+                requestedCity: finalCity || '',
+                status: 'pending'
+              },
+              {
+                $set: {
+                  symptoms: String(message).slice(0, 1000),
+                  lastRequestedAt: new Date()
+                },
+                $setOnInsert: {
+                  firstRequestedAt: new Date()
+                },
+                $inc: { requestCount: 1 }
+              },
+              { upsert: true, new: true }
+            );
+          } catch (demandError) {
+            console.error('Failed to save specialist demand:', demandError.message);
+          }
+          aiResult.assistantMessage = lang === 'ar'
+            ? `حللت الأعراض وحددت أن التخصص الأنسب هو ${aiResult.detectedSpecialty}. حاليًا لا يوجد طبيب بهذا التخصص في شبكتنا الطبية، ولكن سيتم العمل على إضافته قريبًا والتواصل معك عند توفره.`
+            : `The most suitable specialty is ${aiResult.detectedSpecialty}. There is currently no doctor in this specialty in our medical network, but we will work on adding one soon and contact you when available.`;
+        }
+      } else {
+        aiResult.doctorSearchScope = 'same_city';
       }
     }
 

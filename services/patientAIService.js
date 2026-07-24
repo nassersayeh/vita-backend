@@ -2,7 +2,7 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY || 'YOUR_GEMINI_API_KEY';
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 
 const SPECIALTIES = [
-  { name: 'طب الأسنان', pattern: /سن|أسنان|اسنان|ضرس|لثة|تقويم|tooth|teeth|dental|gum/i },
+  { name: 'طب الأسنان', pattern: /أسنان|اسنان|أضراس|اضراس|ضرس|لثة|تقويم الأسنان|tooth|teeth|dental|gum/i },
   { name: 'القلبية', pattern: /قلب|صدر.*خفقان|خفقان|ضغط الدم|cardiac|heart|palpitation/i },
   { name: 'الجلدية', pattern: /جلد|طفح|حكة|حبوب|شعر|أظافر|dermat|rash|itch|skin/i },
   { name: 'العيون', pattern: /عين|نظر|رؤية|عيون|eye|vision|ophthalm/i },
@@ -11,7 +11,7 @@ const SPECIALTIES = [
   { name: 'الأطفال', pattern: /طفل|رضيع|ابني|ابنتي|pediatric|child|infant/i },
   { name: 'النساء والتوليد', pattern: /حمل|دورة|رحم|مبيض|نسائية|ولادة|pregnan|period|gynec|obstet/i },
   { name: 'البولية', pattern: /بول|كلية|كلى|مثانة|بروستات|urine|kidney|bladder|urolog/i },
-  { name: 'الأعصاب', pattern: /أعصاب|صداع|شقيقة|دوخة|تنميل|تشنج|migraine|headache|neurolog|numb/i },
+  { name: 'الأعصاب', pattern: /أعصاب|صداع|وجع (?:ال)?رأس|وجع راس|ألم (?:ال)?رأس|الم راس|شقيقة|دوخة|تنميل|تشنج|migraine|headache|neurolog|numb/i },
   { name: 'الصدرية', pattern: /تنفس|رئة|سعال|ربو|ضيق نفس|lung|cough|asthma|breath/i },
   { name: 'الطب النفسي', pattern: /قلق|اكتئاب|نفسي|نوم|هلع|anxiety|depress|psychi|panic/i },
   { name: 'الجراحة العامة', pattern: /فتق|زائدة|مرارة|جراحة|عملية|hernia|appendix|surgery/i },
@@ -550,15 +550,114 @@ function containsActualSymptoms(message, conversationHistory) {
 }
 
 function detectSpecialty(message, context, conversationHistory) {
-  const combined = conversationText(message, conversationHistory);
-  const direct = SPECIALTIES.find(({ pattern }) => pattern.test(combined));
+  // The current symptom always wins. Old, unrelated symptoms must not change
+  // the referral (for example, an old dental question followed by a headache).
+  const direct = SPECIALTIES.find(({ pattern }) => pattern.test(String(message || '')));
   if (direct) return direct.name;
+
+  const latestUserMessage = [...(conversationHistory || [])]
+    .reverse()
+    .find((item) => item.role === 'user' && containsActualSymptoms(item.text || '', []));
+  const contextual = latestUserMessage
+    ? SPECIALTIES.find(({ pattern }) => pattern.test(latestUserMessage.text || ''))
+    : null;
+  if (contextual) return contextual.name;
 
   const diagnoses = JSON.stringify({
     records: context.medicalRecords,
     legacy: context.legacyMedicalRecords,
   });
   return SPECIALTIES.find(({ pattern }) => pattern.test(diagnoses))?.name || 'الباطنة';
+}
+
+async function analyzeSymptomsForSpecialty(message, context, conversationHistory, language) {
+  const combined = conversationText(message, conversationHistory);
+  const directMatches = SPECIALTIES.filter(({ pattern }) => pattern.test(String(message || '')));
+
+  // Clear, single-system symptoms are routed immediately. Ambiguous or
+  // multi-system symptoms are classified by the medical model below.
+  if (directMatches.length === 1) {
+    return {
+      specialty: directMatches[0].name,
+      reason: language === 'ar'
+        ? `الأعراض المذكورة ترتبط غالبًا بمجال ${directMatches[0].name}.`
+        : `The described symptoms are most closely related to ${directMatches[0].name}.`,
+      source: 'rules',
+    };
+  }
+
+  const allowedSpecialties = SPECIALTIES.map(({ name }) => name);
+  const relevantHistory = clean({
+    chronicConditions: context.profile?.chronicConditions,
+    pastIllnesses: context.profile?.pastIllnesses,
+    recentDiagnoses: (context.medicalRecords || []).slice(0, 8).map((record) => ({
+      diagnosis: record.diagnosis || record.preliminaryDiagnosis,
+      complaint: record.chiefComplaint,
+    })),
+  });
+
+  try {
+    const response = await fetch(`${GEMINI_API_URL}?key=${GEMINI_API_KEY}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          parts: [{
+            text: `
+You are a medical routing classifier, not a diagnosing or treatment system.
+Analyze the CURRENT symptoms, using recent conversation only to understand references.
+Choose exactly one specialty from the allowed list. Current symptoms have priority over old history.
+Do not prescribe or diagnose.
+
+Current message: ${message}
+Recent conversation: ${JSON.stringify((conversationHistory || []).slice(-6))}
+Relevant recorded history: ${JSON.stringify(relevantHistory || {})}
+Allowed specialties: ${JSON.stringify(allowedSpecialties)}
+
+Return JSON with specialty and a short patient-friendly reason.
+`
+          }]
+        }],
+        generationConfig: {
+          temperature: 0.05,
+          maxOutputTokens: 300,
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: 'OBJECT',
+            properties: {
+              specialty: { type: 'STRING', enum: allowedSpecialties },
+              reason: { type: 'STRING' },
+            },
+            required: ['specialty', 'reason'],
+          },
+        }
+      })
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      const parsed = JSON.parse(text || '{}');
+      if (allowedSpecialties.includes(parsed.specialty)) {
+        return {
+          specialty: parsed.specialty,
+          reason: sanitizeText(parsed.reason),
+          source: 'model',
+        };
+      }
+    }
+  } catch (error) {
+    console.warn('Patient specialty model fallback:', error.message);
+  }
+
+  const fallback = detectSpecialty(combined, context, []);
+  return {
+    specialty: fallback,
+    reason: language === 'ar'
+      ? `التخصص الأقرب للأعراض المذكورة هو ${fallback}.`
+      : `The closest specialty for the described symptoms is ${fallback}.`,
+    source: 'fallback',
+  };
 }
 
 async function patientAssistantChat({
@@ -603,7 +702,13 @@ async function patientAssistantChat({
       };
     }
 
-    const specialty = detectSpecialty(message, context, conversationHistory);
+    const analysis = await analyzeSymptomsForSpecialty(
+      message,
+      context,
+      conversationHistory,
+      language
+    );
+    const specialty = analysis.specialty;
     return {
       responseType: 'doctor_referral',
       assistantMessage: isArabic
@@ -613,7 +718,8 @@ async function patientAssistantChat({
       city: city || '',
       needsDoctorReferral: true,
       detectedSpecialty: specialty,
-      specialtyReason: message,
+      specialtyReason: analysis.reason,
+      routingSource: analysis.source,
       confidence: 'high',
     };
   }
