@@ -252,6 +252,131 @@ function buildCompleteSummary(context, language) {
   return sections.join('\n\n');
 }
 
+function buildSummaryDetails(context, language) {
+  const isArabic = language === 'ar';
+  const profile = context.profile || {};
+  const row = (label, value, tone = 'neutral') => value !== undefined && value !== null && value !== ''
+    ? { label, value: displayValue(value), tone }
+    : null;
+  const section = (id, title, icon, items, emptyText) => ({
+    id,
+    title,
+    icon,
+    items: items.filter((item) => item && (item.rows?.length || item.title || item.subtitle)),
+    emptyText: emptyText || (isArabic ? 'لا توجد بيانات مسجلة' : 'No recorded data'),
+  });
+
+  const basicRows = [
+    row(isArabic ? 'العمر' : 'Age', profile.age !== undefined ? `${profile.age} ${isArabic ? 'سنة' : 'years'}` : ''),
+    row(isArabic ? 'الجنس' : 'Sex', profile.sex),
+    row(isArabic ? 'فصيلة الدم' : 'Blood type', profile.bloodType),
+    row(isArabic ? 'الطول' : 'Height', profile.height ? `${profile.height} ${isArabic ? 'سم' : 'cm'}` : ''),
+    row(isArabic ? 'الوزن' : 'Weight', profile.weight ? `${profile.weight} ${isArabic ? 'كغم' : 'kg'}` : ''),
+    row(isArabic ? 'مؤشر كتلة الجسم' : 'BMI', profile.bmi),
+    row(isArabic ? 'ضغط الدم المسجل' : 'Recorded blood pressure', profile.bloodPressure),
+    row(isArabic ? 'سكر الدم المسجل' : 'Recorded blood sugar', profile.bloodSugar),
+  ].filter(Boolean);
+
+  const historyRows = [
+    row(isArabic ? 'الأمراض المزمنة' : 'Chronic conditions', profile.chronicConditions || profile.chronicDiseasesText),
+    row(isArabic ? 'الأمراض السابقة' : 'Past illnesses', profile.pastIllnesses || profile.previousDiseases),
+    row(isArabic ? 'العمليات' : 'Surgeries', profile.surgeriesText),
+    row(isArabic ? 'الحساسيات' : 'Allergies', profile.allergies),
+    row(isArabic ? 'حساسية الأدوية' : 'Drug allergies', profile.drugAllergiesText, 'warning'),
+    row(isArabic ? 'حساسية الطعام' : 'Food allergies', profile.foodAllergiesText, 'warning'),
+    row(isArabic ? 'الأدوية الحالية' : 'Current medications', profile.medications),
+  ].filter(Boolean);
+
+  const records = [
+    ...(context.medicalRecords || []).map((record, index) => ({
+      id: `record-${index}`,
+      title: record.diagnosis || record.preliminaryDiagnosis || record.title || (isArabic ? 'زيارة طبية' : 'Medical visit'),
+      subtitle: recordDate(record),
+      rows: [
+        row(isArabic ? 'الشكوى' : 'Complaint', record.chiefComplaint),
+        row(isArabic ? 'التشخيص' : 'Diagnosis', record.diagnosis || record.preliminaryDiagnosis),
+        row(isArabic ? 'الفحص السريري' : 'Examination', record.examinationFindings || record.clinicalExamination),
+        row(isArabic ? 'الاستقصاءات' : 'Investigations', record.investigations),
+        row(isArabic ? 'ملاحظات' : 'Notes', record.notes),
+      ].filter(Boolean),
+    })),
+    ...(context.legacyMedicalRecords || []).map((record, index) => ({
+      id: `legacy-${index}`,
+      title: record.issueDescription || (isArabic ? 'سجل طبي سابق' : 'Previous medical record'),
+      subtitle: recordDate(record),
+      rows: [
+        row(isArabic ? 'المشكلة' : 'Issue', record.issueDescription),
+        row(isArabic ? 'الخطة المسجلة' : 'Recorded plan', record.treatmentPlan),
+        row(isArabic ? 'الوصفة المسجلة' : 'Recorded prescription', record.ePrescription),
+      ].filter(Boolean),
+    })),
+  ];
+
+  const prescriptions = (context.prescriptions || []).map((prescription, index) => ({
+    id: `prescription-${index}`,
+    title: prescription.diagnosis || (isArabic ? `وصفة طبية ${index + 1}` : `Prescription ${index + 1}`),
+    subtitle: recordDate(prescription),
+    rows: [
+      ...(prescription.products || []).map((product) => row(
+        product.name || (isArabic ? 'دواء' : 'Medication'),
+        [product.dose, product.instructions].filter(Boolean).join(' — ') || (isArabic ? 'لا توجد تعليمات مسجلة' : 'No recorded instructions')
+      )),
+      row(isArabic ? 'ملاحظات' : 'Notes', prescription.notes),
+    ].filter(Boolean),
+  }));
+
+  const labs = (context.labRequestsAndResults || []).map((request, requestIndex) => {
+    const requestTestNames = (request.testIds || [])
+      .map((test) => test.nameAr || test.name || test.nameEn)
+      .filter(Boolean);
+    const resultRows = (request.results || []).flatMap((result, resultIndex) => {
+      const test = result.testId && typeof result.testId === 'object' ? result.testId : {};
+      const name = test.nameAr || test.name || test.nameEn || result.testName || result.name
+        || requestTestNames[resultIndex] || request.testName || `${isArabic ? 'نتيجة' : 'Result'} ${resultIndex + 1}`;
+      const normalRange = result.normalRange || test.normalRange;
+      const unit = result.unit || test.unit || '';
+      const value = [result.result, unit].filter(Boolean).join(' ');
+      const tone = result.isNormal === false ? 'warning' : result.isNormal === true ? 'good' : 'neutral';
+      return [
+        row(name, value || (isArabic ? 'لم تُسجل قيمة' : 'No value recorded'), tone),
+        normalRange ? row(isArabic ? `المعدل الطبيعي لـ ${name}` : `Normal range for ${name}`, normalRange) : null,
+        result.notes ? row(isArabic ? `ملاحظة على ${name}` : `Note for ${name}`, result.notes) : null,
+      ].filter(Boolean);
+    });
+    return {
+      id: `lab-${requestIndex}`,
+      title: request.testName || requestTestNames.join('، ') || (isArabic ? `فحص مخبري ${requestIndex + 1}` : `Lab test ${requestIndex + 1}`),
+      subtitle: [recordDate(request), request.status].filter(Boolean).join(' • '),
+      rows: resultRows.length ? resultRows : [
+        row(isArabic ? 'النتيجة' : 'Result', isArabic ? 'لم تُسجل نتيجة بعد' : 'No result recorded yet'),
+      ],
+    };
+  });
+
+  const imaging = (context.imagingRequestsAndResults || []).map((request, index) => ({
+    id: `imaging-${index}`,
+    title: [request.imageType, request.bodyPart].filter(Boolean).join(' - ') || (isArabic ? `تصوير طبي ${index + 1}` : `Imaging ${index + 1}`),
+    subtitle: [recordDate(request), request.status].filter(Boolean).join(' • '),
+    rows: [
+      row(isArabic ? 'النتائج' : 'Findings', request.findings),
+      row(isArabic ? 'ملاحظات اختصاصي الأشعة' : 'Radiologist notes', request.radiologistNotes),
+      row(isArabic ? 'ملاحظات' : 'Notes', request.notes),
+    ].filter(Boolean),
+  }));
+
+  return {
+    patientName: profile.fullName || '',
+    sections: [
+      section('basic', isArabic ? 'المعلومات الأساسية' : 'Basic information', 'person', [{ id: 'basic-info', rows: basicRows }]),
+      section('history', isArabic ? 'التاريخ الصحي' : 'Health history', 'heart', [{ id: 'health-history', rows: historyRows }]),
+      section('records', isArabic ? 'الزيارات والتشخيصات' : 'Visits and diagnoses', 'medical', records),
+      section('prescriptions', isArabic ? 'الأدوية والوصفات' : 'Medications and prescriptions', 'medkit', prescriptions),
+      section('labs', isArabic ? 'الفحوصات المخبرية' : 'Laboratory tests', 'flask', labs),
+      section('imaging', isArabic ? 'الأشعة والتصوير' : 'Imaging', 'scan', imaging),
+    ],
+  };
+}
+
 function isSummaryRequest(message) {
   return /ملخص|لخص|حالتي الصحية|ملفي الصحي|health summary|summari[sz]e|medical file/i.test(message);
 }
@@ -354,10 +479,13 @@ async function patientAssistantChat({
   }
 
   if (isSummaryRequest(message)) {
-    const assistantMessage = buildCompleteSummary(context, language);
+    const assistantMessage = isArabic
+      ? 'هذا ملخص منظم للمعلومات المسجلة في ملفك الصحي. اضغط على أي قسم واقرأ تفاصيله، ويمكنك سؤالي عن أي نتيجة تحتاج شرحًا أبسط.'
+      : 'Here is an organized summary of your recorded health information. You can ask me to explain any result more simply.';
     return {
       responseType: 'history_explanation',
       assistantMessage,
+      summaryDetails: buildSummaryDetails(context, language),
       needsCity: false,
       city: city || '',
       needsDoctorReferral: false,

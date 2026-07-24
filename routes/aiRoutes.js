@@ -375,6 +375,8 @@ router.post('/patient-assistant/chat', verifyPatient, async (req, res) => {
         .lean(),
       LabRequest.find({ patientId })
         .sort({ completedDate: -1, updatedAt: -1 })
+        .populate('testIds', 'name nameAr nameEn normalRange unit')
+        .populate('results.testId', 'name nameAr nameEn normalRange unit')
         .lean(),
       ImageRequest.find({ patientId })
         .sort({ completedDate: -1, updatedAt: -1 })
