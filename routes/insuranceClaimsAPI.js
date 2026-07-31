@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const path = require('path');
+const mongoose = require('mongoose');
 const InsuranceClaim = require('../models/InsuranceClaim');
 const User = require('../models/User');
 const InsuranceCompany = require('../models/InsuranceCompany');
@@ -370,7 +371,27 @@ router.get('/:pharmacyId', async (req, res) => {
     
     const filter = { pharmacyId };
     if (status) filter.status = status;
-    if (insuranceCompany) filter.insuranceCompany = insuranceCompany;
+    if (insuranceCompany) {
+      // The dashboard sends the InsuranceCompany document ID. New claims store this
+      // in insuranceCompanyId, while older claims may only have the display name.
+      const company = mongoose.Types.ObjectId.isValid(insuranceCompany)
+        ? await InsuranceCompany.findById(insuranceCompany).select('nameAr name')
+        : null;
+
+      if (company) {
+        const companyName = company.nameAr && company.name
+          ? `${company.nameAr} - ${company.name}`
+          : (company.nameAr || company.name);
+
+        filter.$or = [
+          { insuranceCompanyId: company._id },
+          { insuranceCompany: companyName },
+        ];
+      } else {
+        // Keep supporting filters from older clients that send a company name.
+        filter.insuranceCompany = insuranceCompany;
+      }
+    }
     if (startDate || endDate) {
       filter.createdAt = {};
       if (startDate) filter.createdAt.$gte = new Date(startDate);
@@ -400,7 +421,6 @@ router.post('/:pharmacyId', claimUpload.single('attachment'), async (req, res) =
     let insuranceCompanyData = null;
     
     // Try to find by ID first
-    const mongoose = require('mongoose');
     if (mongoose.Types.ObjectId.isValid(insuranceCompany)) {
       insuranceCompanyData = await InsuranceCompany.findById(insuranceCompany).select('_id name nameAr');
       if (!insuranceCompanyData) {
