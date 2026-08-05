@@ -1,18 +1,35 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const User = require('../models/User');
+const LabRequest = require('../models/LabRequest');
 
 const router = express.Router();
 
 // Radiology centers can search their registered patients and add walk-ins.
 router.get('/:centerId/patients', async (req, res) => {
   try {
-    const patients = await User.find({ role: 'User' })
+    const page = Math.max(Number(req.query.page) || 1, 1);
+    const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100);
+    const search = String(req.query.search || '').trim();
+    const patientIds = await LabRequest.distinct('patientId', { labId: req.params.centerId });
+    const filter = { role: 'User', _id: { $in: patientIds } };
+    if (search) {
+      filter.$or = [
+        { fullName: { $regex: search, $options: 'i' } },
+        { mobileNumber: { $regex: search, $options: 'i' } },
+        { idNumber: { $regex: search, $options: 'i' } },
+      ];
+    }
+    const [patients, total] = await Promise.all([
+      User.find(filter)
       .select('fullName mobileNumber idNumber birthdate sex city')
       .sort({ fullName: 1 })
-      .limit(500)
-      .lean();
-    res.json({ patients });
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .lean(),
+      User.countDocuments(filter),
+    ]);
+    res.json({ patients, total, currentPage: page, totalPages: Math.ceil(total / limit) || 1 });
   } catch (error) {
     res.status(500).json({ message: 'Failed to load patients' });
   }
