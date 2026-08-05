@@ -11,7 +11,9 @@ router.get('/role/:role', async (req, res) => {
     const { role } = req.params;
     const { city, search } = req.query;
     
-    let filter = { role };
+    // Roles are stored with a capitalized value, but older accounts may have
+    // been created with a different casing (for example `radiology`).
+    let filter = { role: new RegExp(`^${role}$`, 'i') };
     
     if (city) {
       filter.city = city;
