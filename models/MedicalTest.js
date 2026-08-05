@@ -24,6 +24,8 @@ const MedicalTestSchema = new mongoose.Schema({
   isActive: { type: Boolean, default: true },
   clinicId: { type: mongoose.Schema.Types.ObjectId, ref: 'Clinic', default: null },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  // Optional provider owner. Radiology centers use this to publish their own services.
+  providerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
 }, { timestamps: true });
 
 module.exports = mongoose.model('MedicalTest', MedicalTestSchema);

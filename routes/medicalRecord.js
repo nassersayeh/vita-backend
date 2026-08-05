@@ -353,11 +353,11 @@ router.post('/', async (req, res) => {
   }
 });
 
-// PUT update medical record (only allow original doctor to update followUpDate)
+// PUT update medical record (only the original doctor may edit the record)
 router.put('/:recordId', async (req, res) => {
   try {
     const { recordId } = req.params;
-    const { followUpDate, doctorId } = req.body;
+    const { doctorId, followUpDate } = req.body;
 
     // Find the existing record
     const existingRecord = await MedicalRecord.findById(recordId);
@@ -365,13 +365,30 @@ router.put('/:recordId', async (req, res) => {
       return res.status(404).json({ message: 'Medical record not found' });
     }
 
-    // Only allow the original doctor to update the followUpDate
-    if (followUpDate !== undefined && existingRecord.doctor.toString() !== doctorId) {
-      return res.status(403).json({ message: 'Only the original doctor can update the follow-up date' });
+    // A doctor may only edit records that they originally created. The client
+    // sends the current doctor id explicitly because this API does not use a
+    // session-authenticated user on this route yet.
+    if (!doctorId || existingRecord.doctor.toString() !== String(doctorId)) {
+      return res.status(403).json({ message: 'Only the original doctor can edit this medical record' });
     }
 
     // Prepare update object
     const updateData = {};
+    const editableFields = [
+      'title', 'chiefComplaint', 'historyOfPresentIllness', 'pastMedicalHistory',
+      'medications', 'allergies', 'vitals', 'examinationFindings', 'investigations',
+      'diagnosis', 'treatmentPlan', 'treatment', 'smoking', 'previousDiseases',
+      'disabilities', 'clinicalExamination', 'preliminaryDiagnosis', 'recommendations',
+      'requiredTests', 'examinerName', 'examDate', 'notes', 'dentalTreatment',
+      'selectedTeeth', 'treatmentCost', 'ptTreatment', 'selectedMuscles',
+      'specialtyFields', 'followUpDate'
+    ];
+    editableFields.forEach((field) => {
+      if (Object.prototype.hasOwnProperty.call(req.body, field)) {
+        updateData[field] = req.body[field];
+      }
+    });
+
     if (followUpDate !== undefined) {
       updateData.followUpDate = followUpDate || undefined; // Allow clearing the date
 
@@ -437,6 +454,11 @@ router.put('/:recordId', async (req, res) => {
           // Don't fail the record update if appointment creation fails
         }
       }
+    }
+
+    if (Object.keys(updateData).length > 0) {
+      updateData.lastEditedBy = doctorId;
+      updateData.lastEditedAt = new Date();
     }
 
     // Update the record

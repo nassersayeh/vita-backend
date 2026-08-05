@@ -30,6 +30,8 @@ const fileFilter = (req, file, cb) => {
     'text/plain',
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     'application/vnd.ms-excel'
+    ,'application/dicom',
+    'application/octet-stream'
   ];
   if (allowedTypes.includes(file.mimetype)) {
     cb(null, true);
@@ -72,15 +74,16 @@ router.post('/', async (req, res) => {
       console.error('Error checking doctor clinic status:', e);
     }
 
-    // Doctor does NOT set prices - only lab tech sets prices when processing
+    const totalCost = tests.reduce((sum, test) => sum + (Number(test.price) || 0), 0);
+
     const labRequest = new LabRequest({
       patientId,
       doctorId,
       labId,
       testIds,
       notes,
-      totalCost: 0,
-      originalCost: 0,
+      totalCost,
+      originalCost: totalCost,
       scheduledDate: scheduledDate ? new Date(scheduledDate) : undefined,
       // Clinic-managed: needs accountant approval first
       // Independent: goes directly to lab (approved)
@@ -224,10 +227,55 @@ router.put('/:requestId/status', async (req, res) => {
       return res.status(404).json({ message: 'Lab request not found' });
     }
 
+    // Completed radiology/lab services are recorded as provider revenue once.
+    if (status === 'completed' && request.labId && request.totalCost > 0) {
+      const existingFinancial = await Financial.findOne({ doctorId: request.labId });
+      const alreadyRecorded = existingFinancial?.transactions?.some((transaction) => (
+        transaction.labRequestId && transaction.labRequestId.toString() === request._id.toString()
+      ));
+      if (!alreadyRecorded) {
+        const financial = existingFinancial || new Financial({ doctorId: request.labId });
+        financial.totalEarnings = (financial.totalEarnings || 0) + request.totalCost;
+        financial.transactions.push({
+          amount: request.totalCost,
+          description: `إيراد طلب ${request._id}`,
+          labRequestId: request._id,
+          patientId: request.patientId?._id || request.patientId,
+          paymentMethod: 'Cash'
+        });
+        await financial.save();
+      }
+    }
+
     res.json(request);
   } catch (error) {
     console.error('Update lab request status error:', error);
     res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Upload one or more radiology files (including DICOM) to a specific request.
+router.post('/:requestId/upload-files', uploadFile.array('files', 20), async (req, res) => {
+  try {
+    const request = await LabRequest.findById(req.params.requestId);
+    if (!request) return res.status(404).json({ message: 'Lab request not found' });
+    if (!req.files?.length) return res.status(400).json({ message: 'No files uploaded' });
+
+    const uploaded = req.files.map((file) => ({
+      result: `${req.protocol}://${req.get('host')}/uploads/lab-results/${file.filename}`,
+      attachments: [file.filename],
+      notes: req.body.notes || ''
+    }));
+    request.results.push(...uploaded);
+    if (req.body.status === 'completed') {
+      request.status = 'completed';
+      request.completedDate = new Date();
+    }
+    await request.save();
+    res.json({ message: 'Files uploaded successfully', request });
+  } catch (error) {
+    console.error('Upload request files error:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
 

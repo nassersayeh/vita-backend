@@ -5,7 +5,7 @@ const MedicalTest = require('../models/MedicalTest');
 // Get all medical tests with search and filtering
 router.get('/', async (req, res) => {
   try {
-    const { search, type, category, page = 1, limit = 50 } = req.query;
+    const { search, type, category, providerId, page = 1, limit = 50 } = req.query;
     
     let filter = { isActive: true };
     
@@ -24,6 +24,7 @@ router.get('/', async (req, res) => {
     if (category) {
       filter.category = category;
     }
+    if (providerId) filter.providerId = providerId;
 
     const tests = await MedicalTest.find(filter)
       .sort({ name: 1 })
@@ -69,7 +70,9 @@ router.post('/', async (req, res) => {
       normalRange,
       unit,
       preparationInstructions,
-      estimatedDuration
+      estimatedDuration,
+      price,
+      providerId
     } = req.body;
 
     if (!name || !type || !category) {
@@ -92,7 +95,9 @@ router.post('/', async (req, res) => {
       normalRange,
       unit,
       preparationInstructions,
-      estimatedDuration
+      estimatedDuration,
+      price,
+      providerId
     });
 
     await test.save();

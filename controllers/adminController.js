@@ -678,11 +678,12 @@ exports.approveUser = async (req, res) => {
 // Get all users with filtering
 exports.getAllUsers = async (req, res) => {
   try {
-    const { role, status, page = 1, limit = 20, search } = req.query;
+    const { role, status, city, page = 1, limit = 20, search } = req.query;
     
     let filter = {};
     if (role) filter.role = role;
     if (status) filter.activationStatus = status;
+    if (city?.trim()) filter.city = city.trim();
     if (search) {
       filter.$or = [
         { fullName: { $regex: search, $options: 'i' } },

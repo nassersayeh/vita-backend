@@ -27,7 +27,7 @@ const UserSchema = new mongoose.Schema({
     unique: true, 
     sparse: true 
   }, // Updated with sparse: true
-  role: { type: String, enum: ['User', 'Doctor', 'Pharmacy', 'Lab', 'Admin', 'Superadmin', 'Institution', 'Hospital', 'Employee', 'Clinic', 'Nurse', 'Accountant', 'LabTech'], required: true },
+  role: { type: String, enum: ['User', 'Doctor', 'Pharmacy', 'Lab', 'Radiology', 'Admin', 'Superadmin', 'Institution', 'Hospital', 'Employee', 'Clinic', 'Nurse', 'Accountant', 'LabTech'], required: true },
   profileImage: { type: String, default: '' },
   mobileNumber: { type: String, required: true ,unique: true},
   country: { type: String, required: function() { return this.role !== 'Employee'; } },

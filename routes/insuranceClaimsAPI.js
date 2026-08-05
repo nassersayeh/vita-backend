@@ -367,10 +367,11 @@ router.get('/claim/:claimId/attachment', async (req, res) => {
 router.get('/:pharmacyId', async (req, res) => {
   try {
     const { pharmacyId } = req.params;
-    const { status, insuranceCompany, startDate, endDate } = req.query;
+    const { status, insuranceCompany, claimMonth, startDate, endDate } = req.query;
     
     const filter = { pharmacyId };
     if (status) filter.status = status;
+    if (claimMonth) filter.claimMonth = claimMonth;
     if (insuranceCompany) {
       // The dashboard sends the InsuranceCompany document ID. New claims store this
       // in insuranceCompanyId, while older claims may only have the display name.

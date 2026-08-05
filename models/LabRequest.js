@@ -4,6 +4,7 @@ const LabRequestSchema = new mongoose.Schema({
   patientId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   doctorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   labId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  // Provider that will perform the request (radiology centers use the same field).
   testIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'MedicalTest' }],
   status: { type: String, enum: ['pending', 'in_progress', 'in-progress', 'completed', 'cancelled'], default: 'pending' },
   requestDate: { type: Date, default: Date.now },
