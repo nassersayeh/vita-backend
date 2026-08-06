@@ -4,8 +4,14 @@ const User = require('../models/User');
 
 exports.sendFriendRequest = async (req, res) => {
   try {
-    const { doctorId } = req.params;
-    const { patientId } = req.body;
+    // Support both the current REST shape (/friendRequests/:doctorId/send)
+    // and the mobile client's legacy payload shape ({ from, to }).
+    const doctorId = req.params.doctorId || req.body.from;
+    const patientId = req.body.patientId || req.body.to;
+
+    if (!doctorId || !patientId) {
+      return res.status(400).json({ message: 'Doctor and patient are required.' });
+    }
 
     const doctor = await User.findById(doctorId);
     if (!doctor) return res.status(404).json({ message: "Doctor not found." });
@@ -34,6 +40,14 @@ exports.sendFriendRequest = async (req, res) => {
     console.error("Error sending friend request:", error);
     res.status(500).json({ message: "Server error while sending friend request." });
   }
+};
+
+// Backward-compatible response endpoint used by older mobile builds.
+exports.respondToRequest = async (req, res) => {
+  const { status } = req.body || {};
+  if (status === 'accepted' || status === 'approved') return exports.approveFriendRequest(req, res);
+  if (status === 'declined' || status === 'rejected') return exports.declineFriendRequest(req, res);
+  return res.status(400).json({ message: 'Invalid request status.' });
 };
 
 exports.getFriendRequests = async (req, res) => {
