@@ -102,4 +102,19 @@ router.delete('/:centerId/:requestId', async (req, res) => {
   }
 });
 
+router.delete('/:centerId/financial/:transactionId', async (req, res) => {
+  try {
+    const financial = await Financial.findOne({ doctorId: req.params.centerId });
+    if (!financial) return res.status(404).json({ message: 'Financial record not found' });
+    const transaction = financial.transactions.id(req.params.transactionId);
+    if (!transaction) return res.status(404).json({ message: 'Transaction not found' });
+    financial.totalEarnings = Math.max(0, (financial.totalEarnings || 0) - (Number(transaction.amount) || 0));
+    financial.transactions.pull(req.params.transactionId);
+    await financial.save();
+    res.json({ message: 'Transaction deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to delete transaction' });
+  }
+});
+
 module.exports = router;
