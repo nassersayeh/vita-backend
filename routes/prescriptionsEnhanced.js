@@ -390,7 +390,7 @@ router.put('/:prescriptionId/route', async (req, res) => {
     const prescription = await Prescription.findById(req.params.prescriptionId);
     if (!prescription) return res.status(404).json({ message: 'Prescription not found' });
     if (!prescription.clinicId) return res.status(400).json({ message: 'Prescription is not clinic-managed' });
-    const pharmacy = await User.findOne({ _id: pharmacyId, role: 'Pharmacy', clinicId: prescription.clinicId, activationStatus: 'active' });
+    const pharmacy = await User.findOne({ ...(pharmacyId ? { _id: pharmacyId } : {}), role: 'Pharmacy', clinicId: prescription.clinicId, activationStatus: 'active' });
     if (!pharmacy) return res.status(404).json({ message: 'Internal pharmacy not found' });
     prescription.workflowStatus = 'sent_to_pharmacy';
     prescription.routedTo = pharmacy._id;

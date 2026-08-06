@@ -294,6 +294,19 @@ router.get('/me/clinic-dashboard', authenticateEmployee, async (req, res) => {
   }
 });
 
+router.put('/me/lab-requests/:requestId/route', authenticateEmployee, async (req, res) => {
+  try {
+    const employee = await Employee.findOne({ userId: req.user._id, isActive: true });
+    if (!employee?.permissions?.canCreateLabRequests) return res.status(403).json({ message: 'Insufficient permissions' });
+    const clinic = await Clinic.findOne({ ownerId: employee.employerId });
+    const request = await LabRequest.findOne({ _id: req.params.requestId, clinicId: clinic?._id });
+    if (!request) return res.status(404).json({ message: 'Lab request not found' });
+    request.approvalStatus = 'approved'; request.approvedBy = req.user._id; request.approvedAt = new Date();
+    await request.save();
+    res.json({ success: true, request });
+  } catch (error) { res.status(500).json({ message: 'Failed to route lab request', error: error.message }); }
+});
+
 router.get('/me', authenticateEmployee, async (req, res) => {
   try {
     const employee = await Employee.findOne({ userId: req.user._id, isActive: true })
