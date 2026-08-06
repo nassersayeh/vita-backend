@@ -5,7 +5,7 @@ const authMiddleware = require('../middleware/auth');
 
 // Middleware to verify lab tech role
 const verifyLabTechRole = (req, res, next) => {
-  if (req.user.role !== 'LabTech') {
+  if (!['LabTech', 'Lab'].includes(req.user.role)) {
     return res.status(403).json({ message: 'Access denied. LabTech role required.' });
   }
   next();

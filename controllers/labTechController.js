@@ -7,11 +7,14 @@ const bcrypt = require('bcryptjs');
 
 // Get clinic for this lab tech
 const getClinicForLabTech = async (labTechId) => {
-  const clinic = await Clinic.findOne({
+  let clinic = await Clinic.findOne({
     'staff.userId': labTechId,
-    'staff.role': 'LabTech',
     'staff.status': 'active'
   });
+  if (!clinic) {
+    const labUser = await User.findById(labTechId).select('clinicId internalDepartment');
+    if (labUser?.clinicId && labUser.internalDepartment === 'laboratory') clinic = await Clinic.findById(labUser.clinicId);
+  }
   return clinic;
 };
 
