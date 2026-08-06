@@ -284,7 +284,7 @@ router.get('/me/clinic-dashboard', authenticateEmployee, async (req, res) => {
     const [patients, appointments, prescriptions, labRequests] = await Promise.all([
       employee.permissions?.canViewPatients ? User.find({ _id: { $in: patientIds } }).select('fullName email mobileNumber profileImage').lean() : [],
       employee.permissions?.canViewAppointments ? Appointment.find({ doctorId: { $in: doctorIds } }).populate('patient', 'fullName email mobileNumber profileImage').sort({ appointmentDateTime: -1 }).limit(200).lean() : [],
-      employee.permissions?.canViewPrescriptions ? EPrescription.find({ doctorId: { $in: doctorIds } }).populate('patient', 'fullName').sort({ createdAt: -1 }).limit(200).lean() : [],
+      employee.permissions?.canViewPrescriptions ? EPrescription.find({ doctorId: { $in: doctorIds } }).populate('patientId', 'fullName').sort({ createdAt: -1 }).limit(200).lean() : [],
       employee.permissions?.canViewLabRequests ? LabRequest.find({ clinicId: clinic._id }).populate('patientId', 'fullName').populate('labId', 'fullName').sort({ createdAt: -1 }).limit(200).lean() : []
     ]);
     res.json({ patients, appointments, prescriptions, labRequests, doctorIds });
