@@ -192,7 +192,10 @@ exports.updateRequest = async (req, res) => {
 
     const wasAlreadyCompleted = request.status === 'completed';
 
-    if (status) request.status = status;
+    // The UI historically used `processing`, while the LabRequest schema
+    // stores this state as `in_progress`.
+    const normalizedStatus = status === 'processing' ? 'in_progress' : status;
+    if (normalizedStatus) request.status = normalizedStatus;
     if (notes !== undefined) request.notes = notes;
     if (results) {
       // results should be an array of { testId, result, normalRange, unit, isNormal, notes }
@@ -204,11 +207,11 @@ exports.updateRequest = async (req, res) => {
         request.results = [{ testId: firstTestId, result: results.trim(), isNormal: true }];
       }
     }
-    if (status === 'completed') request.completedDate = new Date();
+    if (normalizedStatus === 'completed') request.completedDate = new Date();
 
     // When lab tech marks as completed, set pricing and create debt
     // Only add/update debt on FIRST completion (not on subsequent edits)
-    if (status === 'completed') {
+    if (normalizedStatus === 'completed') {
       // testPrices is an optional object: { testId: customPrice, ... }
       // If not provided, use default prices from MedicalTest
       const pricesMap = testPrices || {};
