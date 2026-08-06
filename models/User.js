@@ -111,6 +111,9 @@ const UserSchema = new mongoose.Schema({
   // Clinic management - if true, appointments for this doctor are managed by the clinic
   managedByClinic: { type: Boolean, default: false },
   clinicId: { type: mongoose.Schema.Types.ObjectId, ref: 'Clinic' },
+  // Internal departments (lab/pharmacy/assistant accounts) must not appear in the public network.
+  isPublic: { type: Boolean, default: true },
+  internalDepartment: { type: String, enum: ['laboratory', 'pharmacy', 'secretariat', 'clinic', ''], default: '' },
   bio: { type: String, default: '' },
   specialty: { type: String, default: '' },
   licenseNumber: { type: String }, // For doctors and pharmacies

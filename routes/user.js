@@ -13,7 +13,7 @@ router.get('/role/:role', async (req, res) => {
     
     // Roles are stored with a capitalized value, but older accounts may have
     // been created with a different casing (for example `radiology`).
-    let filter = { role: new RegExp(`^${role}$`, 'i') };
+    let filter = { role: new RegExp(`^${role}$`, 'i'), isPublic: { $ne: false } };
     
     if (city) {
       filter.city = city;
@@ -46,7 +46,10 @@ router.get('/:id/clinic-doctors', async (req, res) => {
     }
 
     const doctors = (clinic.doctors || [])
-      .filter((entry) => entry.status === 'active' && entry.doctorId && entry.doctorId.activationStatus === 'active')
+      // Clinic sub-accounts (including internal doctors) can be linked to the
+      // clinic for internal scheduling while remaining hidden from the public
+      // network. Only explicitly public doctors are exposed here.
+      .filter((entry) => entry.status === 'active' && entry.doctorId && entry.doctorId.activationStatus === 'active' && entry.doctorId.isPublic !== false)
       .map((entry) => entry.doctorId);
 
     res.json({ doctors });

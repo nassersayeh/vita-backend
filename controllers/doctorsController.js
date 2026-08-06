@@ -5,7 +5,7 @@ const SPECIALTIES = require('../utils/specialties');
 exports.getAllDoctors = async (req, res) => {
   try {
     // Query users with role === 'Doctor'
-    const doctors = await User.find({ role: 'Doctor' });
+    const doctors = await User.find({ role: 'Doctor', isPublic: { $ne: false } });
     res.json(doctors);
   } catch (err) {
     console.error(err);
@@ -32,7 +32,7 @@ exports.getCities = async (req, res) => {
   try {
     // Get unique cities from active doctors
     const cities = await User.distinct('city', { 
-      role: 'Doctor', 
+      role: 'Doctor', isPublic: { $ne: false },
       activationStatus: 'active',
       city: { $exists: true, $ne: '', $ne: null }
     });
@@ -57,7 +57,7 @@ exports.getCities = async (req, res) => {
 exports.filterDoctors = async (req, res) => {
   try {
     const { city, specialty, q } = req.query;
-    const filter = { role: 'Doctor' };
+    const filter = { role: 'Doctor', isPublic: { $ne: false } };
     if (city) filter.city = city;
     if (specialty) filter.specialty = specialty;
     const projection = 'fullName specialty city workplaces profileImage';

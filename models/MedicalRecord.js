@@ -177,6 +177,25 @@ const MedicalRecordSchema = new mongoose.Schema({
     mentalStatusExam: { type: String },
     psychiatricHistory: { type: String },
     riskAssessment: { type: String },
+    // Infertility and IVF
+    infertilityDuration: { type: String },
+    infertilityCause: { type: String },
+    treatmentType: { type: String },
+    cycleNumber: { type: String },
+    ovarianReserve: { type: String },
+    amh: { type: String },
+    spermAnalysis: { type: String },
+    stimulationProtocol: { type: String },
+    follicleMonitoring: { type: String },
+    eggRetrievalDate: { type: Date },
+    eggsRetrieved: { type: String },
+    embryosCreated: { type: String },
+    embryoTransferDate: { type: Date },
+    embryosTransferred: { type: String },
+    embryoGrade: { type: String },
+    pregnancyTestDate: { type: Date },
+    pregnancyTestResult: { type: String },
+    fertilityNotes: { type: String },
     // Dentistry
     dentalTreatment: { type: String }, // Description of dental treatment performed
     selectedTeeth: [{ 

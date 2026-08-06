@@ -3,6 +3,7 @@ const router = express.Router();
 const Prescription = require('../models/EPrescription');
 const Drug = require('../models/Drug');
 const MedicalTest = require('../models/MedicalTest');
+const PharmacyInventory = require('../models/PharmacyInventory');
 
 // Create new prescription
 router.post('/', async (req, res) => {
@@ -400,6 +401,25 @@ router.put('/:prescriptionId/dispense', async (req, res) => {
     // Check if prescription is expired
     if (prescription.expiryDate && new Date() > prescription.expiryDate) {
       return res.status(400).json({ message: 'Prescription has expired' });
+    }
+
+    // Dispensing from a pharmacy must reduce that pharmacy's own inventory.
+    if (pharmacyId && prescription.products?.length) {
+      const inventoryChanges = [];
+      for (const item of prescription.products) {
+        if (!item.drugId) continue;
+        const inventory = await PharmacyInventory.findOne({ pharmacyId, drugId: item.drugId, isActive: true });
+        if (!inventory || Number(inventory.quantity || 0) < Number(item.quantity || 1)) {
+          return res.status(400).json({ message: `Insufficient inventory for ${item.name}` });
+        }
+        inventoryChanges.push({ inventory, quantity: Number(item.quantity || 1) });
+      }
+      for (const { inventory, quantity } of inventoryChanges) {
+        inventory.quantity -= quantity;
+        inventory.soldCount = (inventory.soldCount || 0) + quantity;
+        inventory.isAvailable = inventory.quantity > 0;
+        await inventory.save();
+      }
     }
 
     prescription.dispensedAt = new Date();

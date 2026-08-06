@@ -10,7 +10,7 @@ router.get('/', async (req, res) => {
       return res.status(400).json({ message: 'Role query parameter is required.' });
     }
     // Support legacy clients while keeping credentials out of the response.
-    const users = await User.find({ role: new RegExp(`^${role}$`, 'i') }).select('-password');
+    const users = await User.find({ role: new RegExp(`^${role}$`, 'i'), isPublic: { $ne: false } }).select('-password');
     res.json(users);
   } catch (err) {
     console.error(err);

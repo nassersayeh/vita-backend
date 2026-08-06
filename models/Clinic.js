@@ -47,7 +47,7 @@ const ClinicStaffSchema = new mongoose.Schema({
   // Staff role
   role: {
     type: String,
-    enum: ['Nurse', 'Accountant', 'LabTech'],
+    enum: ['Nurse', 'Accountant', 'LabTech', 'Receptionist'],
     required: true
   },
   
@@ -123,7 +123,10 @@ const ClinicSchema = new mongoose.Schema({
     allowDoctorPatientView: { type: Boolean, default: true },
     allowDoctorScheduleEdit: { type: Boolean, default: true },
     autoApproveAppointments: { type: Boolean, default: false },
-    labPercentage: { type: Number, default: 0, min: 0, max: 100 }
+    labPercentage: { type: Number, default: 0, min: 0, max: 100 },
+    // Optional modules can be disabled per clinic without changing the
+    // global platform configuration.
+    enableInsurance: { type: Boolean, default: true }
   },
   
   // Status
