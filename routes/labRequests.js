@@ -254,6 +254,39 @@ router.put('/:requestId/status', async (req, res) => {
   }
 });
 
+// Delete a request from the provider queue. If it generated provider revenue,
+// remove the linked transaction and reverse the earnings total as well.
+router.delete('/:requestId', async (req, res) => {
+  try {
+    const request = await LabRequest.findById(req.params.requestId);
+    if (!request) return res.status(404).json({ message: 'Lab request not found' });
+
+    const providerId = req.body?.labId || req.query.labId;
+    if (providerId && request.labId?.toString() !== providerId.toString()) {
+      return res.status(403).json({ message: 'You can only delete requests for your center' });
+    }
+
+    const financial = await Financial.findOne({ doctorId: request.labId });
+    if (financial) {
+      const linkedTransactions = financial.transactions.filter((transaction) => (
+        transaction.labRequestId?.toString() === request._id.toString() ||
+        transaction.labRequestIds?.some((id) => id?.toString() === request._id.toString()) ||
+        String(transaction.description || '').includes(request._id.toString())
+      ));
+      const removedRevenue = linkedTransactions.reduce((sum, transaction) => sum + (Number(transaction.amount) || 0), 0);
+      financial.transactions = financial.transactions.filter((transaction) => !linkedTransactions.includes(transaction));
+      financial.totalEarnings = Math.max(0, (financial.totalEarnings || 0) - removedRevenue);
+      await financial.save();
+    }
+
+    await LabRequest.findByIdAndDelete(request._id);
+    res.json({ message: 'Lab request deleted successfully', removedRevenue: true });
+  } catch (error) {
+    console.error('Delete lab request error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 // Upload one or more radiology files (including DICOM) to a specific request.
 router.post('/:requestId/upload-files', uploadFile.array('files', 20), async (req, res) => {
   try {

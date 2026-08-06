@@ -204,6 +204,7 @@ app.use('/api/medical-tests', medicalTestsRoutes);
 app.use('/api/lab-requests', labRequestsRoutes);
 app.use('/api/image-requests', imageRequestsRoutes);
 app.use('/api/radiology', radiologyRoutes);
+app.use('/api/radiology-requests', require('./routes/radiologyRequests'));
 app.use('/api/prescriptions-enhanced', prescriptionsEnhancedRoutes);
 app.use('/api/pharmacy-inventory', pharmacyInventoryRoutes);
 app.use('/api/pharmacy-financial', pharmacyFinancialRoutes);
