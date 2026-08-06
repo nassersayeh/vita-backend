@@ -159,10 +159,7 @@ exports.signup = async (req, res) => {
     // Normalize username - treat empty string as undefined
     const normalizedUsername = username && username.trim() ? username.trim() : undefined;
     
-    // Check if terms are accepted
-    if (!termsAccepted) {
-      return res.status(400).json({ message: 'You must accept the Terms and Conditions to register.' });
-    }
+    // Terms acceptance is optional for backwards compatibility with older mobile builds.
     
     // Basic validations
     if (!fullName || !mobile || !country || !city || !idNumber || !role) {
@@ -234,8 +231,8 @@ exports.signup = async (req, res) => {
       phoneVerificationCode: verificationCode,
       phoneVerificationCodeExpiration: verificationCodeExpiration,
       // Terms and Conditions
-      termsAccepted: true,
-      termsAcceptedAt: new Date(),
+      termsAccepted: Boolean(termsAccepted),
+      termsAcceptedAt: termsAccepted ? new Date() : undefined,
       termsVersion: '1.0',
       // Add default workplace for doctors
       workplaces: role === 'Doctor' ? [createDefaultDoctorWorkplace(fullName, address)] : undefined,
