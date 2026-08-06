@@ -34,7 +34,7 @@ async function run() {
 
   await Employee.findOneAndUpdate(
     { employerId: center._id, userId: secretary._id },
-    { employerId: center._id, userId: secretary._id, position: 'Receptionist', permissions: { canViewPatients: true, canAddPatients: true, canViewAppointments: true, canCreateAppointments: true, canEditAppointments: true, canViewFinancials: true, canManageIncome: true, canManageExpenses: true, canViewLabRequests: true, canCreateLabRequests: true }, isActive: true },
+    { employerId: center._id, userId: secretary._id, position: 'Receptionist', permissions: { canViewPatients: true, canAddPatients: true, canViewAppointments: true, canCreateAppointments: true, canEditAppointments: true, canViewFinancials: true, canManageIncome: true, canManageExpenses: true, canManagePatientPayments: true, canViewLabRequests: true, canCreateLabRequests: true, canManageLabBilling: true, canViewPrescriptions: true, canCreatePrescriptions: true, canCreateOrders: true, canManagePrescriptionBilling: true }, isActive: true },
     { upsert: true, new: true, setDefaultsOnInsert: true }
   );
 

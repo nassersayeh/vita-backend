@@ -88,6 +88,9 @@ router.post('/staff', clinicController.addStaff);
 // Update staff member
 router.put('/staff/:staffId', clinicController.updateStaff);
 
+// Update permissions for a clinic staff account
+router.put('/staff/:staffId/permissions', clinicController.updateStaffPermissions);
+
 // Remove staff member
 router.delete('/staff/:staffId', clinicController.removeStaff);
 

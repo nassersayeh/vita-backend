@@ -6,6 +6,7 @@ const Financial = require('../models/Financial');
 const MedicalRecord = require('../models/MedicalRecord');
 const LabRequest = require('../models/LabRequest');
 const NurseNote = require('../models/NurseNote');
+const Employee = require('../models/Employee');
 const bcrypt = require('bcryptjs');
 
 // Get clinic info for the logged-in clinic owner
@@ -31,6 +32,12 @@ exports.getClinicInfo = async (req, res) => {
     
     const activeDoctors = clinic.doctors.filter(d => d.status === 'active' && d.doctorId);
     const activeStaff = clinic.staff.filter(s => s.status === 'active' && s.userId);
+    const employeeRecords = await Employee.find({
+      employerId: clinicOwnerId,
+      userId: { $in: activeStaff.map(s => s.userId._id) },
+      isActive: true
+    }).select('userId permissions');
+    const permissionsByUser = new Map(employeeRecords.map(e => [e.userId.toString(), e.permissions]));
 
     res.status(200).json({
       success: true,
@@ -53,6 +60,7 @@ exports.getClinicInfo = async (req, res) => {
           userId: s.userId._id,
           user: s.userId,
           role: s.role,
+          permissions: permissionsByUser.get(s.userId._id.toString()) || {},
           status: s.status,
           addedAt: s.addedAt,
           notes: s.notes
@@ -1289,8 +1297,8 @@ exports.addStaff = async (req, res) => {
     const clinicOwnerId = req.user._id;
     const { fullName, email, mobileNumber, password, staffRole, notes } = req.body;
     
-    if (!['Nurse', 'Accountant', 'LabTech'].includes(staffRole)) {
-      return res.status(400).json({ message: 'Invalid staff role. Must be Nurse, Accountant, or LabTech' });
+    if (!['Nurse', 'Accountant', 'LabTech', 'Receptionist'].includes(staffRole)) {
+      return res.status(400).json({ message: 'Invalid staff role. Must be Nurse, Accountant, LabTech, or Receptionist' });
     }
     
     let clinic = await Clinic.findOne({ ownerId: clinicOwnerId });
@@ -1411,6 +1419,28 @@ exports.updateStaff = async (req, res) => {
   } catch (error) {
     console.error('Error updating staff:', error);
     res.status(500).json({ message: 'Failed to update staff member', error: error.message });
+  }
+};
+
+// Update staff permissions from the clinic manager dashboard.
+exports.updateStaffPermissions = async (req, res) => {
+  try {
+    const clinic = await Clinic.findOne({ ownerId: req.user._id });
+    if (!clinic) return res.status(404).json({ message: 'Clinic not found' });
+
+    const staffEntry = clinic.staff.find(s => s.userId.toString() === req.params.staffId && s.status === 'active');
+    if (!staffEntry) return res.status(403).json({ message: 'Staff member not in your clinic' });
+
+    const employee = await Employee.findOneAndUpdate(
+      { employerId: req.user._id, userId: req.params.staffId, isActive: true },
+      { permissions: req.body.permissions || {} },
+      { new: true, upsert: true, setDefaultsOnInsert: true }
+    );
+
+    res.json({ success: true, permissions: employee.permissions });
+  } catch (error) {
+    console.error('Error updating clinic staff permissions:', error);
+    res.status(500).json({ message: 'Failed to update staff permissions', error: error.message });
   }
 };
 

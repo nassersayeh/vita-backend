@@ -28,6 +28,9 @@ const PermissionSchema = new mongoose.Schema({
   canViewFinancials: { type: Boolean, default: false },
   canManageIncome: { type: Boolean, default: false },
   canManageExpenses: { type: Boolean, default: false },
+  canManagePatientPayments: { type: Boolean, default: false },
+  canManageLabBilling: { type: Boolean, default: false },
+  canManagePrescriptionBilling: { type: Boolean, default: false },
   canViewReports: { type: Boolean, default: false },
 
   // Lab Requests
