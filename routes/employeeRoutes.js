@@ -7,6 +7,9 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { authenticateEmployee, checkPermission, verifyEmployeeDoctor } = require('../middleware/employeeAuth');
 const authMiddleware = require('../middleware/auth');
+const Clinic = require('../models/Clinic');
+const Appointment = require('../models/Appointment');
+const EPrescription = require('../models/EPrescription');
 
 // Middleware to verify doctor owns the employee
 const verifyEmployeeOwnership = async (req, res, next) => {
@@ -269,10 +272,30 @@ router.post('/:employeeId/reactivate', authMiddleware, verifyEmployeeOwnership, 
 });
 
 // Get current employee's permissions and data
+router.get('/me/clinic-dashboard', authenticateEmployee, async (req, res) => {
+  try {
+    const employee = await Employee.findOne({ userId: req.user._id, isActive: true });
+    const clinic = employee && await Clinic.findOne({ ownerId: employee.employerId }).lean();
+    if (!clinic) return res.status(404).json({ message: 'Clinic not found' });
+    const doctorIds = (clinic.doctors || []).filter(d => d.status === 'active').map(d => d.doctorId);
+    const doctors = await User.find({ _id: { $in: doctorIds } }).select('patients').lean();
+    const patientIds = [...new Set(doctors.flatMap(d => (d.patients || []).map(id => id.toString())))];
+    const [patients, appointments, prescriptions] = await Promise.all([
+      employee.permissions?.canViewPatients ? User.find({ _id: { $in: patientIds } }).select('fullName email mobileNumber profileImage').lean() : [],
+      employee.permissions?.canViewAppointments ? Appointment.find({ doctorId: { $in: doctorIds } }).populate('patient', 'fullName email mobileNumber profileImage').sort({ appointmentDateTime: -1 }).limit(200).lean() : [],
+      employee.permissions?.canViewPrescriptions ? EPrescription.find({ doctorId: { $in: doctorIds } }).populate('patient', 'fullName').sort({ createdAt: -1 }).limit(200).lean() : []
+    ]);
+    res.json({ patients, appointments, prescriptions });
+  } catch (error) {
+    console.error('Error fetching employee clinic dashboard:', error);
+    res.status(500).json({ message: 'Failed to load clinic dashboard', error: error.message });
+  }
+});
+
 router.get('/me', authenticateEmployee, async (req, res) => {
   try {
     const employee = await Employee.findOne({ userId: req.user._id, isActive: true })
-      .populate('employerId', 'fullName clinicName')
+      .populate('employerId', 'fullName clinicName role')
       .populate('userId', 'fullName email mobileNumber');
 
     if (!employee) {
