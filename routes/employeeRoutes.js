@@ -10,6 +10,7 @@ const authMiddleware = require('../middleware/auth');
 const Clinic = require('../models/Clinic');
 const Appointment = require('../models/Appointment');
 const EPrescription = require('../models/EPrescription');
+const LabRequest = require('../models/LabRequest');
 
 // Middleware to verify doctor owns the employee
 const verifyEmployeeOwnership = async (req, res, next) => {
@@ -280,12 +281,13 @@ router.get('/me/clinic-dashboard', authenticateEmployee, async (req, res) => {
     const doctorIds = (clinic.doctors || []).filter(d => d.status === 'active').map(d => d.doctorId);
     const doctors = await User.find({ _id: { $in: doctorIds } }).select('patients').lean();
     const patientIds = [...new Set(doctors.flatMap(d => (d.patients || []).map(id => id.toString())))];
-    const [patients, appointments, prescriptions] = await Promise.all([
+    const [patients, appointments, prescriptions, labRequests] = await Promise.all([
       employee.permissions?.canViewPatients ? User.find({ _id: { $in: patientIds } }).select('fullName email mobileNumber profileImage').lean() : [],
       employee.permissions?.canViewAppointments ? Appointment.find({ doctorId: { $in: doctorIds } }).populate('patient', 'fullName email mobileNumber profileImage').sort({ appointmentDateTime: -1 }).limit(200).lean() : [],
-      employee.permissions?.canViewPrescriptions ? EPrescription.find({ doctorId: { $in: doctorIds } }).populate('patient', 'fullName').sort({ createdAt: -1 }).limit(200).lean() : []
+      employee.permissions?.canViewPrescriptions ? EPrescription.find({ doctorId: { $in: doctorIds } }).populate('patient', 'fullName').sort({ createdAt: -1 }).limit(200).lean() : [],
+      employee.permissions?.canViewLabRequests ? LabRequest.find({ clinicId: clinic._id }).populate('patientId', 'fullName').populate('labId', 'fullName').sort({ createdAt: -1 }).limit(200).lean() : []
     ]);
-    res.json({ patients, appointments, prescriptions, doctorIds });
+    res.json({ patients, appointments, prescriptions, labRequests, doctorIds });
   } catch (error) {
     console.error('Error fetching employee clinic dashboard:', error);
     res.status(500).json({ message: 'Failed to load clinic dashboard', error: error.message });
