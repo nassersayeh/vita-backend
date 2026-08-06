@@ -4,6 +4,7 @@ const Prescription = require('../models/EPrescription');
 const Drug = require('../models/Drug');
 const MedicalTest = require('../models/MedicalTest');
 const PharmacyInventory = require('../models/PharmacyInventory');
+const User = require('../models/User');
 
 // Create new prescription
 router.post('/', async (req, res) => {
@@ -40,6 +41,7 @@ router.post('/', async (req, res) => {
       name: med.name
     }));
 
+    const doctor = await User.findById(doctorId).select('managedByClinic clinicId');
     const prescription = new Prescription({
       patientId,
       doctorId,
@@ -47,6 +49,8 @@ router.post('/', async (req, res) => {
       medicalTests: medicalTests || [],
       diagnosis,
       notes,
+      clinicId: doctor?.managedByClinic ? doctor.clinicId : undefined,
+      workflowStatus: doctor?.managedByClinic ? 'pending_secretary' : 'sent_to_pharmacy',
       validityType: validityType || 'time-limited',
       validityPeriod: validityPeriod || 7,
       expiryDate: expiryDate ? new Date(expiryDate) : new Date(Date.now() + (validityPeriod || 7) * 24 * 60 * 60 * 1000)
@@ -376,6 +380,25 @@ router.put('/:prescriptionId/renewal/:renewalIndex', async (req, res) => {
   } catch (error) {
     console.error('Process renewal error:', error);
     res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// Secretary routes a clinic prescription to its internal pharmacy.
+router.put('/:prescriptionId/route', async (req, res) => {
+  try {
+    const { pharmacyId, routedBy } = req.body;
+    const prescription = await Prescription.findById(req.params.prescriptionId);
+    if (!prescription) return res.status(404).json({ message: 'Prescription not found' });
+    if (!prescription.clinicId) return res.status(400).json({ message: 'Prescription is not clinic-managed' });
+    const pharmacy = await User.findOne({ _id: pharmacyId, role: 'Pharmacy', clinicId: prescription.clinicId, activationStatus: 'active' });
+    if (!pharmacy) return res.status(404).json({ message: 'Internal pharmacy not found' });
+    prescription.workflowStatus = 'sent_to_pharmacy';
+    prescription.routedTo = pharmacy._id;
+    prescription.routedBy = routedBy || undefined;
+    await prescription.save();
+    res.json({ success: true, prescription });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to route prescription', error: error.message });
   }
 });
 

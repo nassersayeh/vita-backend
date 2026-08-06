@@ -3,6 +3,10 @@ const mongoose = require('mongoose');
 const prescriptionSchema = new mongoose.Schema({
   patientId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   doctorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  clinicId: { type: mongoose.Schema.Types.ObjectId, ref: 'Clinic' },
+  workflowStatus: { type: String, enum: ['pending_secretary', 'sent_to_pharmacy', 'completed'], default: 'pending_secretary' },
+  routedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  routedTo: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   products: [{
     productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product' },
     drugId: { type: mongoose.Schema.Types.ObjectId, ref: 'Drug' }, // Link to central drug database
