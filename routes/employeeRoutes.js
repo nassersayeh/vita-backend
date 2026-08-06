@@ -285,7 +285,7 @@ router.get('/me/clinic-dashboard', authenticateEmployee, async (req, res) => {
       employee.permissions?.canViewAppointments ? Appointment.find({ doctorId: { $in: doctorIds } }).populate('patient', 'fullName email mobileNumber profileImage').sort({ appointmentDateTime: -1 }).limit(200).lean() : [],
       employee.permissions?.canViewPrescriptions ? EPrescription.find({ doctorId: { $in: doctorIds } }).populate('patient', 'fullName').sort({ createdAt: -1 }).limit(200).lean() : []
     ]);
-    res.json({ patients, appointments, prescriptions });
+    res.json({ patients, appointments, prescriptions, doctorIds });
   } catch (error) {
     console.error('Error fetching employee clinic dashboard:', error);
     res.status(500).json({ message: 'Failed to load clinic dashboard', error: error.message });
