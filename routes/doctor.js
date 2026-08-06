@@ -179,13 +179,20 @@ router.get('/:doctorId/clinic-lab-staff', async (req, res) => {
       return res.status(404).json({ message: 'Clinic not found' });
     }
 
-    // Get active LabTech staff from the clinic
+    // Get active LabTech staff from the clinic. Internal lab accounts created
+    // for a clinic may also be role `Lab` (and are intentionally hidden from
+    // the public network), so include those linked accounts as well.
     const labTechStaff = clinic.staff.filter(s => s.role === 'LabTech' && s.status === 'active');
     const labTechUserIds = labTechStaff.map(s => s.userId);
 
     // Populate user details for each LabTech
     const labTechUsers = await User.find(
-      { _id: { $in: labTechUserIds } },
+      {
+        $or: [
+          { _id: { $in: labTechUserIds } },
+          { clinicId: clinic._id, role: 'Lab', internalDepartment: 'laboratory', activationStatus: 'active' }
+        ]
+      },
       'fullName mobileNumber email city address profileImage'
     );
 
