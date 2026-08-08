@@ -451,6 +451,7 @@ router.put('/:prescriptionId/dispense', async (req, res) => {
     prescription.dispensedAt = new Date();
     prescription.dispensedBy = pharmacyId;
     prescription.dispensingNotes = dispensingNotes;
+    if (prescription.clinicId) prescription.workflowStatus = 'completed';
     prescription.isValid = false; // Mark as invalid after dispensing
 
     await prescription.save();
