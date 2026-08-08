@@ -201,7 +201,10 @@ router.delete('/:id', async (req, res) => {
 // Get all prescriptions
 router.get('/', async (req, res) => {
   try {
-    const prescriptions = await Prescription.find({})
+    const filter = {};
+    if (req.query.routedTo) filter.routedTo = req.query.routedTo;
+    if (req.query.workflowStatus) filter.workflowStatus = req.query.workflowStatus;
+    const prescriptions = await Prescription.find(filter)
       .populate('patientId', 'fullName idNumber mobileNumber')
       .populate('doctorId', 'fullName specialty')
       .populate('dispensedBy', 'fullName')
