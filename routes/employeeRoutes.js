@@ -294,6 +294,50 @@ router.get('/me/clinic-dashboard', authenticateEmployee, async (req, res) => {
   }
 });
 
+// Create an appointment from the clinic secretary dashboard.
+router.post('/me/appointments', authenticateEmployee, async (req, res) => {
+  try {
+    const employee = await Employee.findOne({ userId: req.user._id, isActive: true });
+    if (!employee?.permissions?.canCreateAppointments) {
+      return res.status(403).json({ message: 'Insufficient permissions to create appointments' });
+    }
+    const { doctorId, patientId, appointmentDateTime, durationMinutes, notes, reason, workplaceName } = req.body;
+    if (!doctorId || !patientId || !appointmentDateTime) {
+      return res.status(400).json({ message: 'Doctor, patient, and appointment date are required' });
+    }
+    const clinic = await Clinic.findOne({ ownerId: employee.employerId });
+    if (!clinic) return res.status(404).json({ message: 'Clinic not found' });
+    const doctorEntry = (clinic.doctors || []).find((entry) => (
+      entry.status === 'active' && entry.doctorId.toString() === doctorId.toString()
+    ));
+    if (!doctorEntry) return res.status(403).json({ message: 'Doctor is not active in this clinic' });
+    const date = new Date(appointmentDateTime);
+    if (Number.isNaN(date.getTime()) || date <= new Date()) {
+      return res.status(400).json({ message: 'Appointment date must be in the future' });
+    }
+    const appointment = await Appointment.create({
+      doctorId,
+      patient: patientId,
+      appointmentDateTime: date,
+      durationMinutes: Number(durationMinutes) || 30,
+      notes: notes || '',
+      reason: reason || 'Clinic appointment',
+      workplaceName: workplaceName || clinic.name || clinic.clinicName || '',
+      status: 'scheduled',
+      createdBy: req.user._id,
+      clinicId: clinic._id,
+    });
+    await User.findByIdAndUpdate(doctorId, { $addToSet: { patients: patientId } });
+    const populated = await Appointment.findById(appointment._id)
+      .populate('patient', 'fullName mobileNumber')
+      .populate('doctorId', 'fullName specialty');
+    res.status(201).json({ success: true, appointment: populated });
+  } catch (error) {
+    console.error('Employee create appointment error:', error);
+    res.status(500).json({ message: 'Failed to create appointment', error: error.message });
+  }
+});
+
 router.put('/me/lab-requests/:requestId/route', authenticateEmployee, async (req, res) => {
   try {
     const employee = await Employee.findOne({ userId: req.user._id, isActive: true });
