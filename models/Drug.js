@@ -38,6 +38,8 @@ const DrugSchema = new mongoose.Schema({
   hasFollowups: { type: Boolean, default: false }, // له توابع
   
   isActive: { type: Boolean, default: true }
+  ,isCustom: { type: Boolean, default: false }
+  ,ownerPharmacyId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
 }, { timestamps: true });
 
 // Create indexes for faster lookups

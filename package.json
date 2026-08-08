@@ -6,6 +6,7 @@
     "start": "node server.js",
     "dev": "nodemon server.js",
     "setup:fertility-center": "node setupFertilityCenter.js",
+    "clear:fertility-pharmacy": "node clearFertilityPharmacyInventory.js",
     "import:moh-drugs": "node scripts/importMohDrugCatalog.js",
     "import:israel-drugs": "node scripts/importIsraelDrugCatalog.js",
     "test": "echo \"Error: no test specified\" && exit 1",

@@ -121,6 +121,21 @@ exports.addDrugToInventory = async (req, res) => {
   }
 };
 
+// Add a pharmacy-only medicine that is not in the shared catalog.
+exports.addManualDrugToInventory = async (req, res) => {
+  try {
+    const { pharmacyId } = req.params;
+    if (req.user._id.toString() !== pharmacyId) return res.status(403).json({ message: 'Not authorized' });
+    const { name, genericName, strength, dosageForm, manufacturer, barcode, description, quantity, price, costPrice, minimumStock } = req.body;
+    if (!name || quantity == null || price == null) return res.status(400).json({ message: 'Name, quantity, and price are required' });
+    const drug = await Drug.create({ name, genericName, strength, dosageForm, manufacturer, barcode: barcode || undefined, description, isCustom: true, ownerPharmacyId: pharmacyId });
+    const inventory = await PharmacyInventory.create({ pharmacyId, drugId: drug._id, drugName: name, drugGenericName: genericName, quantity, price, costPrice: costPrice || null, minimumStock: minimumStock || 5, isAvailable: true });
+    res.status(201).json({ message: 'Manual medicine added', inventory });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to add manual medicine', error: error.message });
+  }
+};
+
 // Update inventory item (quantity and/or price)
 exports.updateInventoryItem = async (req, res) => {
   try {

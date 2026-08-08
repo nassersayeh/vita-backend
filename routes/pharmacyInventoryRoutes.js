@@ -28,6 +28,7 @@ router.get('/pharmacy/:pharmacyId/low-stock',
 router.post('/pharmacy/:pharmacyId/add', 
   pharmacyInventoryController.addDrugToInventory
 );
+router.post('/pharmacy/:pharmacyId/add-manual', pharmacyInventoryController.addManualDrugToInventory);
 
 // PUT update inventory item
 router.put('/pharmacy/:pharmacyId/drug/:drugId', 
