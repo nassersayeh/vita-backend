@@ -29,7 +29,7 @@ exports.getPharmacyInventory = async (req, res) => {
 
     let query = PharmacyInventory.find(filter)
       .select('drugId drugName drugGenericName quantity price costPrice minimumStock isAvailable notes')
-      .populate('drugId', 'name genericName strength manufacturer barcode')
+      .populate('drugId', 'name genericName strength dosageForm manufacturer barcode description isCustom ownerPharmacyId')
       .sort({ drugName: 1 })
       .lean();
 
@@ -140,7 +140,7 @@ exports.addManualDrugToInventory = async (req, res) => {
 exports.updateInventoryItem = async (req, res) => {
   try {
     const { pharmacyId, drugId } = req.params;
-    const { quantity, price, costPrice, minimumStock, isAvailable, notes } = req.body;
+    const { quantity, price, costPrice, minimumStock, isAvailable, notes, name, genericName, strength, dosageForm, manufacturer, barcode, description } = req.body;
 
     // Verify user is the pharmacy owner
     if (req.user._id.toString() !== pharmacyId) {
@@ -151,6 +151,13 @@ exports.updateInventoryItem = async (req, res) => {
     const inventoryItem = await PharmacyInventory.findOne({ pharmacyId, drugId });
     if (!inventoryItem) {
       return res.status(404).json({ message: 'Inventory item not found' });
+    }
+    const drug = await Drug.findById(drugId);
+    if (drug?.isCustom && drug.ownerPharmacyId?.toString() === pharmacyId) {
+      Object.assign(drug, { name, genericName, strength, dosageForm, manufacturer, barcode, description });
+      await drug.save();
+      inventoryItem.drugName = name || inventoryItem.drugName;
+      inventoryItem.drugGenericName = genericName || inventoryItem.drugGenericName;
     }
 
     // Update fields
