@@ -351,8 +351,13 @@ exports.signup = async (req, res) => {
     // Send verification code via multiple channels
     let sentVia = [];
     
-    // Always try WhatsApp if ready
-    if (await isWhatsAppReady()) {
+    // WhatsApp availability must never make signup fail after the account was
+    // created. The bridge can briefly throw while reconnecting.
+    let whatsappReady = false;
+    try { whatsappReady = await isWhatsAppReady(); } catch (statusError) {
+      console.warn('WhatsApp readiness check failed during signup:', statusError.message);
+    }
+    if (whatsappReady) {
       try {
         const whatsappResult = await send2FACode(normalizedMobile, verificationCode, 'en', country);
         sentVia.push('whatsapp');
@@ -803,8 +808,11 @@ exports.resendVerificationCode = async (req, res) => {
     // Send verification code via multiple channels
     let sentVia = [];
     
-    // Always try WhatsApp if ready
-    if (await isWhatsAppReady()) {
+    let whatsappReady = false;
+    try { whatsappReady = await isWhatsAppReady(); } catch (statusError) {
+      console.warn('WhatsApp readiness check failed during resend:', statusError.message);
+    }
+    if (whatsappReady) {
       try {
         const whatsappResult = await send2FACode(user.mobileNumber, verificationCode, 'en', user.country);
         sentVia.push('whatsapp');

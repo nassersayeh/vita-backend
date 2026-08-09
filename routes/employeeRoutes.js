@@ -279,7 +279,9 @@ router.get('/me/clinic-dashboard', authenticateEmployee, async (req, res) => {
     const clinic = employee && await Clinic.findOne({ ownerId: employee.employerId }).lean();
     if (!clinic) return res.status(404).json({ message: 'Clinic not found' });
     const doctorIds = (clinic.doctors || []).filter(d => d.status === 'active').map(d => d.doctorId);
-    const doctors = await User.find({ _id: { $in: doctorIds } }).select('patients').lean();
+    const doctors = await User.find({ _id: { $in: doctorIds } })
+      .select('fullName specialty patients workplaces appointmentDurationOptions')
+      .lean();
     const patientIds = [...new Set(doctors.flatMap(d => (d.patients || []).map(id => id.toString())))];
     const [patients, appointments, prescriptions, labRequests] = await Promise.all([
       employee.permissions?.canViewPatients ? User.find({ _id: { $in: patientIds } }).select('fullName email mobileNumber profileImage').lean() : [],
@@ -287,7 +289,7 @@ router.get('/me/clinic-dashboard', authenticateEmployee, async (req, res) => {
       employee.permissions?.canViewPrescriptions ? EPrescription.find({ doctorId: { $in: doctorIds } }).populate('patientId', 'fullName').sort({ createdAt: -1 }).limit(200).lean() : [],
       employee.permissions?.canViewLabRequests ? LabRequest.find({ clinicId: clinic._id }).populate('patientId', 'fullName').populate('labId', 'fullName').sort({ createdAt: -1 }).limit(200).lean() : []
     ]);
-    res.json({ patients, appointments, prescriptions, labRequests, doctorIds });
+    res.json({ patients, appointments, prescriptions, labRequests, doctorIds, doctors });
   } catch (error) {
     console.error('Error fetching employee clinic dashboard:', error);
     res.status(500).json({ message: 'Failed to load clinic dashboard', error: error.message });
