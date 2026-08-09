@@ -38,6 +38,9 @@ const UserSchema = new mongoose.Schema({
   bloodType: { type: String, default: null },
   height: { type: Number, default: null },
   weight: { type: Number, default: null },
+  // Prevent the first-login profile prompt from appearing again after skip
+  // or completion (the points history separately guarantees the reward is one-time).
+  profileCompletionPromptDismissed: { type: Boolean, default: false },
   
   // Marital status
   maritalStatus: { type: String, enum: ['single', 'married', 'widowed', 'divorced', ''], default: '' },
