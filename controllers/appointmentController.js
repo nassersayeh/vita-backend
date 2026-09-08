@@ -1883,6 +1883,14 @@ exports.getAvailableDatesAndTimes = async (req, res) => {
     
     // Get all active workplaces (or filter by workplaceName if provided)
     let workplacesToProcess = (doctor.workplaces || []).filter(w => w.isActive !== false);
+    if (!workplacesToProcess.length && doctor.role !== 'Doctor' && doctor.workingSchedule?.length) {
+      workplacesToProcess = [{
+        name: doctor.fullName,
+        address: doctor.address || doctor.city || '',
+        schedule: doctor.workingSchedule,
+        isActive: true,
+      }];
+    }
     if (workplaceName) {
       workplacesToProcess = workplacesToProcess.filter(w => w.name === workplaceName);
     }
@@ -1914,6 +1922,33 @@ exports.getAvailableDatesAndTimes = async (req, res) => {
     const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
     const today = new Date();
     today.setHours(0, 0, 0, 0);
+
+    // Fetch the full 30-day calendar once. The previous implementation ran
+    // one Mongo query per workplace per day, which made this endpoint take
+    // many seconds for doctors with multiple workplaces.
+    const calendarEnd = new Date(today);
+    calendarEnd.setDate(calendarEnd.getDate() + 30);
+    const bookedAppointments = await Appointment.find({
+      doctorId: doctor._id,
+      appointmentDateTime: { $gte: today, $lt: calendarEnd },
+      $or: [
+        { status: { $nin: ['cancelled', 'no-show'] } },
+        { status: 'cancelled', blockedSlot: true },
+      ],
+    }).select('workplaceName appointmentDateTime durationMinutes').lean();
+    const blockedByWorkplaceAndDate = new Map();
+    for (const appointment of bookedAppointments) {
+      const appointmentTime = new Date(appointment.appointmentDateTime);
+      const key = `${appointment.workplaceName || ''}\u0000${formatLocalDateKey(appointmentTime)}`;
+      const interval = {
+        start: appointmentTime.getHours() * 60 + appointmentTime.getMinutes(),
+        end: appointmentTime.getHours() * 60 + appointmentTime.getMinutes()
+          + normalizeDurationMinutes(appointment.durationMinutes, 30),
+      };
+      const intervals = blockedByWorkplaceAndDate.get(key) || [];
+      intervals.push(interval);
+      blockedByWorkplaceAndDate.set(key, intervals);
+    }
     
     // Process each workplace
     const workplacesResult = [];
@@ -1947,11 +1982,9 @@ exports.getAvailableDatesAndTimes = async (req, res) => {
             const day = String(date.getDate()).padStart(2, '0');
             const dateString = `${year}-${month}-${day}`;
             
-            const blockedIntervals = await getBlockedIntervalsForDate({
-              doctorId: doctor._id,
-              workplaceName: workplace.name,
-              date,
-            });
+            const blockedIntervals = blockedByWorkplaceAndDate.get(
+              `${workplace.name || ''}\u0000${dateString}`
+            ) || [];
             const defaultDuration = normalizeDurationOptions(doctor.appointmentDurationOptions)[0] || 30;
             const hasSlotsAvailable = hasAvailableSlotForDate({
               daySchedule,
@@ -2038,6 +2071,14 @@ exports.getAvailableTimeSlots = async (req, res) => {
         // No specific workplace or not found - check ALL active workplaces
         workplacesToCheck = doctor.workplaces.filter(w => w.isActive !== false);
       }
+    }
+    if (!workplacesToCheck.length && doctor.role !== 'Doctor' && doctor.workingSchedule?.length) {
+      workplacesToCheck = [{
+        name: doctor.fullName,
+        address: doctor.address || doctor.city || '',
+        schedule: doctor.workingSchedule,
+        isActive: true,
+      }];
     }
     
     console.log('Workplaces to check:', workplacesToCheck.map(w => w.name));

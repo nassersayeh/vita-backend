@@ -4,15 +4,16 @@ const router = express.Router();
 const doctorsController = require('../controllers/doctorsController');
 const doctorPatientController = require('../controllers/doctorPatientController');
 const User = require('../models/User');
+const auth = require('../middleware/auth');
 
 // ============ STATIC ROUTES (MUST BE FIRST) ============
 // Doctor-patient connection static routes
-router.get('/search-patients', doctorPatientController.searchPatients);
-router.post('/create-patient', doctorPatientController.createPatient);
-router.get('/:doctorId/connected-patients', doctorPatientController.getDoctorPatients);
+router.get('/search-patients', auth, doctorPatientController.searchPatients);
+router.post('/create-patient', auth, doctorPatientController.createPatient);
+router.get('/:doctorId/connected-patients', auth, doctorPatientController.getDoctorPatients);
 
 // Reset patient password (doctor can reset password for their patients)
-router.post('/:doctorId/patients/:patientId/reset-password', doctorPatientController.resetPatientPassword);
+router.post('/:doctorId/patients/:patientId/reset-password', auth, doctorPatientController.resetPatientPassword);
 
 // GET all users who have role === 'Doctor'
 router.get('/', doctorsController.getAllDoctors);

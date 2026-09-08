@@ -1,6 +1,7 @@
 const User = require('../models/User');
 const nodemailer = require('nodemailer');
 const bcrypt = require('bcryptjs');
+const { validatePasswordPolicy } = require('../utils/passwordPolicy');
 const { send2FACode, isWhatsAppReady } = require('../services/whatsappService');
 require('dotenv').config();
 
@@ -150,13 +151,6 @@ exports.changePassword = async (req, res) => {
       });
     }
 
-    if (newPassword.length < 6) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'New password must be at least 6 characters long.' 
-      });
-    }
-
     const user = await User.findById(userId);
     if (!user) {
       return res.status(404).json({ 
@@ -172,6 +166,20 @@ exports.changePassword = async (req, res) => {
         success: false, 
         message: 'Current password is incorrect.' 
       });
+    }
+
+    const passwordPolicyError = validatePasswordPolicy(newPassword, user.fullName);
+    if (passwordPolicyError) {
+      const messages = {
+        PASSWORD_TOO_SHORT: 'New password must be at least 8 characters long.',
+        PASSWORD_TOO_LONG: 'New password is too long.',
+        PASSWORD_CONTAINS_NAME: 'Password must not contain the account holder name.',
+      };
+      return res.status(400).json({ success: false, message: messages[passwordPolicyError] });
+    }
+
+    if (await bcrypt.compare(newPassword, user.password)) {
+      return res.status(400).json({ success: false, message: 'This password was used before. Choose a different password.' });
     }
 
     // Hash new password

@@ -9,11 +9,15 @@ const authMiddleware = async (req, res, next) => {
       throw new Error('Authentication required');
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key'); // Ensure JWT_SECRET is set in .env
-    const user = await User.findById(decoded.userId);
+    if (!process.env.JWT_SECRET) throw new Error('JWT secret is not configured');
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const user = await User.findById(decoded.userId).select('+passwordChangedAt');
 
     if (!user) {
       throw new Error('User not found');
+    }
+    if (user.passwordChangedAt && decoded.iat * 1000 < user.passwordChangedAt.getTime()) {
+      throw new Error('Session expired after password change');
     }
 
     req.user = user;

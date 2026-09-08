@@ -1,20 +1,35 @@
 const express = require('express');
 const router = express.Router();
 const authController = require('../controllers/authController');
+const auth = require('../middleware/auth');
+const {
+  signupLimiters,
+  usernameCheckLimiters,
+  loginLimiters,
+  forgotPasswordLimiters,
+  resetCodeLimiters,
+  phoneVerificationLimiters,
+  resendVerificationLimiters,
+} = require('../middleware/authRateLimiter');
 
-router.post('/signup', authController.signup);
-router.post('/login', authController.login);
-router.post('/forgot-password', authController.forgotPassword);
-router.post('/verify-code', authController.verifyCode);
+router.post('/signup', ...signupLimiters, authController.signup);
+router.post('/check-username', ...usernameCheckLimiters, authController.checkUsername);
+router.post('/login', ...loginLimiters, authController.login);
+router.put('/complete-mobile-profile', auth, authController.completeMobileProfile);
+router.post('/forgot-password', ...forgotPasswordLimiters, authController.forgotPassword);
+router.post('/verify-code', ...resetCodeLimiters, authController.verifyCode);
 
 // Phone verification routes (for registration)
-router.post('/verify-phone', authController.verifyPhone);
-router.post('/resend-verification', authController.resendVerificationCode);
+router.post('/verify-phone', ...phoneVerificationLimiters, authController.verifyPhone);
+router.post('/resend-verification', ...resendVerificationLimiters, authController.resendVerificationCode);
 
 // Accept Terms and Conditions
-router.put('/:id/accept-terms', async (req, res) => {
+router.put('/:id/accept-terms', auth, async (req, res) => {
   try {
     const User = require('../models/User');
+    if (String(req.user._id) !== String(req.params.id) && !['Admin', 'Superadmin'].includes(req.user.role)) {
+      return res.status(403).json({ message: 'Forbidden' });
+    }
     const user = await User.findById(req.params.id);
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
@@ -40,10 +55,14 @@ router.put('/:id/accept-terms', async (req, res) => {
   }
 });
 
-router.put('/:id/saved-card', async (req, res) => {
+router.put('/:id/saved-card', auth, async (req, res) => {
   try {
     const User = require('../models/User');
-    const { cardNumber, cardHolder, expiryDate, cvv } = req.body;
+    if (String(req.user._id) !== String(req.params.id)) return res.status(403).json({ message: 'Forbidden' });
+    const { cardNumber, cardHolder, expiryDate } = req.body;
+    if (!/^\d{12,19}$/.test(String(cardNumber || '').replace(/\s/g, ''))) {
+      return res.status(400).json({ message: 'Invalid card details' });
+    }
     const cleanCard = cardNumber.replace(/\s/g, '');
     const masked = '*'.repeat(cleanCard.length - 4) + cleanCard.slice(-4);
     const user = await User.findById(req.params.id);
@@ -52,7 +71,8 @@ router.put('/:id/saved-card', async (req, res) => {
     user.savedCard.maskedNumber = masked;
     user.savedCard.cardHolder = cardHolder;
     user.savedCard.expiryDate = expiryDate;
-    user.savedCard.cardToken = Buffer.from(cleanCard + '|' + cvv + '|' + expiryDate).toString('base64');
+    // Never store PAN or CVV. A payment-provider token must be used for charging.
+    user.savedCard.cardToken = undefined;
     user.savedCard.savedAt = new Date();
     await user.save();
     res.json({ success: true });

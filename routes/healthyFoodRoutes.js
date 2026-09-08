@@ -7,12 +7,37 @@ const HealthyFoodOrder = require('../models/HealthyFoodOrder');
 const router = express.Router();
 const zestUrl = () => (process.env.ZEST_API_URL || 'http://localhost:5050/api').replace(/\/$/, '');
 const zestHeaders = () => ({ 'Content-Type': 'application/json', 'X-Vita-Key': process.env.VITA_ZEST_SHARED_KEY || 'change-me' });
+const zestTimeoutMs = () => {
+  const configured = Number(process.env.ZEST_API_TIMEOUT_MS);
+  return Number.isFinite(configured) && configured >= 1000 ? configured : 8000;
+};
 
 const zestRequest = async (path, options = {}) => {
-  const response = await fetch(`${zestUrl()}${path}`, { ...options, headers: { ...zestHeaders(), ...(options.headers || {}) } });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw Object.assign(new Error(data.message || 'تعذر الاتصال بزيست'), { status: response.status });
-  return data;
+  const requestUrl = `${zestUrl()}${path}`;
+  try {
+    const response = await fetch(requestUrl, {
+      ...options,
+      headers: { ...zestHeaders(), ...(options.headers || {}) },
+      signal: options.signal || AbortSignal.timeout(zestTimeoutMs()),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw Object.assign(new Error(data.message || 'تعذر تنفيذ الطلب لدى خدمة الوجبات الصحية'), {
+        status: response.status,
+        code: 'ZEST_UPSTREAM_ERROR',
+      });
+    }
+    return data;
+  } catch (error) {
+    if (error.code === 'ZEST_UPSTREAM_ERROR') throw error;
+
+    const timedOut = error.name === 'TimeoutError' || error.name === 'AbortError';
+    console.error(`[Zest] ${timedOut ? 'request timed out' : 'service unavailable'}: ${requestUrl} (${error.cause?.code || error.code || error.message})`);
+    throw Object.assign(
+      new Error(timedOut ? 'خدمة الوجبات الصحية تستغرق وقتاً أطول من المتوقع، يرجى المحاولة لاحقاً' : 'خدمة الوجبات الصحية غير متاحة حالياً، يرجى المحاولة لاحقاً'),
+      { status: 503, code: timedOut ? 'ZEST_TIMEOUT' : 'ZEST_UNAVAILABLE' }
+    );
+  }
 };
 
 router.get('/catalog', auth, async (_req, res, next) => {
@@ -142,6 +167,14 @@ router.post('/webhook/cancelled', async (req, res, next) => {
     order.status = 'Cancelled'; await order.save();
     res.json({ ok: true });
   } catch (error) { next(error); }
+});
+
+// Always return integration errors as safe JSON instead of Express HTML/stack traces.
+router.use((error, _req, res, _next) => {
+  res.status(error.status || 500).json({
+    message: error.status ? error.message : 'تعذر إتمام طلب الوجبات الصحية حالياً',
+    code: error.code || 'HEALTHY_FOOD_ERROR',
+  });
 });
 
 module.exports = router;

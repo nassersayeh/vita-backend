@@ -30,26 +30,12 @@ router.get('/:id/trial-status', auth, async (req, res) => {
     const user = await require('../models/User').findById(req.params.id);
     if (!user) return res.status(404).json({ message: 'User not found' });
     
-    const now = new Date();
-    // Check subscription type first (can be 'paid', 'free', or undefined)
-    const subscriptionEndDate = user.subscriptionEndDate ? new Date(user.subscriptionEndDate) : null;
-    const subscriptionExpired = !!(subscriptionEndDate && now >= subscriptionEndDate && user.subscriptionStatus === 'active');
-    const isPaid = !subscriptionExpired && (
-      user.subscriptionType === 'paid' ||
-      user.subscriptionStatus === 'active' ||
-      user.isPaid === true
-    );
-    
-    let trialEndDate = user.trialEndDate;
-    const isTrialActive = !isPaid && trialEndDate && now < trialEndDate;
-    const timeLeft = isTrialActive ? trialEndDate - now : 0;
-    
     res.json({
-      isTrialActive,
-      trialEndDate,
-      timeLeft,
-      isPaid: isPaid,
-      isSubscriptionExpired: subscriptionExpired,
+      isTrialActive: false,
+      trialEndDate: null,
+      timeLeft: 0,
+      isPaid: true,
+      isSubscriptionExpired: false,
       hasAcceptedOffer: user.hasAcceptedOffer || false,
       trialUsed: user.trialUsed || false,
       dashboardRemainingTrialMs: user.dashboardRemainingTrialMs || null,
@@ -59,18 +45,6 @@ router.get('/:id/trial-status', auth, async (req, res) => {
         cardHolder: user.savedCard.cardHolder,
         expiryDate: user.savedCard.expiryDate,
       } : null,
-      subscriptionEndDate: user.subscriptionEndDate,
-      subscriptionType: user.subscriptionType,
-      subscriptionStatus: user.subscriptionStatus,
-      subscriptionPlanKey: user.subscriptionPlanKey,
-      subscriptionPlanName: user.subscriptionPlanName,
-      subscriptionMonthlyPrice: user.subscriptionMonthlyPrice,
-      subscriptionYearlyPrice: user.subscriptionYearlyPrice,
-      subscriptionBillingCycle: user.subscriptionBillingCycle,
-      subscriptionSelectedPrice: user.subscriptionSelectedPrice,
-      subscriptionStartDate: user.subscriptionStartDate,
-      paymentMethod: user.paymentMethod,
-      planChangeRequest: user.planChangeRequest,
     });
   } catch (error) {
     res.status(500).json({ message: 'Server error' });

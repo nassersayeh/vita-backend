@@ -1,6 +1,104 @@
 const express = require('express');
 const router = express.Router();
 const adminController = require('../controllers/adminController');
+const auth = require('../middleware/auth');
+const User = require('../models/User');
+const mongoose = require('mongoose');
+const LabRequest = require('../models/LabRequest');
+const MedicalRecord = require('../models/MedicalRecord');
+const PharmacyPrescriptionQuote = require('../models/PharmacyPrescriptionQuote');
+const PartnerCommissionSettlement = require('../models/PartnerCommissionSettlement');
+
+const requireAdmin = (req, res, next) => {
+  if (!['Admin', 'Superadmin'].includes(req.user?.role)) return res.status(403).json({ message: 'Admin access required' });
+  next();
+};
+
+router.get('/patient-ordering-pharmacies', auth, requireAdmin, async (req, res) => {
+  const pharmacies = await User.find({ role: 'Pharmacy' }).select('fullName city address activationStatus patientOrderingEnabled').sort({ fullName: 1 }).lean();
+  res.json({ pharmacies });
+});
+
+router.put('/patient-ordering-pharmacies/:pharmacyId', auth, requireAdmin, async (req, res) => {
+  const pharmacy = await User.findOneAndUpdate(
+    { _id: req.params.pharmacyId, role: 'Pharmacy' },
+    { $set: { patientOrderingEnabled: req.body.enabled === true } },
+    { new: true, runValidators: true }
+  ).select('fullName city address activationStatus patientOrderingEnabled');
+  if (!pharmacy) return res.status(404).json({ message: 'Pharmacy not found' });
+  res.json({ pharmacy });
+});
+
+const commissionSource = {
+  radiology: {
+    Model: LabRequest, rate: 5, providerField: 'labId', grossField: 'totalCost', commissionField: 'vitaCommissionAmount',
+    base: { status: 'completed', sourceChannel: 'vita_partner_network', vitaSettlement: null },
+  },
+  pharmacy: {
+    Model: PharmacyPrescriptionQuote, rate: 2, providerField: 'pharmacy', grossField: 'discountedTotal', commissionField: 'vitaCommissionTotal',
+    base: { status: { $in: ['priced', 'dispensed'] }, vitaSettlement: null },
+  },
+  dentist: {
+    Model: MedicalRecord, rate: 5, providerField: 'doctor', grossField: 'billing.paidAmount', commissionField: 'vitaCommissionAmount',
+    base: { $or: [{ partnerSourceChannel: 'vita_partner_network' }, { partnerSourceChannel: { $exists: false }, 'billing.totalAmount': { $exists: true } }], vitaSettlement: null, 'billing.paidAmount': { $gt: 0 }, vitaCommissionAmount: { $gt: 0 } },
+  },
+};
+
+const summarizePendingCommissions = async () => {
+  const summaries = await Promise.all(Object.entries(commissionSource).map(async ([providerType, config]) => {
+    const rows = await config.Model.aggregate([
+      { $match: config.base },
+      { $group: { _id: `$${config.providerField}`, grossAmount: { $sum: `$${config.grossField}` }, vitaCommissionAmount: { $sum: `$${config.commissionField}` }, sourceCount: { $sum: 1 } } },
+      { $match: { vitaCommissionAmount: { $gt: 0 } } },
+      { $lookup: { from: 'users', localField: '_id', foreignField: '_id', as: 'provider' } },
+      { $unwind: '$provider' },
+      { $project: { providerId: '$_id', _id: 0, providerName: '$provider.fullName', city: '$provider.city', grossAmount: 1, vitaCommissionAmount: 1, sourceCount: 1 } },
+    ]);
+    return rows.map((row) => ({ ...row, providerType, commissionRate: config.rate }));
+  }));
+  return summaries.flat().sort((a, b) => b.vitaCommissionAmount - a.vitaCommissionAmount);
+};
+
+router.get('/partner-commissions', auth, requireAdmin, async (req, res) => {
+  try {
+    const year = Math.min(2100, Math.max(2020, Number(req.query.year) || new Date().getFullYear()));
+    const month = Math.min(12, Math.max(1, Number(req.query.month) || new Date().getMonth() + 1));
+    const from = new Date(Date.UTC(year, month - 1, 1));
+    const to = new Date(Date.UTC(year, month, 1));
+    const [pending, settlements] = await Promise.all([
+      summarizePendingCommissions(),
+      PartnerCommissionSettlement.find({ receivedAt: { $gte: from, $lt: to } })
+        .populate('provider', 'fullName city role specialty').populate('receivedBy', 'fullName').sort({ receivedAt: -1 }).lean(),
+    ]);
+    const totals = pending.reduce((value, row) => ({ grossAmount: value.grossAmount + Number(row.grossAmount || 0), vitaCommissionAmount: value.vitaCommissionAmount + Number(row.vitaCommissionAmount || 0) }), { grossAmount: 0, vitaCommissionAmount: 0 });
+    const monthlyTotals = settlements.reduce((value, row) => ({ grossAmount: value.grossAmount + Number(row.grossAmount || 0), vitaCommissionAmount: value.vitaCommissionAmount + Number(row.vitaCommissionAmount || 0), settlements: value.settlements + 1 }), { grossAmount: 0, vitaCommissionAmount: 0, settlements: 0 });
+    res.json({ pending, settlements, totals, monthlyTotals, period: { year, month } });
+  } catch (error) { res.status(500).json({ message: 'Failed to load partner commissions.' }); }
+});
+
+router.post('/partner-commissions/receive', auth, requireAdmin, async (req, res) => {
+  const config = commissionSource[req.body.providerType];
+  if (!config || !mongoose.isValidObjectId(req.body.providerId)) return res.status(400).json({ message: 'Invalid provider settlement.' });
+  const settlementId = new mongoose.Types.ObjectId();
+  const providerId = new mongoose.Types.ObjectId(req.body.providerId);
+  const filter = { ...config.base, [config.providerField]: providerId };
+  try {
+    const sourceRows = await config.Model.find(filter).select(`${config.grossField} ${config.commissionField}`).lean();
+    const eligible = sourceRows.filter((row) => Number(config.grossField.split('.').reduce((value, key) => value?.[key], row) || 0) >= 0 && Number(row[config.commissionField] || 0) > 0);
+    if (!eligible.length) return res.status(409).json({ message: 'No pending commission remains for this provider.' });
+    const sourceIds = eligible.map((row) => row._id);
+    await config.Model.updateMany({ _id: { $in: sourceIds }, vitaSettlement: null }, { $set: { vitaSettlement: settlementId } });
+    const settledRows = await config.Model.find({ _id: { $in: sourceIds }, vitaSettlement: settlementId }).select(`${config.grossField} ${config.commissionField}`).lean();
+    if (!settledRows.length) return res.status(409).json({ message: 'This balance was already received.' });
+    const grossAmount = settledRows.reduce((sum, row) => sum + Number(config.grossField.split('.').reduce((value, key) => value?.[key], row) || 0), 0);
+    const vitaCommissionAmount = settledRows.reduce((sum, row) => sum + Number(row[config.commissionField] || 0), 0);
+    const settlement = await PartnerCommissionSettlement.create({ _id: settlementId, provider: providerId, providerType: req.body.providerType, commissionRate: config.rate, grossAmount: Number(grossAmount.toFixed(2)), vitaCommissionAmount: Number(vitaCommissionAmount.toFixed(2)), sourceCount: settledRows.length, sourceIds: settledRows.map((row) => row._id), receivedBy: req.user._id, receivedAt: new Date() });
+    res.status(201).json({ settlement });
+  } catch (error) {
+    await config.Model.updateMany({ vitaSettlement: settlementId }, { $set: { vitaSettlement: null } }).catch(() => {});
+    res.status(500).json({ message: 'Failed to receive partner commission.' });
+  }
+});
 
 // Get pending approvals
 router.get('/pending-approvals', adminController.getPendingApprovals);

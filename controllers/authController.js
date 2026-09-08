@@ -3,8 +3,38 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const Otp = require('../models/Otp');
 const nodemailer = require('nodemailer');
+const crypto = require('crypto');
+const { validatePasswordPolicy } = require('../utils/passwordPolicy');
 const { send2FACode, sendWhatsAppMessage, isWhatsAppReady } = require('../services/whatsappService');
 require('dotenv').config();
+
+const RESET_REQUEST_MESSAGE = 'If an account matches that mobile number, a verification code will be sent.';
+const DUMMY_PASSWORD_HASH = '$2b$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy';
+
+const getPasswordPolicyMessage = (code) => ({
+  PASSWORD_TOO_SHORT: 'Password must be at least 8 characters long.',
+  PASSWORD_TOO_LONG: 'Password is too long.',
+  PASSWORD_CONTAINS_NAME: 'Password must not contain the account holder name.',
+}[code]);
+
+const validatePassword = (password, fullName) => getPasswordPolicyMessage(validatePasswordPolicy(password, fullName));
+
+const getResetCodeDigest = (userId, code) => {
+  const secret = process.env.RESET_CODE_SECRET || process.env.JWT_SECRET;
+  if (!secret) throw new Error('RESET_CODE_SECRET or JWT_SECRET must be configured.');
+  return crypto.createHmac('sha256', secret).update(`${userId}:${code}`).digest('hex');
+};
+
+const getPhoneVerificationDigest = (userId, code) => {
+  const secret = process.env.RESET_CODE_SECRET || process.env.JWT_SECRET;
+  if (!secret) throw new Error('RESET_CODE_SECRET or JWT_SECRET must be configured.');
+  return crypto.createHmac('sha256', secret).update(`phone:${userId}:${code}`).digest('hex');
+};
+
+const resetCodesMatch = (storedDigest, candidateDigest) => {
+  if (!storedDigest || storedDigest.length !== candidateDigest.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(storedDigest, 'hex'), Buffer.from(candidateDigest, 'hex'));
+};
 
 const DEFAULT_DOCTOR_WORKPLACE_SCHEDULE = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
   .map((day) => ({
@@ -18,6 +48,42 @@ const createDefaultDoctorWorkplace = (fullName, address) => ({
   schedule: DEFAULT_DOCTOR_WORKPLACE_SCHEDULE,
   isActive: true,
 });
+
+const ID_FORMATS = {
+  Palestine: { type: 'numeric', lengths: [9] },
+  Jordan: { type: 'numeric', lengths: [10] },
+  'Saudi Arabia': { type: 'numeric', lengths: [10] },
+  Qatar: { type: 'numeric', lengths: [11] },
+};
+
+const validateIdNumber = (idNumber, country) => {
+  const normalized = String(idNumber || '').trim().toUpperCase();
+  const format = ID_FORMATS[country];
+  if (!normalized) return { message: 'ID number is required.' };
+  if (!format) return { message: 'Unsupported country.' };
+  if (format.type === 'numeric' && !/^\d+$/.test(normalized)) return { message: 'ID number must contain digits only.' };
+  if (format.type === 'alphanumeric' && !/^[A-Z0-9]+$/.test(normalized)) return { message: 'ID number must contain letters and digits only.' };
+  if (!format.lengths.includes(normalized.length)) return { message: `ID number must be ${format.lengths.join(' or ')} characters long.` };
+  return { value: normalized };
+};
+
+const requiresPatientProfileCompletion = (user) => user.role === 'User'
+  && (!user.birthdate || !user.sex || !user.idNumber || !user.address);
+
+exports.checkUsername = async (req, res) => {
+  try {
+    const username = typeof req.body?.username === 'string' ? req.body.username.trim() : '';
+    if (!username || username.length > 14 || !/^[a-zA-Z0-9_]+$/.test(username)) {
+      return res.status(400).json({ available: false, message: 'Invalid username.' });
+    }
+
+    const exists = await User.exists({ username });
+    return res.json({ available: !exists });
+  } catch (error) {
+    console.error('Username availability check failed:', error.message);
+    return res.status(500).json({ message: 'Unable to check username right now.' });
+  }
+};
 
 // Create email transporter
 const transporter = nodemailer.createTransport({
@@ -122,37 +188,17 @@ const formatWhatsAppDisplayName = (fullName = '', role = 'User', language = 'ar'
   return title ? `${title} ${name}` : name;
 };
 
-const PLAN_REQUIRED_ROLES = ['Doctor', 'Pharmacy', 'Lab'];
-const VALID_PAYMENT_METHODS = ['visa', 'cash', 'bank_transfer', 'reflect'];
-const VALID_BILLING_CYCLES = ['monthly', 'yearly'];
-const SUBSCRIPTION_PLANS = {
-  core: {
-    name: 'Core System',
-    monthlyPrice: 100,
-    yearlyPrice: 1000,
-    trialDays: 7,
-  },
-  growth: {
-    name: 'Growth + AI',
-    monthlyPrice: 500,
-    yearlyPrice: 5000,
-    trialDays: 0,
-  },
-  premium: {
-    name: 'Premium Media Growth',
-    monthlyPrice: 1500,
-    yearlyPrice: 15000,
-    trialDays: 0,
-  },
-};
-
 exports.signup = async (req, res) => {
   try {
-    const { profileImage, fullName, username, birthdate, mobile, password, country, city, idNumber, address, sex, role, email, termsAccepted, subscriptionPlan, subscriptionBillingCycle, paymentMethod } = req.body;
+    const { profileImage, fullName, username, birthdate, mobile, password, country, city, idNumber, address, sex, role, email, termsAccepted, registrationChannel } = req.body;
+    const stringInputs = { fullName, username, mobile, password, country, city, idNumber, address, sex, role, email };
+    if (Object.values(stringInputs).some((value) => value !== undefined && typeof value !== 'string')) {
+      return res.status(400).json({ message: 'Invalid registration data.' });
+    }
+    if ([fullName, username, mobile, country, city, idNumber, address, email].some((value) => value && value.length > 200)) {
+      return res.status(400).json({ message: 'Invalid registration data.' });
+    }
     const normalizedMobile = normalizeLocalMobile(mobile, country);
-    const selectedPlan = subscriptionPlan ? SUBSCRIPTION_PLANS[subscriptionPlan] : null;
-    const selectedBillingCycle = VALID_BILLING_CYCLES.includes(subscriptionBillingCycle) ? subscriptionBillingCycle : null;
-    const selectedPaymentMethod = paymentMethod && VALID_PAYMENT_METHODS.includes(paymentMethod) ? paymentMethod : null;
     
     // Normalize email - treat empty string as undefined
     const normalizedEmail = email && email.trim() ? email.trim() : undefined;
@@ -162,26 +208,16 @@ exports.signup = async (req, res) => {
     // Terms acceptance is optional for backwards compatibility with older mobile builds.
     
     // Basic validations
-    if (!fullName || !mobile || !country || !city || !idNumber || !role) {
+    const isDeferredMobilePatient = registrationChannel === 'mobile' && role === 'User';
+    if (!fullName || !mobile || !country || !city || (!isDeferredMobilePatient && !idNumber) || !role) {
       return res.status(400).json({ message: 'Please fill all required fields.' });
     }
     
-    // Address required only for patients
-    if (role === 'User' && !address) {
+    // Only the simplified mobile patient flow may defer the address.
+    if (!isDeferredMobilePatient && !address) {
       return res.status(400).json({ message: 'Address is required.' });
     }
 
-    if (PLAN_REQUIRED_ROLES.includes(role) && !selectedPlan) {
-      return res.status(400).json({ message: 'Please choose a valid subscription plan.' });
-    }
-
-    if (PLAN_REQUIRED_ROLES.includes(role) && !selectedBillingCycle) {
-      return res.status(400).json({ message: 'Please choose a valid billing cycle.' });
-    }
-
-    if (PLAN_REQUIRED_ROLES.includes(role) && !selectedPaymentMethod) {
-      return res.status(400).json({ message: 'Please choose a valid payment method.' });
-    }
     
     // Email is optional for all roles
     
@@ -190,8 +226,12 @@ exports.signup = async (req, res) => {
     if (existingUser) return res.status(400).json({ message: 'mobileNumber already exists.' });
     
     // Check if idNumber already exists
-    const existingId = await User.findOne({ idNumber });
-    if (existingId) return res.status(400).json({ message: 'idNumber already exists.' });
+    if (idNumber) {
+      const idValidation = validateIdNumber(idNumber, country);
+      if (idValidation.message) return res.status(400).json({ message: idValidation.message });
+      const existingId = await User.findOne({ idNumber: idValidation.value });
+      if (existingId) return res.status(400).json({ message: 'idNumber already exists.' });
+    }
     
     // Check if username already exists (if provided and not empty)
     if (normalizedUsername) {
@@ -205,12 +245,12 @@ exports.signup = async (req, res) => {
       if (existingEmail) return res.status(400).json({ message: 'email already exists.' });
     }
     
-    // Hash password - use default if the registration password field is left empty
-    const effectivePassword = password && String(password).trim() ? password : '123456789';
-    const hashedPassword = await bcrypt.hash(effectivePassword, 10);
+    const passwordError = validatePassword(password, fullName);
+    if (passwordError) return res.status(400).json({ message: passwordError });
+    const hashedPassword = await bcrypt.hash(password, 10);
     
     // Generate verification code
-    const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+    const verificationCode = crypto.randomInt(100000, 1000000).toString();
     const verificationCodeExpiration = Date.now() + 10 * 60 * 1000; // 10 minutes
     
     const newUser = new User({
@@ -221,14 +261,13 @@ exports.signup = async (req, res) => {
       password: hashedPassword,
       country,
       city,
-      idNumber,
+      idNumber: idNumber ? String(idNumber).trim().toUpperCase() : undefined,
       birthdate,
       address,
       sex: ['Pharmacy', 'Lab', 'Clinic'].includes(role) ? undefined : sex,
       role,
       profileImage,
       isPhoneVerified: false, // Not verified yet
-      phoneVerificationCode: verificationCode,
       phoneVerificationCodeExpiration: verificationCodeExpiration,
       // Terms and Conditions
       termsAccepted: Boolean(termsAccepted),
@@ -236,19 +275,8 @@ exports.signup = async (req, res) => {
       termsVersion: '1.0',
       // Add default workplace for doctors
       workplaces: role === 'Doctor' ? [createDefaultDoctorWorkplace(fullName, address)] : undefined,
-      // Initialize subscription for new pharmacies
-      isPaid: PLAN_REQUIRED_ROLES.includes(role) ? false : undefined,
-      subscriptionPlanKey: selectedPlan ? subscriptionPlan : undefined,
-      subscriptionPlanName: selectedPlan ? selectedPlan.name : undefined,
-      subscriptionMonthlyPrice: selectedPlan ? selectedPlan.monthlyPrice : undefined,
-      subscriptionYearlyPrice: selectedPlan ? selectedPlan.yearlyPrice : undefined,
-      subscriptionBillingCycle: selectedPlan ? selectedBillingCycle : undefined,
-      subscriptionSelectedPrice: selectedPlan ? (selectedBillingCycle === 'yearly' ? selectedPlan.yearlyPrice : selectedPlan.monthlyPrice) : undefined,
-      subscriptionType: selectedPlan ? 'selected' : undefined,
-      subscriptionStatus: selectedPlan ? 'pending_approval' : undefined,
-      paymentMethod: selectedPaymentMethod || undefined,
-      paymentMethodSelectedAt: selectedPaymentMethod ? new Date() : undefined,
     });
+    newUser.phoneVerificationCode = getPhoneVerificationDigest(newUser._id, verificationCode);
     await newUser.save();
     
     // For professional roles (Pharmacy, Doctor, Lab, Clinic), skip verification - auto-login
@@ -304,7 +332,7 @@ exports.signup = async (req, res) => {
       // Auto-generate token so pharmacy can login immediately
       const token = jwt.sign(
         { userId: newUser._id, role: newUser.role },
-        process.env.JWT_SECRET || 'your-secret-key',
+        process.env.JWT_SECRET,
         { expiresIn: '7d' }
       );
       
@@ -406,6 +434,7 @@ exports.signup = async (req, res) => {
         requiresVerification: true,
         userId: newUser._id,
         sentVia: [],
+        ...(process.env.NODE_ENV === 'development' && { devCode: verificationCode }),
       });
     }
     
@@ -415,6 +444,7 @@ exports.signup = async (req, res) => {
       requiresVerification: true,
       userId: newUser._id,
       sentVia: sentVia,
+      ...(process.env.NODE_ENV === 'development' && { devCode: verificationCode }),
       // For development only - remove in production
       ...(process.env.NODE_ENV === 'development' && { devCode: verificationCode })
     });
@@ -434,6 +464,9 @@ exports.signup = async (req, res) => {
 exports.login = async (req, res) => {
   try {
     const { mobile, password } = req.body;
+    if (typeof mobile !== 'string' || !mobile || mobile.length > 40 || typeof password !== 'string' || Buffer.byteLength(password, 'utf8') > 72) {
+      return res.status(400).json({ message: 'Invalid mobile number or password.' });
+    }
     const user = await User.findOne({ mobileNumber: { $in: getLoginMobileLookupCandidates(mobile) } });
     
     // If not found in Users, check InsuranceCompany and OversightAccount
@@ -449,7 +482,7 @@ exports.login = async (req, res) => {
         
         const token = jwt.sign(
           { companyId: insuranceCompany._id, role: 'insurance_company' },
-          process.env.JWT_SECRET || 'your-secret-key',
+          process.env.JWT_SECRET,
           { expiresIn: '7d' }
         );
         
@@ -479,7 +512,7 @@ exports.login = async (req, res) => {
         
         const token = jwt.sign(
           { accountId: oversightAccount._id, role: 'oversight' },
-          process.env.JWT_SECRET || 'your-secret-key',
+          process.env.JWT_SECRET,
           { expiresIn: '7d' }
         );
         
@@ -502,6 +535,7 @@ exports.login = async (req, res) => {
         });
       }
       
+      await bcrypt.compare(password, DUMMY_PASSWORD_HASH);
       return res.status(400).json({ message: 'Invalid mobile number or password.' });
     }
     
@@ -511,10 +545,10 @@ exports.login = async (req, res) => {
     // Check if phone is verified
     if (user.isPhoneVerified === false) {
       // Generate new verification code
-      const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+      const verificationCode = crypto.randomInt(100000, 1000000).toString();
       const verificationCodeExpiration = Date.now() + 10 * 60 * 1000;
       
-      user.phoneVerificationCode = verificationCode;
+      user.phoneVerificationCode = getPhoneVerificationDigest(user._id, verificationCode);
       user.phoneVerificationCodeExpiration = verificationCodeExpiration;
       await user.save({ validateBeforeSave: false });
       
@@ -596,7 +630,7 @@ exports.login = async (req, res) => {
     // Generate JWT token
     const token = jwt.sign(
       { userId: user._id, role: user.role },
-      process.env.JWT_SECRET || 'your-secret-key',
+      process.env.JWT_SECRET,
       { expiresIn: '7d' }
     );
     
@@ -616,6 +650,7 @@ exports.login = async (req, res) => {
         idNumber: updatedUser.idNumber,
         birthdate: updatedUser.birthdate,
         sex: updatedUser.sex,
+        requiresProfileCompletion: requiresPatientProfileCompletion(updatedUser),
         height: updatedUser.height,
         weight: updatedUser.weight,
         bloodType: updatedUser.bloodType,
@@ -624,6 +659,7 @@ exports.login = async (req, res) => {
         points: updatedUser.points || 0,
         language: updatedUser.language || 'en',
         specialty: updatedUser.specialty || '',
+        patientOrderingEnabled: updatedUser.patientOrderingEnabled,
         managedByClinic: updatedUser.managedByClinic || false,
         clinicId: updatedUser.clinicId || null,
         activationStatus: updatedUser.activationStatus,
@@ -653,42 +689,81 @@ exports.login = async (req, res) => {
   }
 };
 
+exports.completeMobileProfile = async (req, res) => {
+  try {
+    if (req.user.role !== 'User') return res.status(403).json({ message: 'Patient profile only.' });
+
+    const { birthdate, sex, idNumber, address } = req.body || {};
+    const cleanAddress = typeof address === 'string' ? address.trim() : '';
+    if (!cleanAddress || cleanAddress.length > 200) return res.status(400).json({ field: 'address', message: 'A valid address is required.' });
+    if (!['Male', 'Female'].includes(sex)) return res.status(400).json({ field: 'sex', message: 'A valid gender is required.' });
+
+    const parsedBirthdate = new Date(birthdate);
+    const today = new Date();
+    if (!birthdate || Number.isNaN(parsedBirthdate.getTime()) || parsedBirthdate > today) {
+      return res.status(400).json({ field: 'birthdate', message: 'A valid date of birth is required.' });
+    }
+
+    const idValidation = validateIdNumber(idNumber, req.user.country);
+    if (idValidation.message) return res.status(400).json({ field: 'idNumber', message: idValidation.message });
+    const duplicate = await User.exists({ idNumber: idValidation.value, _id: { $ne: req.user._id } });
+    if (duplicate) return res.status(409).json({ field: 'idNumber', message: 'idNumber already exists.' });
+
+    req.user.birthdate = parsedBirthdate;
+    req.user.sex = sex;
+    req.user.idNumber = idValidation.value;
+    req.user.address = cleanAddress;
+    await req.user.save();
+
+    const user = req.user.toObject();
+    delete user.password;
+    delete user.phoneVerificationCode;
+    delete user.resetCode;
+    user.requiresProfileCompletion = false;
+    return res.json({ message: 'Profile completed successfully.', user });
+  } catch (error) {
+    if (error?.code === 11000) return res.status(409).json({ field: 'idNumber', message: 'idNumber already exists.' });
+    console.error('Mobile profile completion error:', error);
+    return res.status(500).json({ message: 'Server error while completing profile.' });
+  }
+};
+
 exports.forgotPassword = async (req, res) => {
   try {
     const mobile = req.body.mobile || req.body.mobileNumber || req.body.phone;
-    if (!mobile) {
-      return res.status(400).json({ message: "Mobile number is required." });
+    if (typeof mobile !== 'string' || !mobile || mobile.length > 40) return res.status(400).json({ message: 'Mobile number is required.' });
+
+    // Check delivery availability before looking up the account. This keeps
+    // account existence private while preventing a false "code sent" result.
+    if (!(await isWhatsAppReady())) {
+      console.warn('Password reset delivery unavailable: WhatsApp is not connected.');
+      return res.status(503).json({ message: 'Password reset delivery is temporarily unavailable.' });
     }
 
     const user = await User.findOne({ mobileNumber: { $in: getLoginMobileLookupCandidates(mobile) } });
     if (!user) {
-      return res.status(404).json({ message: "Mobile number not found." });
+      await bcrypt.compare('not-a-real-password', DUMMY_PASSWORD_HASH);
+      return res.json({ message: RESET_REQUEST_MESSAGE });
     }
     if (!user.mobileNumber) {
-      return res.status(400).json({ message: "No mobile number found for this account." });
+      return res.json({ message: RESET_REQUEST_MESSAGE });
     }
-    if (!(await isWhatsAppReady())) {
-      return res.status(503).json({ message: "WhatsApp is not connected. Please try again later." });
-    }
-
-    // Generate a random 6-digit code
-    const resetCode = Math.floor(100000 + Math.random() * 900000).toString();
-    // Set expiration (e.g., 15 minutes)
-    const resetCodeExpiration = Date.now() + 15 * 60 * 1000;
-    user.resetCode = resetCode;
+    const resetCode = crypto.randomInt(100000, 1000000).toString();
+    const resetCodeExpiration = Date.now() + 10 * 60 * 1000;
+    user.resetCode = getResetCodeDigest(user._id, resetCode);
     user.resetCodeExpiration = resetCodeExpiration;
+    user.resetCodeAttempts = 0;
     // Save without validating required fields
     await user.save({ validateBeforeSave: false });
 
-    const whatsappResult = await send2FACode(user.mobileNumber, resetCode, 'en', user.country);
+    await send2FACode(user.mobileNumber, resetCode, 'en', user.country);
     res.json({
-      message: "Verification code sent to your WhatsApp.",
-      sentVia: ['whatsapp'],
-      phone: whatsappResult.phone
+      message: RESET_REQUEST_MESSAGE,
+      sentVia: ['whatsapp']
     });
   } catch (error) {
     console.error("Forgot password error:", error);
-    res.status(500).json({ message: error.message || "Server error." });
+    res.status(500).json({ message: 'Unable to process the request right now.' });
   }
 };
 
@@ -697,36 +772,52 @@ exports.verifyCode = async (req, res) => {
   try {
     const mobile = req.body.mobile || req.body.mobileNumber || req.body.phone;
     const { code, newPassword } = req.body;
-    if (!mobile || !code) {
-      return res.status(400).json({ message: "Mobile number and verification code are required." });
+    if (typeof mobile !== 'string' || mobile.length > 40 || !/^\d{6}$/.test(String(code || ''))) {
+      return res.status(400).json({ message: 'Mobile number and a valid verification code are required.' });
     }
 
-    const user = await User.findOne({ mobileNumber: { $in: getLoginMobileLookupCandidates(mobile) } });
+    const user = await User.findOne({ mobileNumber: { $in: getLoginMobileLookupCandidates(mobile) } })
+      .select('+resetCodeAttempts');
     if (!user || !user.resetCode || !user.resetCodeExpiration) {
-      return res.status(404).json({ message: "No reset request found." });
-    }
-    // Check if the code is expired or invalid
-    if (Date.now() > user.resetCodeExpiration || user.resetCode !== code) {
-      return res.status(400).json({ message: "Invalid or expired code." });
+      return res.status(400).json({ message: 'Invalid or expired code.' });
     }
 
+    if (Date.now() > user.resetCodeExpiration || (user.resetCodeAttempts || 0) >= 5) {
+      user.resetCode = undefined;
+      user.resetCodeExpiration = undefined;
+      user.resetCodeAttempts = 0;
+      await user.save({ validateBeforeSave: false });
+      return res.status(400).json({ message: 'Invalid or expired code.' });
+    }
+
+    const candidateDigest = getResetCodeDigest(user._id, String(code));
+    if (!resetCodesMatch(user.resetCode, candidateDigest)) {
+      user.resetCodeAttempts = (user.resetCodeAttempts || 0) + 1;
+      await user.save({ validateBeforeSave: false });
+      return res.status(400).json({ message: 'Invalid or expired code.' });
+    }
+
+    // The web flow validates the code on its own step before asking for a new
+    // password. Keep the same code alive for the final reset request.
     if (!newPassword) {
-      return res.json({
-        message: "Verification successful. Please enter a new password.",
-        requiresNewPassword: true
-      });
+      return res.json({ message: 'Verification code is valid.', requiresNewPassword: true });
     }
 
-    if (String(newPassword).length < 6) {
-      return res.status(400).json({ message: "Password must be at least 6 characters long." });
+    const passwordError = validatePassword(newPassword, user.fullName);
+    if (passwordError) return res.status(400).json({ message: passwordError });
+
+    if (await bcrypt.compare(newPassword, user.password)) {
+      return res.status(400).json({ message: 'This password was used before. Choose a different password.' });
     }
 
     // Generate salt and hash the new password
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(newPassword, salt);
     user.password = hashedPassword;
+    user.passwordChangedAt = new Date();
     user.resetCode = undefined;
     user.resetCodeExpiration = undefined;
+    user.resetCodeAttempts = 0;
     // Save without running all validations
     await user.save({ validateBeforeSave: false });
 
@@ -763,7 +854,9 @@ exports.verifyPhone = async (req, res) => {
       return res.status(400).json({ message: 'Verification code has expired. Please request a new one.' });
     }
     
-    if (user.phoneVerificationCode !== code) {
+    const candidateDigest = getPhoneVerificationDigest(user._id, String(code));
+    const isLegacyPlaintextCode = user.phoneVerificationCode === String(code);
+    if (!isLegacyPlaintextCode && !resetCodesMatch(user.phoneVerificationCode, candidateDigest)) {
       return res.status(400).json({ message: 'Invalid verification code.' });
     }
     
@@ -801,11 +894,15 @@ exports.resendVerificationCode = async (req, res) => {
       return res.status(400).json({ message: 'Phone number is already verified.' });
     }
     
-    // Generate new verification code
-    const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+    // Generate a new code, but keep the current valid code recoverable until
+    // delivery succeeds. A failed resend must not invalidate the code the user
+    // may already have received.
+    const previousCode = user.phoneVerificationCode;
+    const previousExpiration = user.phoneVerificationCodeExpiration;
+    const verificationCode = crypto.randomInt(100000, 1000000).toString();
     const verificationCodeExpiration = Date.now() + 10 * 60 * 1000; // 10 minutes
     
-    user.phoneVerificationCode = verificationCode;
+    user.phoneVerificationCode = getPhoneVerificationDigest(user._id, verificationCode);
     user.phoneVerificationCodeExpiration = verificationCodeExpiration;
     await user.save({ validateBeforeSave: false });
     
@@ -854,7 +951,13 @@ exports.resendVerificationCode = async (req, res) => {
     }
     
     if (sentVia.length === 0) {
-      return res.status(500).json({ message: 'Failed to send verification code. Please try again.' });
+      if (process.env.NODE_ENV === 'development') {
+        return res.json({ success: true, message: 'Development verification code generated.', sentVia: ['development'], devCode: verificationCode });
+      }
+      user.phoneVerificationCode = previousCode;
+      user.phoneVerificationCodeExpiration = previousExpiration;
+      await user.save({ validateBeforeSave: false });
+      return res.status(503).json({ message: 'Verification delivery is temporarily unavailable. Your previous code is still valid.' });
     }
     
     res.json({ 

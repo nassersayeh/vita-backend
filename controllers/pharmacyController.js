@@ -128,9 +128,13 @@ exports.deleteCustomerForPharmacy = async (req, res) => {
 // New controller to get all pharmacies
 exports.getAllPharmacies = async (req, res) => {
   try {
-    // Retrieve all users with role 'Pharmacy'
-    const pharmacies = await User.find({ role: 'Pharmacy' });
-    console.log(pharmacies)
+    // Patient ordering only exposes active pharmacies enabled by an admin.
+    const pharmacies = await User.find({
+      role: 'Pharmacy',
+      activationStatus: 'active',
+      isPublic: { $ne: false },
+      patientOrderingEnabled: { $ne: false },
+    }).select('fullName city address mobileNumber profileImage');
     res.json(pharmacies);
   } catch (error) {
     console.error('Error fetching pharmacies:', error);
@@ -145,6 +149,9 @@ exports.getPharmaciesByCity = async (req, res) => {
     // البحث عن المستخدمين الذين لديهم دور "Pharmacy" ويعملون في المدينة المحددة
     const pharmacies = await User.find({
       role: 'Pharmacy',
+      activationStatus: 'active',
+      isPublic: { $ne: false },
+      patientOrderingEnabled: { $ne: false },
       city: city
     }).select('fullName address mobileNumber');
 

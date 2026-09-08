@@ -5,7 +5,9 @@ const SPECIALTIES = require('../utils/specialties');
 exports.getAllDoctors = async (req, res) => {
   try {
     // Query users with role === 'Doctor'
-    const doctors = await User.find({ role: 'Doctor', isPublic: { $ne: false } });
+    const nonProductionName = /(^|[\s._-])(test(?:ing)?|demo|sample|fake|تجريب(?:ي|ية)?|اختبار)([\s._-]|$)/i;
+    const doctors = (await User.find({ role: 'Doctor', isPublic: { $ne: false }, activationStatus: 'active' }))
+      .filter((doctor) => !nonProductionName.test(doctor.fullName || ''));
     res.json(doctors);
   } catch (err) {
     console.error(err);
@@ -20,6 +22,8 @@ exports.getSpecialties = async (req, res) => {
       key: s.key,
       value: s.en, // canonical value stored in DB and used in filters
       label: lang === 'ar' ? s.ar : s.en,
+      en: s.en,
+      ar: s.ar,
     }));
     res.json({ specialties: mapped });
   } catch (err) {

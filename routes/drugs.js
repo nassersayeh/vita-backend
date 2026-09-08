@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const Drug = require('../models/Drug');
+const Order = require('../models/Order');
 const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
@@ -223,11 +224,24 @@ router.get('/popular', async (req, res) => {
     const { page = 1, limit = 40 } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
     
-    const drugs = await Drug.find({ isActive: true, unitSellingPrice: { $gt: 0 } })
-      .select('name genericName unitSellingPrice barcode imageUrl imageSourceUrl description externalDescription metadataStatus metadataSource metadataFetchedAt')
+    const orderedDrugIds = await Order.aggregate([
+      { $match: { status: { $nin: ['cancelled', 'declined'] } } },
+      { $unwind: '$items' },
+      { $group: { _id: '$items.item', orderedQuantity: { $sum: '$items.quantity' } } },
+      { $sort: { orderedQuantity: -1 } },
+      { $limit: 500 },
+    ]);
+    const popularity = new Map(orderedDrugIds.map((item, index) => [String(item._id), { rank: index, count: item.orderedQuantity }]));
+    const popularIds = orderedDrugIds.map((item) => item._id);
+    const popularDrugs = await Drug.find({ _id: { $in: popularIds }, isActive: true, unitSellingPrice: { $gt: 0 } })
+      .select('name genericName unitSellingPrice barcode imageUrl imageSourceUrl description externalDescription category manufacturer dosageForm strength activeIngredients');
+    popularDrugs.sort((a, b) => (popularity.get(String(a._id))?.rank ?? 9999) - (popularity.get(String(b._id))?.rank ?? 9999));
+    const fallbackDrugs = await Drug.find({ isActive: true, unitSellingPrice: { $gt: 0 }, _id: { $nin: popularIds } })
+      .select('name genericName unitSellingPrice barcode imageUrl imageSourceUrl description externalDescription category manufacturer dosageForm strength activeIngredients metadataStatus metadataSource metadataFetchedAt')
       .sort({ name: 1 })
-      .skip(skip)
-      .limit(parseInt(limit));
+      .limit(Math.max(parseInt(limit) * parseInt(page), 40));
+    const ranked = [...popularDrugs.map((drug) => ({ ...drug.toObject(), orderCount: popularity.get(String(drug._id))?.count || 0 })), ...fallbackDrugs.map((drug) => drug.toObject())];
+    const drugs = ranked.slice(skip, skip + parseInt(limit));
 
     const total = await Drug.countDocuments({ isActive: true, unitSellingPrice: { $gt: 0 } });
 

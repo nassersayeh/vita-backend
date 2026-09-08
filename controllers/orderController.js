@@ -24,19 +24,19 @@ exports.createOrder = async (req, res) => {
       prescriptionId,
       prescriptionImage,
       prescriptionNotes,
-      paymentMethod,
       deliveryMethod,
       deliveryAddress
     } = req.body;
     console.log('Received request body:', req.body);
 
-    if (!user || !items || total === undefined || total === null) {
+    const authenticatedUserId = req.user?._id;
+    if (!authenticatedUserId || !items || total === undefined || total === null) {
       return res.status(400).json({ message: 'Missing required order fields (user, items, or total).' });
     }
 
-    if (!pharmacyId && !city) {
-      return res.status(400).json({ message: 'City is required for admin medicine orders.' });
-    }
+    if (!pharmacyId) return res.status(400).json({ message: 'Please select a pharmacy.' });
+    const selectedPharmacy = await User.findOne({ _id: pharmacyId, role: 'Pharmacy', activationStatus: 'active', isPublic: { $ne: false }, patientOrderingEnabled: { $ne: false } });
+    if (!selectedPharmacy) return res.status(400).json({ message: 'This pharmacy is not available for patient orders.' });
 
     const hasUploadedPrescriptionFile = Boolean(
       prescriptionImage
@@ -56,7 +56,8 @@ exports.createOrder = async (req, res) => {
     // Check if prescription is one-time and already ordered
     if (prescriptionId && orderType === 'prescription') {
       try {
-        const prescription = await EPrescription.findById(prescriptionId);
+        const prescription = await EPrescription.findOne({ _id: prescriptionId, patientId: authenticatedUserId });
+        if (!prescription) return res.status(404).json({ message: 'Prescription not found for this patient.' });
         if (prescription && prescription.validityType === 'one-time') {
           // Check if an order already exists for this one-time prescription
           const existingOrder = await Order.findOne({ prescriptionId: prescriptionId });
@@ -140,17 +141,18 @@ exports.createOrder = async (req, res) => {
     const newOrder = new Order({
       pharmacyId: pharmacyId || null,
       city: city || deliveryAddress?.city || '',
-      user,
+      user: authenticatedUserId,
       items: processedItems,
       total: finalTotal,
-      // Never trust a patient-supplied status. Every mobile order starts in admin review.
+      // Patient-selected pharmacy receives the order immediately.
       status: 'pending',
-      adminApprovalStatus: 'pending',
+      adminApprovalStatus: 'approved',
+      adminApprovedAt: new Date(),
       orderType: orderType || 'manual',
       prescriptionId: prescriptionId || null,
       prescriptionImage: normalizedPrescriptionImage,
       prescriptionNotes: prescriptionNotes || '',
-      paymentMethod: paymentMethod || 'Cash',
+      paymentMethod: 'Cash',
       deliveryMethod: deliveryMethod || 'pickup',
       deliveryAddress: deliveryAddress || null
     });
@@ -159,9 +161,9 @@ exports.createOrder = async (req, res) => {
 
     // Award points to the patient (points = order total)
     try {
-      let userPoints = await Points.findOne({ userId: user });
+      let userPoints = await Points.findOne({ userId: authenticatedUserId });
       if (!userPoints) {
-        userPoints = new Points({ userId: user });
+        userPoints = new Points({ userId: authenticatedUserId });
       }
 
       const pointsToAdd = Math.floor(finalTotal); // Award points equal to order total
@@ -176,7 +178,7 @@ exports.createOrder = async (req, res) => {
       await userPoints.save();
 
       // Update user's total points
-      const patientUser = await User.findById(user);
+      const patientUser = await User.findById(authenticatedUserId);
       if (patientUser) {
         patientUser.totalPoints = userPoints.totalPoints;
         await patientUser.save({ validateBeforeSave: false });
@@ -191,12 +193,12 @@ exports.createOrder = async (req, res) => {
     let patientName = 'غير معروف';
     try {
       console.log('Searching for user with ID:', user, 'Type:', typeof user);
-      let patientUserData = await User.findById(user).lean();
+      let patientUserData = await User.findById(authenticatedUserId).lean();
       
       // Try alternative ID format if not found
-      if (!patientUserData && typeof user === 'string') {
+      if (!patientUserData && typeof authenticatedUserId === 'string') {
         console.log('User not found by _id, trying with alternate formats...');
-        patientUserData = await User.findOne({ _id: user }).lean();
+        patientUserData = await User.findOne({ _id: authenticatedUserId }).lean();
       }
       
       console.log('Found patient user:', patientUserData);
@@ -212,15 +214,12 @@ exports.createOrder = async (req, res) => {
 
     try {
       console.log('Creating notification with patient name:', patientName);
-      const admins = await User.find({ role: { $in: ['Admin', 'Superadmin'] } }).select('_id').lean();
-      if (admins.length > 0) {
-        await Notification.insertMany(admins.map(admin => ({
-          user: admin._id,
+      await Notification.create({
+          user: selectedPharmacy._id,
           type: 'order',
-          message: `طلب أدوية جديد بانتظار موافقة الإدارة من ${patientName}${city ? ` - ${city}` : ''}`,
+          message: `طلب أدوية جديد من ${patientName}${city ? ` - ${city}` : ''}`,
           relatedId: newOrder._id
-        })));
-      }
+      });
     } catch (notificationError) {
       // The order is already saved; notification failure must not make the
       // client retry and accidentally create a duplicate order.

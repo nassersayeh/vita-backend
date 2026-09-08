@@ -25,6 +25,9 @@ const LabRequestSchema = new mongoose.Schema({
   discount: { type: Number, default: 0, min: 0, max: 100 }, // Discount percentage
   discountAmount: { type: Number, default: 0 }, // Actual discount amount in currency
   originalCost: { type: Number, default: 0 }, // Cost before discount
+  vitaCommissionPercent: { type: Number, default: 5, min: 0, max: 100 },
+  vitaCommissionAmount: { type: Number, default: 0, min: 0 },
+  providerNetAmount: { type: Number, default: 0, min: 0 },
   // Approval flow - for clinic-managed doctors, accountant must approve before lab sees it
   approvalStatus: {
     type: String,
@@ -41,10 +44,15 @@ const LabRequestSchema = new mongoose.Schema({
   paidBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   // Who requested (for accountant-initiated requests)
   requestedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  sourceChannel: { type: String, enum: ['legacy', 'vita_partner_network'], default: 'legacy', index: true },
+  vitaSettlement: { type: mongoose.Schema.Types.ObjectId, ref: 'PartnerCommissionSettlement', default: null, index: true },
   // Clinic reference
   clinicId: { type: mongoose.Schema.Types.ObjectId, ref: 'Clinic' },
   // Test name for simple requests (non-testIds based)
   testName: { type: String }
 }, { timestamps: true });
+
+LabRequestSchema.index({ labId: 1, status: 1, createdAt: -1 });
+LabRequestSchema.index({ doctorId: 1, labId: 1, createdAt: -1 });
 
 module.exports = mongoose.model('LabRequest', LabRequestSchema);

@@ -230,43 +230,12 @@ router.get('/:doctorId/trial-status', async (req, res) => {
     if (!doctor || doctor.role === 'User') {
       return res.status(404).json({ message: 'Doctor not found' });
     }
-    let trialEndDate = doctor.trialEndDate;
-    if (!trialEndDate && !doctor.subscriptionPlanKey) {
-      const endDate = new Date(doctor.createdAt);
-      endDate.setMonth(endDate.getMonth() + 3);
-      trialEndDate = endDate;
-      doctor.trialEndDate = trialEndDate;
-      await doctor.save();
-    }
-    const now = new Date();
-    // Check subscription type first (can be 'paid', 'free', or undefined)
-    const subscriptionEndDate = doctor.subscriptionEndDate ? new Date(doctor.subscriptionEndDate) : null;
-    const subscriptionExpired = !!(subscriptionEndDate && now >= subscriptionEndDate && doctor.subscriptionStatus === 'active');
-    const isPaid = !subscriptionExpired && (
-      doctor.subscriptionType === 'paid' ||
-      doctor.subscriptionStatus === 'active' ||
-      doctor.isPaid === true
-    );
-    const isTrialActive = !isPaid && now < trialEndDate;
-    const timeLeft = isTrialActive ? trialEndDate - now : 0;
     res.json({
-      isTrialActive,
-      trialEndDate,
-      timeLeft, // in milliseconds
-      isPaid: isPaid,
-      isSubscriptionExpired: subscriptionExpired,
-      subscriptionType: doctor.subscriptionType,
-      subscriptionStatus: doctor.subscriptionStatus,
-      subscriptionPlanKey: doctor.subscriptionPlanKey,
-      subscriptionPlanName: doctor.subscriptionPlanName,
-      subscriptionMonthlyPrice: doctor.subscriptionMonthlyPrice,
-      subscriptionYearlyPrice: doctor.subscriptionYearlyPrice,
-      subscriptionBillingCycle: doctor.subscriptionBillingCycle,
-      subscriptionSelectedPrice: doctor.subscriptionSelectedPrice,
-      subscriptionStartDate: doctor.subscriptionStartDate,
-      subscriptionEndDate: doctor.subscriptionEndDate,
-      paymentMethod: doctor.paymentMethod,
-      planChangeRequest: doctor.planChangeRequest,
+      isTrialActive: false,
+      trialEndDate: null,
+      timeLeft: 0,
+      isPaid: true,
+      isSubscriptionExpired: false,
     });
   } catch (error) {
     console.error('Error fetching trial status:', error);

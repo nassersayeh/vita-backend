@@ -3,6 +3,40 @@ const DoctorPatientRequest = require('../models/DoctorPatientRequest');
 const Notification = require('../models/Notification');
 const bcrypt = require('bcrypt');
 const { sendDoctorWhatsAppMessage } = require('../services/doctorWhatsappService');
+const { getMobileCandidates, normalizeMobileForStorage } = require('../utils/mobileNumber');
+const { validatePasswordPolicy } = require('../utils/passwordPolicy');
+const Employee = require('../models/Employee');
+const Clinic = require('../models/Clinic');
+
+const canActAsDoctor = async (requestUser, doctorId) => {
+  if (!requestUser || !doctorId) return false;
+  if (['Admin', 'Superadmin'].includes(requestUser.role)) return true;
+  if (requestUser.role === 'Doctor') return String(requestUser._id) === String(doctorId);
+
+  if (requestUser.role === 'Clinic') {
+    return Boolean(await Clinic.exists({
+      ownerId: requestUser._id,
+      'doctors.doctorId': doctorId,
+      'doctors.status': 'active',
+    }));
+  }
+
+  if (requestUser.role === 'Employee') {
+    const directEmployee = await Employee.exists({
+      userId: requestUser._id,
+      employerId: doctorId,
+      isActive: true,
+    });
+    if (directEmployee) return true;
+    return Boolean(await Clinic.exists({
+      'staff.userId': requestUser._id,
+      'staff.status': 'active',
+      'doctors.doctorId': doctorId,
+      'doctors.status': 'active',
+    }));
+  }
+  return false;
+};
 
 // Helper function to auto-connect patient to doctor (skips if already connected)
 const autoConnectPatientToDoctor = async (doctorId, patientId) => {
@@ -59,6 +93,9 @@ exports.autoConnectPatientToDoctor = autoConnectPatientToDoctor;
 // Search patients by mobile number
 exports.searchPatients = async (req, res) => {
   try {
+    if (!['Doctor', 'Clinic', 'Employee', 'Admin', 'Superadmin'].includes(req.user?.role)) {
+      return res.status(403).json({ message: 'Access denied.' });
+    }
     const { mobileNumber } = req.query;
     
     if (!mobileNumber || mobileNumber.trim().length < 5) {
@@ -82,10 +119,14 @@ exports.searchPatients = async (req, res) => {
 exports.createPatient = async (req, res) => {
   try {
     const { fullName, mobileNumber, country, city, idNumber, address, doctorId } = req.body;
+    if (!(await canActAsDoctor(req.user, doctorId))) {
+      return res.status(403).json({ message: 'You cannot create patients for this doctor.' });
+    }
     console.log('createPatient called with doctorId:', doctorId, 'mobileNumber:', mobileNumber);
 
     // Check if patient with this mobile number already exists
-    const existingPatient = await User.findOne({ mobileNumber });
+    const normalizedMobile = normalizeMobileForStorage(mobileNumber);
+    const existingPatient = await User.findOne({ mobileNumber: { $in: getMobileCandidates(mobileNumber) } });
     if (existingPatient) {
       // If doctorId is provided, try to auto-connect existing patient to doctor
       if (doctorId) {
@@ -95,13 +136,17 @@ exports.createPatient = async (req, res) => {
           console.log('Patient already connected or error:', connectError.message);
         }
       }
-      return res.status(400).json({ 
-        message: 'Patient with this mobile number already exists',
+      return res.status(200).json({
+        success: true,
+        message: 'Patient already exists and was connected to the doctor.',
         existingPatient: {
           _id: existingPatient._id,
           fullName: existingPatient.fullName,
           mobileNumber: existingPatient.mobileNumber
-        }
+        },
+        isExisting: true,
+        autoConnected: Boolean(doctorId),
+        whatsappSent: false,
       });
     }
 
@@ -118,17 +163,17 @@ exports.createPatient = async (req, res) => {
     // Create new patient account
     const newPatient = new User({
       fullName,
-      mobileNumber,
+      mobileNumber: normalizedMobile,
       country,
       city,
       idNumber,
-      address,
+      address: address || city,
       role: 'User',
       activationStatus: 'active',
-      email: `${mobileNumber}@vita.local`, // Temporary email
+      email: `${normalizedMobile}@vita.local`, // Temporary email
       password: hashedPassword,
       // Generate short username: use last 8 digits of mobile + random 4 chars (max 14 chars)
-      username: `p${mobileNumber.slice(-7)}${Math.random().toString(36).slice(-4)}`
+      username: `p${normalizedMobile.slice(-7)}${Math.random().toString(36).slice(-4)}`
     });
 
     await newPatient.save();
@@ -373,6 +418,9 @@ exports.cancelRequest = async (req, res) => {
 exports.getDoctorPatients = async (req, res) => {
   try {
     const { doctorId } = req.params;
+    if (!(await canActAsDoctor(req.user, doctorId))) {
+      return res.status(403).json({ message: 'You cannot access patients for this doctor.' });
+    }
 
     // Get all accepted requests for this doctor
     const acceptedRequests = await DoctorPatientRequest.find({
@@ -445,8 +493,12 @@ exports.resetPatientPassword = async (req, res) => {
     const { doctorId, patientId } = req.params;
     const { newPassword } = req.body;
 
-    if (!newPassword || newPassword.length < 6) {
-      return res.status(400).json({ message: 'Password must be at least 6 characters' });
+    if (!(await canActAsDoctor(req.user, doctorId))) {
+      return res.status(403).json({ message: 'You cannot reset passwords for this doctor.' });
+    }
+
+    if (!newPassword) {
+      return res.status(400).json({ message: 'A new password is required.' });
     }
 
     // Verify that the doctor has a connection with this patient
@@ -464,6 +516,19 @@ exports.resetPatientPassword = async (req, res) => {
     const patient = await User.findById(patientId);
     if (!patient) {
       return res.status(404).json({ message: 'Patient not found' });
+    }
+
+    const passwordPolicyError = validatePasswordPolicy(newPassword, patient.fullName);
+    if (passwordPolicyError) {
+      const messages = {
+        PASSWORD_TOO_SHORT: 'Password must be at least 8 characters long.',
+        PASSWORD_TOO_LONG: 'Password is too long.',
+        PASSWORD_CONTAINS_NAME: 'Password must not contain the account holder name.',
+      };
+      return res.status(400).json({ message: messages[passwordPolicyError] });
+    }
+    if (await bcrypt.compare(newPassword, patient.password)) {
+      return res.status(400).json({ message: 'This password was used before. Choose a different password.' });
     }
 
     // Hash the new password and update

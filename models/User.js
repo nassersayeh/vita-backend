@@ -21,6 +21,7 @@ const UserSchema = new mongoose.Schema({
   fullName: { type: String, required: true },
   username: { type: String, required: false, unique: true, sparse: true, maxlength: 30 },
   password: { type: String, required: true },
+  passwordChangedAt: { type: Date, default: null, select: false },
   email: { 
     type: String, 
     required: false, 
@@ -29,11 +30,17 @@ const UserSchema = new mongoose.Schema({
   }, // Updated with sparse: true
   role: { type: String, enum: ['User', 'Doctor', 'Pharmacy', 'Lab', 'Radiology', 'Admin', 'Superadmin', 'Institution', 'Hospital', 'Employee', 'Clinic', 'Nurse', 'Accountant', 'LabTech'], required: true },
   profileImage: { type: String, default: '' },
-  mobileNumber: { type: String, required: true ,unique: true},
+  mobileNumber: { type: String, required: true },
+  // Global accounts use the `global` scope. Only authorized Al-Shaab household
+  // profiles receive a unique internal scope, while keeping the real phone visible.
+  mobileUniquenessScope: { type: String, default: 'global', select: false },
+  householdRelation: { type: String, enum: ['self', 'son', 'daughter', 'husband', 'wife'], default: 'self' },
   country: { type: String, required: function() { return this.role !== 'Employee'; } },
   city: { type: String, required: function() { return this.role !== 'Employee'; } },
-  idNumber: { type: String, required: function() { return this.role !== 'Employee'; }, unique: true, sparse: true }, // Primary identifier
-  address: { type: String, required: function() { return this.role !== 'Employee'; } },
+  // Mobile patient onboarding collects these immediately after the first login.
+  // Public web registration still enforces them in authController.
+  idNumber: { type: String, required: false, unique: true, sparse: true }, // Primary identifier
+  address: { type: String, required: false },
   sex: { type: String },
   bloodType: { type: String, default: null },
   height: { type: Number, default: null },
@@ -95,6 +102,7 @@ const UserSchema = new mongoose.Schema({
   // Authentication
   resetCode: { type: String },
   resetCodeExpiration: { type: Date },
+  resetCodeAttempts: { type: Number, default: 0, select: false },
   birthdate: { type: Date, alias: 'dateOfBirth' },
   
   // Two-Factor Authentication
@@ -116,6 +124,8 @@ const UserSchema = new mongoose.Schema({
   clinicId: { type: mongoose.Schema.Types.ObjectId, ref: 'Clinic' },
   // Internal departments (lab/pharmacy/assistant accounts) must not appear in the public network.
   isPublic: { type: Boolean, default: true },
+  // Admin-controlled visibility in the patient medication ordering flow.
+  patientOrderingEnabled: { type: Boolean, default: true, index: true },
   internalDepartment: { type: String, enum: ['laboratory', 'pharmacy', 'secretariat', 'clinic', ''], default: '' },
   bio: { type: String, default: '' },
   specialty: { type: String, default: '' },
@@ -253,5 +263,9 @@ const UserSchema = new mongoose.Schema({
   
   createdAt: { type: Date, default: Date.now },
 });
+
+// Supports the public provider discovery query as the network grows.
+UserSchema.index({ activationStatus: 1, role: 1, fullName: 1 });
+UserSchema.index({ mobileNumber: 1, mobileUniquenessScope: 1 }, { unique: true, name: 'mobileNumber_scope_unique' });
 
 module.exports = mongoose.model('User', UserSchema);

@@ -7,6 +7,9 @@ const prescriptionSchema = new mongoose.Schema({
   workflowStatus: { type: String, enum: ['pending_secretary', 'sent_to_pharmacy', 'completed'], default: 'pending_secretary' },
   routedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   routedTo: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  // Prescriptions published to the admin-selected Vita pharmacy network.
+  // Kept separate from the legacy single-pharmacy routing workflow.
+  distributionChannel: { type: String, enum: ['legacy', 'vita_partner_network'], default: 'legacy', index: true },
   products: [{
     productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product' },
     drugId: { type: mongoose.Schema.Types.ObjectId, ref: 'Drug' }, // Link to central drug database
@@ -61,5 +64,8 @@ prescriptionSchema.pre('save', function(next) {
   }
   next();
 });
+
+prescriptionSchema.index({ distributionChannel: 1, isValid: 1, createdAt: -1 });
+prescriptionSchema.index({ doctorId: 1, distributionChannel: 1, createdAt: -1 });
 
 module.exports = mongoose.model('EPrescription', prescriptionSchema);

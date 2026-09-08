@@ -8,6 +8,7 @@ const Financial = require('../models/Financial');
 const Clinic = require('../models/Clinic');
 const multer = require('multer');
 const path = require('path');
+const auth = require('../middleware/auth');
 
 // Configure multer storage for file uploads
 const storage = multer.diskStorage({
@@ -44,6 +45,51 @@ const uploadFile = multer({
   storage,
   fileFilter,
   limits: { fileSize: 10 * 1024 * 1024 }, // Limit to 10MB
+});
+
+const patientLabFilter = async (patientId, status) => {
+  const radiologyTestIds = await MedicalTest.find({ type: 'radiology' }).distinct('_id');
+  const filter = { patientId, testIds: { $nin: radiologyTestIds } };
+  if (status) filter.status = status === 'in_progress' ? { $in: ['in_progress', 'in-progress'] } : status;
+  return filter;
+};
+
+const withAttachmentUrls = (request, req) => ({
+  ...request,
+  results: (request.results || []).map((result) => ({
+    ...result,
+    attachmentUrls: (result.attachments || []).map((file) => /^(https?:)?\/\//i.test(file)
+      ? file
+      : `${req.protocol}://${req.get('host')}/uploads/lab-results/${encodeURIComponent(file)}`),
+  })),
+});
+
+// Secure patient report routes: patient identity always comes from the token.
+router.get('/patient/me/reports', auth, async (req, res) => {
+  try {
+    const page = Math.max(Number(req.query.page) || 1, 1);
+    const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 50);
+    const filter = await patientLabFilter(req.user.id, req.query.status);
+    const [requests, total] = await Promise.all([
+      LabRequest.find(filter).populate('doctorId', 'fullName specialty').populate('labId', 'fullName address city').populate('testIds', 'name type category normalRange unit').sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean(),
+      LabRequest.countDocuments(filter),
+    ]);
+    res.json({ requests: requests.map((request) => withAttachmentUrls(request, req)), total, currentPage: page, totalPages: Math.ceil(total / limit) || 1 });
+  } catch (error) {
+    console.error('Get patient lab reports error:', error);
+    res.status(500).json({ message: 'Failed to load lab reports' });
+  }
+});
+
+router.get('/patient/me/reports/:requestId', auth, async (req, res) => {
+  try {
+    const filter = await patientLabFilter(req.user.id);
+    const request = await LabRequest.findOne({ ...filter, _id: req.params.requestId }).populate('doctorId', 'fullName specialty').populate('labId', 'fullName address city mobileNumber').populate('testIds', 'name type category normalRange unit').lean();
+    if (!request) return res.status(404).json({ message: 'Lab report not found' });
+    res.json(withAttachmentUrls(request, req));
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to load lab report' });
+  }
 });
 
 // Create new lab request

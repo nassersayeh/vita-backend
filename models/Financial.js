@@ -15,6 +15,7 @@ const financialSchema = new mongoose.Schema({
       // New: support for multiple appointments paid in single transaction (from insertPayment)
       appointmentIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Appointment' }],
       labRequestId: { type: mongoose.Schema.Types.ObjectId, ref: 'LabRequest' },
+      medicalRecordId: { type: mongoose.Schema.Types.ObjectId, ref: 'MedicalRecord' },
       labRequestIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'LabRequest' }],
       orderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Order' },
       paymentMethod: { type: String, enum: ['Cash', 'Card', 'Visa', 'Insurance', 'BankTransfer'], required: true },
@@ -51,6 +52,11 @@ const financialSchema = new mongoose.Schema({
   debts: [
     {
       patientId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      insuredPatientId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      medicalRecordId: { type: mongoose.Schema.Types.ObjectId, ref: 'MedicalRecord' },
+      debtorType: { type: String, enum: ['patient', 'insurance'], default: 'patient' },
+      insuranceCompanyName: { type: String, default: '' },
+      insuranceNumber: { type: String, default: '' },
       doctorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // Doctor who created the debt (for revenue split)
       appointmentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Appointment' },
       orderId: { type: mongoose.Schema.Types.ObjectId, ref: 'Order' },

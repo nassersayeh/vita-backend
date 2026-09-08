@@ -4,6 +4,8 @@ const path = require('path');
 const LabRequest = require('../models/LabRequest');
 const MedicalTest = require('../models/MedicalTest');
 const Financial = require('../models/Financial');
+const ImageRequest = require('../models/ImageRequest');
+const auth = require('../middleware/auth');
 
 const router = express.Router();
 const storage = multer.diskStorage({
@@ -34,6 +36,66 @@ const recordRevenue = async (request) => {
   financial.transactions.push({ amount: request.totalCost, description: `إيراد طلب ${request._id}`, labRequestId: request._id, patientId: request.patientId, paymentMethod: 'Cash' });
   await financial.save();
 };
+
+// Patient-facing routes use the authenticated identity, never a patient id
+// supplied by the client. Keep these routes before /:centerId.
+router.get('/patient/me', auth, async (req, res) => {
+  try {
+    const page = Math.max(Number(req.query.page) || 1, 1);
+    const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 50);
+    const radiologyTestIds = await getRadiologyTestIds();
+    const filter = { patientId: req.user.id, testIds: { $in: radiologyTestIds } };
+    if (req.query.status) filter.status = req.query.status;
+    const legacyFilter = { patientId: req.user.id };
+    if (req.query.status) legacyFilter.status = req.query.status;
+    const [modernRequests, modernTotal, legacyRequests, legacyTotal] = await Promise.all([
+      LabRequest.find(filter)
+        .select('doctorId labId testIds status requestDate scheduledDate completedDate notes results createdAt')
+        .populate('doctorId', 'fullName specialty')
+        .populate('labId', 'fullName city address')
+        .populate('testIds', 'name type category')
+        .sort({ createdAt: -1 }).limit(page * limit).lean(),
+      LabRequest.countDocuments(filter),
+      ImageRequest.find(legacyFilter)
+        .select('doctorId imageType bodyPart status requestDate scheduledDate completedDate notes images radiologistNotes findings createdAt')
+        .populate('doctorId', 'fullName specialty')
+        .sort({ createdAt: -1 }).limit(page * limit).lean(),
+      ImageRequest.countDocuments(legacyFilter),
+    ]);
+    const normalizedLegacy = legacyRequests.map((request) => ({
+      ...request,
+      source: 'legacy',
+      testIds: [{ name: [request.imageType, request.bodyPart].filter(Boolean).join(' - '), type: 'radiology' }],
+      results: (request.images || []).map((image) => ({ result: image.fileUrl || '', notes: image.notes || '' })),
+    }));
+    const total = modernTotal + legacyTotal;
+    const requests = [...modernRequests.map((request) => ({ ...request, source: 'radiology' })), ...normalizedLegacy]
+      .sort((a, b) => new Date(b.createdAt || b.requestDate) - new Date(a.createdAt || a.requestDate))
+      .slice((page - 1) * limit, page * limit);
+    res.json({ requests, total, currentPage: page, totalPages: Math.ceil(total / limit) || 1 });
+  } catch (error) {
+    console.error('Failed to load patient radiology requests:', error);
+    res.status(500).json({ message: 'Failed to load radiology requests' });
+  }
+});
+
+router.get('/patient/me/:requestId', auth, async (req, res) => {
+  try {
+    const radiologyTestIds = await getRadiologyTestIds();
+    const request = await LabRequest.findOne({ _id: req.params.requestId, patientId: req.user.id, testIds: { $in: radiologyTestIds } })
+      .populate('doctorId', 'fullName specialty')
+      .populate('labId', 'fullName city address mobileNumber')
+      .populate('testIds', 'name type category')
+      .lean();
+    if (request) return res.json({ ...request, source: 'radiology' });
+    const legacy = await ImageRequest.findOne({ _id: req.params.requestId, patientId: req.user.id })
+      .populate('doctorId', 'fullName specialty').lean();
+    if (!legacy) return res.status(404).json({ message: 'Radiology request not found' });
+    res.json({ ...legacy, source: 'legacy', testIds: [{ name: [legacy.imageType, legacy.bodyPart].filter(Boolean).join(' - '), type: 'radiology' }], results: (legacy.images || []).map((image) => ({ result: image.fileUrl || '', notes: image.notes || '' })) });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to load radiology request' });
+  }
+});
 
 router.get('/:centerId', async (req, res) => {
   try {

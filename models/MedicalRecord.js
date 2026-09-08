@@ -90,6 +90,19 @@ const MedicalRecordSchema = new mongoose.Schema({
     date: { type: Date, default: Date.now }
   }],
   treatmentCost: { type: Number, default: 0 }, // Cost of treatment
+  billing: {
+    paymentMethod: { type: String, enum: ['cash', 'installment', 'insurance', ''], default: '' },
+    totalAmount: { type: Number, default: 0, min: 0 },
+    paidAmount: { type: Number, default: 0, min: 0 },
+    remainingAmount: { type: Number, default: 0, min: 0 },
+    debtorType: { type: String, enum: ['none', 'patient', 'insurance'], default: 'none' },
+    insuranceCompanyName: { type: String, default: '' },
+    insuranceNumber: { type: String, default: '' },
+  },
+  partnerSourceChannel: { type: String, enum: ['legacy', 'vita_partner_network'], default: 'legacy', index: true },
+  vitaCommissionPercent: { type: Number, default: 0, min: 0, max: 100 },
+  vitaCommissionAmount: { type: Number, default: 0, min: 0 },
+  vitaSettlement: { type: mongoose.Schema.Types.ObjectId, ref: 'PartnerCommissionSettlement', default: null, index: true },
   
   // Physical Therapy fields at top level for easy access
   ptTreatment: { type: String }, // PT treatment description

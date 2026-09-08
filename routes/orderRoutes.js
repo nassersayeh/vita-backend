@@ -176,7 +176,7 @@ router.post('/analyze-prescription', uploadPrescription.single('file'), async (r
 });
 
 // Create new order
-router.post('/', OrderController.createOrder);
+router.post('/', auth, OrderController.createOrder);
 
 // Get pharmacy orders (MUST come before /:orderId routes)
 router.get('/pharmacy/:pharmacyId', OrderController.getPharmacyOrders);

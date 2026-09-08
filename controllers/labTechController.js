@@ -4,6 +4,7 @@ const User = require('../models/User');
 const Clinic = require('../models/Clinic');
 const Financial = require('../models/Financial');
 const bcrypt = require('bcryptjs');
+const { getMobileCandidates, normalizeMobileForStorage } = require('../utils/mobileNumber');
 
 // Get clinic for this lab tech
 const getClinicForLabTech = async (labTechId) => {
@@ -572,7 +573,8 @@ exports.registerPatient = async (req, res) => {
     }
 
     // Check if patient exists
-    let patient = await User.findOne({ mobileNumber });
+    const normalizedMobile = normalizeMobileForStorage(mobileNumber);
+    let patient = await User.findOne({ mobileNumber: { $in: getMobileCandidates(mobileNumber) } });
     if (!patient) {
       patient = await User.findOne({ idNumber });
     }
@@ -628,16 +630,16 @@ exports.registerPatient = async (req, res) => {
 
     // Create new patient
     const clinicOwner = await User.findById(clinic.ownerId);
-    const hashedPassword = await bcrypt.hash(password || mobileNumber, 10);
+    const hashedPassword = await bcrypt.hash(password || normalizedMobile, 10);
 
     const newPatient = new User({
-      fullName, mobileNumber, idNumber,
+      fullName, mobileNumber: normalizedMobile, idNumber,
       password: hashedPassword,
       role: 'User',
       birthdate, sex,
-      address: address || clinicOwner?.address || '',
+      address: address || clinicOwner?.address || clinicOwner?.city || city || 'Not provided',
       country: country || clinicOwner?.country || 'Palestine',
-      city: city || clinicOwner?.city || '',
+      city: city || clinicOwner?.city || 'Unknown',
       isPhoneVerified: true,
       activationStatus: 'active',
       maritalStatus: maritalStatus || '',

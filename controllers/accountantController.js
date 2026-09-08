@@ -6,6 +6,8 @@ const LabRequest = require('../models/LabRequest');
 const MedicalTest = require('../models/MedicalTest');
 const MedicalRecord = require('../models/MedicalRecord');
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
+const { getMobileCandidates, normalizeMobileForStorage } = require('../utils/mobileNumber');
 
 // Get clinic for this accountant
 const getClinicForAccountant = async (accountantId) => {
@@ -16,6 +18,9 @@ const getClinicForAccountant = async (accountantId) => {
   });
   return clinic;
 };
+
+const isAlShaabCenter = (clinic) => /(?:مركز\s*)?الشعب|al[\s-]*shaab|al[\s-]*sha'?ab/i.test(String(clinic?.name || '').trim());
+const householdRelations = new Set(['self', 'son', 'daughter', 'husband', 'wife']);
 
 const hasTransactionForAppointment = (financial, appointmentId) => {
   if (!financial || !appointmentId) return false;
@@ -156,7 +161,7 @@ exports.getPatients = async (req, res) => {
 
     const doctorIds = clinic.doctors.filter(d => d.status === 'active').map(d => d.doctorId);
     const doctors = await User.find({ _id: { $in: doctorIds } })
-      .populate('patients', 'fullName email mobileNumber profileImage city address birthdate sex idNumber maritalStatus emergencyContactName emergencyContactRelation emergencyPhone hasChronicDiseases chronicDiseasesText hasSurgeries surgeriesText hasFamilyDiseases familyDiseasesText hasDrugAllergies drugAllergiesText hasFoodAllergies foodAllergiesText height weight bloodPressure heartRate temperature bloodSugar smoking previousDiseases disabilities');
+      .populate('patients', 'fullName email mobileNumber profileImage city address birthdate sex idNumber maritalStatus householdRelation emergencyContactName emergencyContactRelation emergencyPhone hasChronicDiseases chronicDiseasesText hasSurgeries surgeriesText hasFamilyDiseases familyDiseasesText hasDrugAllergies drugAllergiesText hasFoodAllergies foodAllergiesText height weight bloodPressure heartRate temperature bloodSugar smoking previousDiseases disabilities');
 
     const patientsMap = new Map();
     for (const doctor of doctors) {
@@ -207,12 +212,15 @@ exports.registerPatient = async (req, res) => {
       hasDrugAllergies, drugAllergiesText,
       hasFoodAllergies, foodAllergiesText,
       height, weight, bloodPressure, heartRate, temperature, bloodSugar,
-      smoking, previousDiseases, disabilities
+      smoking, previousDiseases, disabilities, householdRelation = 'self'
     } = req.body;
 
     if (!fullName || !mobileNumber || !idNumber) {
       return res.status(400).json({ message: 'يرجى ملء جميع الحقول المطلوبة' });
     }
+    const alShaabHouseholdEnabled = isAlShaabCenter(clinic);
+    if (!householdRelations.has(householdRelation)) return res.status(400).json({ message: 'صلة صاحب الحساب غير صحيحة' });
+    if (!alShaabHouseholdEnabled && householdRelation !== 'self') return res.status(403).json({ message: 'الحسابات العائلية متاحة لمركز الشعب فقط' });
 
     // Verify doctor is in the clinic
     const doctorEntry = clinic.doctors.find(d =>
@@ -223,8 +231,11 @@ exports.registerPatient = async (req, res) => {
     }
 
     // Check if patient exists by mobile or ID number
-    let patient = await User.findOne({ mobileNumber });
+    const normalizedMobile = normalizeMobileForStorage(mobileNumber);
+    let patient = await User.findOne({ mobileNumber: { $in: getMobileCandidates(mobileNumber) }, householdRelation: { $in: ['self', null] } });
     let patientByIdNumber = await User.findOne({ idNumber });
+    const createHouseholdProfile = alShaabHouseholdEnabled && householdRelation !== 'self';
+    if (createHouseholdProfile) patient = null;
 
     // Check for duplicates and return appropriate error message
     if (patient && patientByIdNumber && patient._id.toString() !== patientByIdNumber._id.toString()) {
@@ -309,20 +320,22 @@ exports.registerPatient = async (req, res) => {
 
     // Get clinic owner info for defaults
     const clinicOwner = await User.findById(clinic.ownerId);
-    const hashedPassword = await bcrypt.hash(password || mobileNumber, 10);
+    const hashedPassword = await bcrypt.hash(password || normalizedMobile, 10);
 
     // Create new patient
     const newPatient = new User({
       fullName,
-      mobileNumber,
+      mobileNumber: normalizedMobile,
+      mobileUniquenessScope: createHouseholdProfile ? `alshaab:${clinic._id}:${crypto.randomUUID()}` : 'global',
+      householdRelation,
       idNumber,
       password: hashedPassword,
       role: 'User',
       birthdate,
       sex,
-      address: address || clinicOwner.address || '',
-      country: country || clinicOwner.country || 'Palestine',
-      city: city || clinicOwner.city || '',
+      address: address || clinicOwner?.address || clinicOwner?.city || city || 'Not provided',
+      country: country || clinicOwner?.country || 'Palestine',
+      city: city || clinicOwner?.city || 'Unknown',
       isPhoneVerified: true,
       activationStatus: 'active',
       // New comprehensive fields
@@ -380,7 +393,8 @@ exports.registerPatient = async (req, res) => {
         _id: savedPatient._id,
         fullName: savedPatient.fullName,
         mobileNumber: savedPatient.mobileNumber,
-        idNumber: savedPatient.idNumber
+          idNumber: savedPatient.idNumber,
+          householdRelation: savedPatient.householdRelation
       },
       isExisting: false
     });

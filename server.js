@@ -1,4 +1,5 @@
 // server.js
+require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const bodyParser = require('body-parser');
@@ -105,25 +106,52 @@ const Points = require('./models/Points');
 
 const app = express();
 
-// CORS configuration
-app.use(cors({
-  origin: '*',
+if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
+  throw new Error('JWT_SECRET must be configured with at least 32 characters.');
+}
+if (!process.env.MONGODB_URI) {
+  throw new Error('MONGODB_URI must be configured.');
+}
+
+app.set('trust proxy', 1);
+app.disable('x-powered-by');
+app.use((req, res, next) => {
+  res.set({
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Referrer-Policy': 'no-referrer',
+    'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+    'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'",
+  });
+  next();
+});
+
+// CORS configuration. Native clients are unaffected; browser origins must be explicit in production.
+const allowedOrigins = String(process.env.CORS_ORIGINS || '').split(',').map((value) => value.trim()).filter(Boolean);
+const isDevelopment = process.env.NODE_ENV !== 'production';
+const isLocalDevelopmentOrigin = (origin = '') => /^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\]|10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2})(?::\d+)?$/.test(origin);
+const corsOptions = {
+  origin: allowedOrigins.length === 0 ? '*' : (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin) || (isDevelopment && isLocalDevelopmentOrigin(origin))) return callback(null, true);
+    return callback(new Error('Origin not allowed by CORS'));
+  },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'X-CSRF-Token', 'X-Api-Version'],
-  credentials: true
-}));
+  credentials: allowedOrigins.length > 0,
+};
+app.use(cors(corsOptions));
 
 // Handle preflight OPTIONS requests
-app.options('*', cors());
+app.options('*', cors(corsOptions));
 
-app.use(bodyParser.json());
+app.use(bodyParser.json({ limit: '100kb', strict: true }));
 
 // Connect to MongoDB
 const providerRoutes = require('./routes/provider');
 const medicationRoutes = require('./routes/medication');
 const cartRoutes = require('./routes/cart');
 
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://vitaUser:Pop%401990@127.0.0.1:27017/vita?authSource=admin';
+const MONGODB_URI = process.env.MONGODB_URI;
 
 // Connect to MongoDB immediately on startup
 mongoose.connect(MONGODB_URI).then(() => {
@@ -205,6 +233,8 @@ app.use('/api/lab-requests', labRequestsRoutes);
 app.use('/api/image-requests', imageRequestsRoutes);
 app.use('/api/radiology', radiologyRoutes);
 app.use('/api/radiology-requests', require('./routes/radiologyRequests'));
+// Isolated V2 workflow for Nablus dentists, Al Burj Radiology and admin-selected pharmacies.
+app.use('/api/v2/partner-workflows', require('./routes/partnerWorkflowsV2'));
 app.use('/api/prescriptions-enhanced', prescriptionsEnhancedRoutes);
 app.use('/api/pharmacy-inventory', pharmacyInventoryRoutes);
 app.use('/api/pharmacy-financial', pharmacyFinancialRoutes);
