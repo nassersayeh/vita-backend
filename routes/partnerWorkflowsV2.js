@@ -15,6 +15,7 @@ const LegacyRecord = require('../models/Record');
 const Financial = require('../models/Financial');
 const PharmacyPrescriptionQuote = require('../models/PharmacyPrescriptionQuote');
 const { getMobileCandidates, normalizeMobileForStorage } = require('../utils/mobileNumber');
+const { sendWhatsAppMessage, isWhatsAppReady } = require('../services/whatsappService');
 
 const router = express.Router();
 router.use(auth);
@@ -278,10 +279,10 @@ router.post('/dentist/radiology-referrals', requireDentist, async (req, res) => 
     if (!objectIdIsValid(patientId) || !objectIdIsValid(centerId) || !Array.isArray(testIds) || !testIds.length || testIds.length > 20) {
       return res.status(400).json({ message: 'Patient, radiology branch, and imaging types are required.' });
     }
-    const [patient, center] = await Promise.all([User.findOne({ _id: patientId, role: 'User' }).select('_id'), User.findOne({ _id: centerId, role: 'Radiology', activationStatus: 'active' }).select('fullName')]);
+    const [patient, center] = await Promise.all([User.findOne({ _id: patientId, role: 'User' }).select('_id fullName'), User.findOne({ _id: centerId, role: 'Radiology', activationStatus: 'active' }).select('fullName mobileNumber')]);
     if (!patient) return res.status(404).json({ message: 'Patient not found.' });
     if (!center || !isBurj(center)) return res.status(409).json({ message: 'The selected Al Burj branch is not active.' });
-    const services = await MedicalTest.find({ _id: { $in: testIds }, providerId: center._id, type: 'radiology', isActive: true }).select('price');
+    const services = await MedicalTest.find({ _id: { $in: testIds }, providerId: center._id, type: 'radiology', isActive: true }).select('price name');
     if (services.length !== [...new Set(testIds)].length) return res.status(400).json({ message: 'One or more imaging types are unavailable.' });
     const originalCost = services.reduce((sum, service) => sum + (Number(service.price) || 0), 0);
     const pricingItems = services.map((service) => ({ testId: service._id, originalCost: Number(service.price) || 0, discountPercentage: 0, discountAmount: 0, finalCost: Number(service.price) || 0, vitaCommissionAmount: Number(((Number(service.price) || 0) * 0.05).toFixed(2)), providerNetAmount: Number(((Number(service.price) || 0) * 0.95).toFixed(2)) }));
@@ -293,6 +294,15 @@ router.post('/dentist/radiology-referrals', requireDentist, async (req, res) => 
       sourceChannel: 'vita_partner_network',
       pricingItems,
     });
+    try {
+      if (center.mobileNumber && await isWhatsAppReady()) {
+        const imagingNames = services.map((service) => service.name).join('، ');
+        const message = `🔔 *طلب أشعة جديد عبر فيتا*\n\nالفرع: ${center.fullName}\nالطبيب المحوّل: ${req.user.fullName}\nالمريض: ${patient.fullName}\nالصور المطلوبة: ${imagingNames}\n\nيرجى الدخول إلى لوحة المركز لمراجعة الطلب.\nhttps://www.vita.ps/login`;
+        await sendWhatsAppMessage(center.mobileNumber, message);
+      }
+    } catch (whatsappError) {
+      console.warn(`Radiology referral WhatsApp notification failed for center ${center._id}:`, whatsappError.message);
+    }
     res.status(201).json({ request });
   } catch (error) { res.status(500).json({ message: 'Failed to send radiology referral.' }); }
 });
@@ -360,12 +370,15 @@ router.post('/dentist/reports', requireDentist, async (req, res) => {
 router.get('/radiology/requests', requireBurj, async (req, res) => {
   try {
     const filter = { labId: req.user._id };
+    const page = Math.max(Number(req.query.page) || 1, 1);
+    const limit = Math.min(Math.max(Number(req.query.limit) || 15, 1), 50);
     if (req.query.status && ['pending', 'in_progress', 'completed', 'cancelled'].includes(req.query.status)) filter.status = req.query.status;
+    const total = await LabRequest.countDocuments(filter);
     const requests = await LabRequest.find(filter).populate('patientId', 'fullName idNumber mobileNumber')
       .populate('doctorId', 'fullName specialty mobileNumber').populate('testIds', 'name category price description')
       .populate('pricingItems.testId', 'name category price')
-      .sort({ createdAt: -1 }).limit(200).lean();
-    res.json({ requests });
+      .sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit).lean();
+    res.json({ requests, pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) } });
   } catch (error) { res.status(500).json({ message: 'Failed to load radiology requests.' }); }
 });
 
