@@ -11,7 +11,7 @@ const NormalRangeSchema = new mongoose.Schema({
 }, { _id: false });
 
 const MedicalTestSchema = new mongoose.Schema({
-  name: { type: String, required: true, unique: true },
+  name: { type: String, required: true },
   type: { type: String, required: true, enum: ['laboratory', 'radiology', 'cardiology', 'other'] },
   category: { type: String, required: true },
   description: { type: String },
@@ -27,5 +27,7 @@ const MedicalTestSchema = new mongoose.Schema({
   // Optional provider owner. Radiology centers use this to publish their own services.
   providerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
 }, { timestamps: true });
+
+MedicalTestSchema.index({ providerId: 1, name: 1 }, { unique: true, name: 'provider_service_name_unique' });
 
 module.exports = mongoose.model('MedicalTest', MedicalTestSchema);

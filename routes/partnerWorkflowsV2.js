@@ -76,7 +76,7 @@ router.get('/context', async (req, res) => {
       response.radiologyCenter = center;
       response.radiologyCenters = centers;
       response.radiologyServices = centers.length ? await MedicalTest.find({ providerId: { $in: centers.map((item) => item._id) }, type: 'radiology', isActive: true })
-        .select('name category description price').sort({ category: 1, name: 1 }).lean() : [];
+        .select('name category description providerId').sort({ category: 1, name: 1 }).lean() : [];
       response.stats = {
         prescriptions: await Prescription.countDocuments({ doctorId: req.user._id, distributionChannel: 'vita_partner_network' }),
         radiologyRequests: await LabRequest.countDocuments({ doctorId: req.user._id, labId: { $in: centers.map((item) => item._id) } }),
@@ -278,10 +278,10 @@ router.post('/dentist/radiology-referrals', requireDentist, async (req, res) => 
     if (!objectIdIsValid(patientId) || !objectIdIsValid(centerId) || !Array.isArray(testIds) || !testIds.length || testIds.length > 20) {
       return res.status(400).json({ message: 'Patient, radiology branch, and imaging types are required.' });
     }
-    const [patient, center, allCenters] = await Promise.all([User.findOne({ _id: patientId, role: 'User' }).select('_id'), User.findOne({ _id: centerId, role: 'Radiology', activationStatus: 'active' }).select('fullName'), findBurjCenters()]);
+    const [patient, center] = await Promise.all([User.findOne({ _id: patientId, role: 'User' }).select('_id'), User.findOne({ _id: centerId, role: 'Radiology', activationStatus: 'active' }).select('fullName')]);
     if (!patient) return res.status(404).json({ message: 'Patient not found.' });
     if (!center || !isBurj(center)) return res.status(409).json({ message: 'The selected Al Burj branch is not active.' });
-    const services = await MedicalTest.find({ _id: { $in: testIds }, providerId: { $in: allCenters.map((item) => item._id) }, type: 'radiology', isActive: true }).select('price');
+    const services = await MedicalTest.find({ _id: { $in: testIds }, providerId: center._id, type: 'radiology', isActive: true }).select('price');
     if (services.length !== [...new Set(testIds)].length) return res.status(400).json({ message: 'One or more imaging types are unavailable.' });
     const originalCost = services.reduce((sum, service) => sum + (Number(service.price) || 0), 0);
     const request = await LabRequest.create({
