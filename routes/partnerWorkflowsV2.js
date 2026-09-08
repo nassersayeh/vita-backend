@@ -59,12 +59,10 @@ const publicPatient = (patient) => ({
   mobileNumber: patient.mobileNumber, birthdate: patient.birthdate, sex: patient.sex,
 });
 
-const findBurjCenter = () => User.findOne({
+const findBurjCenters = () => User.find({
   role: 'Radiology', activationStatus: 'active',
-  $or: [
-    { fullName: /البرج/i }, { fullName: /al\s*burj/i }, { fullName: /albourj/i },
-  ],
-}).select('fullName city address mobileNumber').lean();
+  $or: [{ fullName: /البرج/i }, { fullName: /al\s*burj/i }, { fullName: /albourj/i }],
+}).select('fullName city address mobileNumber').sort({ fullName: 1 }).lean();
 
 router.get('/context', async (req, res) => {
   try {
@@ -73,13 +71,15 @@ router.get('/context', async (req, res) => {
     const pharmacy = isSelectedPharmacy(req.user);
     const response = { capabilities: { dentist, burj, pharmacy } };
     if (dentist) {
-      const center = await findBurjCenter();
+      const centers = await findBurjCenters();
+      const center = centers[0] || null;
       response.radiologyCenter = center;
-      response.radiologyServices = center ? await MedicalTest.find({ providerId: center._id, type: 'radiology', isActive: true })
+      response.radiologyCenters = centers;
+      response.radiologyServices = centers.length ? await MedicalTest.find({ providerId: { $in: centers.map((item) => item._id) }, type: 'radiology', isActive: true })
         .select('name category description price').sort({ category: 1, name: 1 }).lean() : [];
       response.stats = {
         prescriptions: await Prescription.countDocuments({ doctorId: req.user._id, distributionChannel: 'vita_partner_network' }),
-        radiologyRequests: await LabRequest.countDocuments({ doctorId: req.user._id, labId: center?._id }),
+        radiologyRequests: await LabRequest.countDocuments({ doctorId: req.user._id, labId: { $in: centers.map((item) => item._id) } }),
         reports: await MedicalRecord.countDocuments({ doctor: req.user._id }),
       };
     } else if (burj) {
@@ -274,14 +274,14 @@ router.post('/dentist/prescriptions', requireDentist, async (req, res) => {
 
 router.post('/dentist/radiology-referrals', requireDentist, async (req, res) => {
   try {
-    const { patientId, testIds, notes = '' } = req.body;
-    if (!objectIdIsValid(patientId) || !Array.isArray(testIds) || !testIds.length || testIds.length > 20) {
-      return res.status(400).json({ message: 'Patient and imaging types are required.' });
+    const { patientId, centerId, testIds, notes = '' } = req.body;
+    if (!objectIdIsValid(patientId) || !objectIdIsValid(centerId) || !Array.isArray(testIds) || !testIds.length || testIds.length > 20) {
+      return res.status(400).json({ message: 'Patient, radiology branch, and imaging types are required.' });
     }
-    const [patient, center] = await Promise.all([User.findOne({ _id: patientId, role: 'User' }).select('_id'), findBurjCenter()]);
+    const [patient, center, allCenters] = await Promise.all([User.findOne({ _id: patientId, role: 'User' }).select('_id'), User.findOne({ _id: centerId, role: 'Radiology', activationStatus: 'active' }).select('fullName'), findBurjCenters()]);
     if (!patient) return res.status(404).json({ message: 'Patient not found.' });
-    if (!center) return res.status(409).json({ message: 'Al Burj Radiology Center is not active.' });
-    const services = await MedicalTest.find({ _id: { $in: testIds }, providerId: center._id, type: 'radiology', isActive: true }).select('price');
+    if (!center || !isBurj(center)) return res.status(409).json({ message: 'The selected Al Burj branch is not active.' });
+    const services = await MedicalTest.find({ _id: { $in: testIds }, providerId: { $in: allCenters.map((item) => item._id) }, type: 'radiology', isActive: true }).select('price');
     if (services.length !== [...new Set(testIds)].length) return res.status(400).json({ message: 'One or more imaging types are unavailable.' });
     const originalCost = services.reduce((sum, service) => sum + (Number(service.price) || 0), 0);
     const request = await LabRequest.create({
