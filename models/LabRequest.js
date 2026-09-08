@@ -28,6 +28,15 @@ const LabRequestSchema = new mongoose.Schema({
   vitaCommissionPercent: { type: Number, default: 5, min: 0, max: 100 },
   vitaCommissionAmount: { type: Number, default: 0, min: 0 },
   providerNetAmount: { type: Number, default: 0, min: 0 },
+  pricingItems: [{
+    testId: { type: mongoose.Schema.Types.ObjectId, ref: 'MedicalTest', required: true },
+    originalCost: { type: Number, default: 0, min: 0 },
+    discountPercentage: { type: Number, default: 0, min: 0, max: 100 },
+    discountAmount: { type: Number, default: 0, min: 0 },
+    finalCost: { type: Number, default: 0, min: 0 },
+    vitaCommissionAmount: { type: Number, default: 0, min: 0 },
+    providerNetAmount: { type: Number, default: 0, min: 0 },
+  }],
   // Approval flow - for clinic-managed doctors, accountant must approve before lab sees it
   approvalStatus: {
     type: String,

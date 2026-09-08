@@ -284,12 +284,14 @@ router.post('/dentist/radiology-referrals', requireDentist, async (req, res) => 
     const services = await MedicalTest.find({ _id: { $in: testIds }, providerId: center._id, type: 'radiology', isActive: true }).select('price');
     if (services.length !== [...new Set(testIds)].length) return res.status(400).json({ message: 'One or more imaging types are unavailable.' });
     const originalCost = services.reduce((sum, service) => sum + (Number(service.price) || 0), 0);
+    const pricingItems = services.map((service) => ({ testId: service._id, originalCost: Number(service.price) || 0, discountPercentage: 0, discountAmount: 0, finalCost: Number(service.price) || 0, vitaCommissionAmount: Number(((Number(service.price) || 0) * 0.05).toFixed(2)), providerNetAmount: Number(((Number(service.price) || 0) * 0.95).toFixed(2)) }));
     const request = await LabRequest.create({
       patientId, doctorId: req.user._id, labId: center._id, testIds,
       notes: String(notes).trim().slice(0, 1000), originalCost, totalCost: originalCost,
       vitaCommissionPercent: 5, vitaCommissionAmount: Number((originalCost * 0.05).toFixed(2)), providerNetAmount: Number((originalCost * 0.95).toFixed(2)),
       status: 'pending', approvalStatus: 'approved', requestedBy: req.user._id,
       sourceChannel: 'vita_partner_network',
+      pricingItems,
     });
     res.status(201).json({ request });
   } catch (error) { res.status(500).json({ message: 'Failed to send radiology referral.' }); }
@@ -361,6 +363,7 @@ router.get('/radiology/requests', requireBurj, async (req, res) => {
     if (req.query.status && ['pending', 'in_progress', 'completed', 'cancelled'].includes(req.query.status)) filter.status = req.query.status;
     const requests = await LabRequest.find(filter).populate('patientId', 'fullName idNumber mobileNumber')
       .populate('doctorId', 'fullName specialty mobileNumber').populate('testIds', 'name category price description')
+      .populate('pricingItems.testId', 'name category price')
       .sort({ createdAt: -1 }).limit(200).lean();
     res.json({ requests });
   } catch (error) { res.status(500).json({ message: 'Failed to load radiology requests.' }); }
@@ -463,17 +466,30 @@ router.delete('/radiology/services/:serviceId', requireBurj, async (req, res) =>
 router.patch('/radiology/requests/:requestId/discount', requireBurj, async (req, res) => {
   try {
     const discountPercentage = Number(req.body.discountPercentage);
+    const submittedOriginalCost = req.body.originalCost === undefined ? null : Number(req.body.originalCost);
+    const testId = req.body.testId;
     if (!Number.isFinite(discountPercentage) || discountPercentage < 0 || discountPercentage > 100) return res.status(400).json({ message: 'Discount must be between 0 and 100.' });
+    if (submittedOriginalCost !== null && (!Number.isFinite(submittedOriginalCost) || submittedOriginalCost < 0)) return res.status(400).json({ message: 'Price must be zero or greater.' });
+    if (!objectIdIsValid(testId)) return res.status(400).json({ message: 'Imaging type is required.' });
     const request = await LabRequest.findOne({ _id: req.params.requestId, labId: req.user._id }).populate('testIds', 'price');
     if (!request) return res.status(404).json({ message: 'Request not found.' });
-    const originalCost = Number(request.originalCost) || request.testIds.reduce((sum, test) => sum + (Number(test.price) || 0), 0);
-    const discountAmount = Number((originalCost * discountPercentage / 100).toFixed(2));
-    const finalCost = Number((originalCost - discountAmount).toFixed(2));
-    const vitaCommissionAmount = Number((finalCost * 0.05).toFixed(2));
-    request.originalCost = originalCost; request.discount = discountPercentage;
-    request.discountAmount = discountAmount; request.totalCost = finalCost;
-    request.vitaCommissionPercent = 5; request.vitaCommissionAmount = vitaCommissionAmount;
-    request.providerNetAmount = Number((finalCost - vitaCommissionAmount).toFixed(2));
+    if (!(request.testIds || []).some((test) => String(test._id) === String(testId))) return res.status(400).json({ message: 'Imaging type is not part of this request.' });
+    const existingByTest = new Map((request.pricingItems || []).map((item) => [String(item.testId), item]));
+    request.pricingItems = request.testIds.map((test) => {
+      const existing = existingByTest.get(String(test._id));
+      const original = String(test._id) === String(testId) && submittedOriginalCost !== null ? submittedOriginalCost : Number(existing?.originalCost ?? test.price) || 0;
+      const itemDiscount = String(test._id) === String(testId) ? discountPercentage : Number(existing?.discountPercentage || 0);
+      const discountAmount = Number((original * itemDiscount / 100).toFixed(2));
+      const finalCost = Number((original - discountAmount).toFixed(2));
+      const commission = Number((finalCost * 0.05).toFixed(2));
+      return { testId: test._id, originalCost: original, discountPercentage: itemDiscount, discountAmount, finalCost, vitaCommissionAmount: commission, providerNetAmount: Number((finalCost - commission).toFixed(2)) };
+    });
+    request.originalCost = request.pricingItems.reduce((sum, item) => sum + item.originalCost, 0);
+    request.discountAmount = request.pricingItems.reduce((sum, item) => sum + item.discountAmount, 0);
+    request.totalCost = request.pricingItems.reduce((sum, item) => sum + item.finalCost, 0);
+    request.discount = request.originalCost ? Number(((request.discountAmount / request.originalCost) * 100).toFixed(2)) : 0;
+    request.vitaCommissionPercent = 5; request.vitaCommissionAmount = request.pricingItems.reduce((sum, item) => sum + item.vitaCommissionAmount, 0);
+    request.providerNetAmount = request.pricingItems.reduce((sum, item) => sum + item.providerNetAmount, 0);
     await request.save();
     res.json({ request });
   } catch (error) { res.status(500).json({ message: 'Failed to update discount.' }); }
