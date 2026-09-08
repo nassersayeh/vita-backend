@@ -14,6 +14,7 @@ const MedicalRecord = require('../models/MedicalRecord');
 const LegacyRecord = require('../models/Record');
 const Financial = require('../models/Financial');
 const PharmacyPrescriptionQuote = require('../models/PharmacyPrescriptionQuote');
+const { getMobileCandidates, normalizeMobileForStorage } = require('../utils/mobileNumber');
 
 const router = express.Router();
 router.use(auth);
@@ -133,6 +134,39 @@ router.get('/dentist/patients', requireDentist, async (req, res) => {
     ]);
     res.json({ patients: patients.map(publicPatient), total, page, totalPages: Math.max(1, Math.ceil(total / limit)) });
   } catch (error) { res.status(500).json({ message: 'Failed to load doctor patients.' }); }
+});
+
+router.post('/dentist/patients', requireDentist, async (req, res) => {
+  let createdPatient = null;
+  try {
+    const fullName = String(req.body.fullName || '').trim().slice(0, 120);
+    const mobileNumber = normalizeMobileForStorage(req.body.mobileNumber);
+    const idNumber = String(req.body.idNumber || '').trim();
+    const address = String(req.body.address || '').trim().slice(0, 300);
+    if (!fullName || !mobileNumber || !idIsValid(idNumber)) {
+      return res.status(400).json({ message: 'Name, mobile number, and a valid ID number are required.' });
+    }
+    const duplicate = await User.findOne({
+      $or: [{ mobileNumber: { $in: getMobileCandidates(req.body.mobileNumber) } }, { idNumber }],
+    }).select('mobileNumber idNumber');
+    if (duplicate) {
+      const field = duplicate.idNumber === idNumber ? 'idNumber' : 'mobileNumber';
+      return res.status(409).json({ field, message: field === 'idNumber' ? 'ID number already exists.' : 'Mobile number already exists.' });
+    }
+    const temporaryPassword = `Vita-${crypto.randomBytes(6).toString('base64url')}`;
+    createdPatient = await User.create({
+      fullName, mobileNumber, idNumber, address: address || req.user.address || 'Not provided',
+      country: req.user.country || 'Palestine', city: req.user.city || 'Nablus', role: 'User',
+      password: await bcrypt.hash(temporaryPassword, 12), activationStatus: 'active',
+      isPhoneVerified: false, profileCompletionPromptDismissed: false,
+    });
+    await User.updateOne({ _id: req.user._id }, { $addToSet: { patients: createdPatient._id } });
+    res.status(201).json({ patient: publicPatient(createdPatient), temporaryPassword });
+  } catch (error) {
+    if (createdPatient?._id) await User.deleteOne({ _id: createdPatient._id }).catch(() => {});
+    if (error?.code === 11000) return res.status(409).json({ message: 'Mobile number or ID number already exists.' });
+    res.status(500).json({ message: 'Failed to create patient account.' });
+  }
 });
 
 router.get('/dentist/patients/:patientId/billing', requireDentist, async (req, res) => {
