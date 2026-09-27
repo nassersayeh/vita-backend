@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const Drug = require('../models/Drug');
 const Order = require('../models/Order');
+const auth = require('../middleware/auth');
+const { requireAdmin } = require('../middleware/accountAuthorization');
 const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
@@ -110,7 +112,7 @@ router.get('/', async (req, res) => {
 });
 
 // Add new drug (admin/pharmacy)
-router.post('/', async (req, res) => {
+router.post('/', auth, requireAdmin, async (req, res) => {
   try {
     const {
       name,
@@ -165,7 +167,7 @@ router.post('/', async (req, res) => {
 });
 
 // Update drug
-router.put('/:drugId', async (req, res) => {
+router.put('/:drugId', auth, requireAdmin, async (req, res) => {
   try {
     const updates = { ...req.body };
     if (updates.imageUrl) {
@@ -194,7 +196,7 @@ router.put('/:drugId', async (req, res) => {
 });
 
 // Delete drug
-router.delete('/:drugId', async (req, res) => {
+router.delete('/:drugId', auth, requireAdmin, async (req, res) => {
   try {
     const drug = await Drug.findByIdAndDelete(req.params.drugId);
     if (!drug) {
@@ -329,7 +331,7 @@ router.post('/metadata/batch', async (req, res) => {
   }
 });
 
-router.post('/:drugId/image', drugImageUpload.single('image'), async (req, res) => {
+router.post('/:drugId/image', auth, requireAdmin, drugImageUpload.single('image'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ message: 'لم يتم رفع صورة' });

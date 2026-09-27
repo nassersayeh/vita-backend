@@ -3,7 +3,7 @@ const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
 
-router.put('/update-device-token/:userId', async (req, res) => {
+router.put('/update-device-token/:userId', require('../middleware/auth'), require('../middleware/accountAuthorization').ownerOrAdmin('userId'), async (req, res) => {
   try {
     const { userId } = req.params;
     const { deviceToken } = req.body;

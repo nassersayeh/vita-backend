@@ -39,6 +39,6 @@ router.get('/:doctorId', async (req, res) => {
   });
 
 // Update doctor workplaces
-router.put('/:doctorId/workplaces', doctorsController.updateWorkplaces);
+router.put('/:doctorId/workplaces', auth, require('../middleware/accountAuthorization').ownerOrAdmin('doctorId'), doctorsController.updateWorkplaces);
 
 module.exports = router;

@@ -14,6 +14,10 @@ const MedicalRecord = require('../models/MedicalRecord');
 const LegacyRecord = require('../models/Record');
 const Financial = require('../models/Financial');
 const PharmacyPrescriptionQuote = require('../models/PharmacyPrescriptionQuote');
+const PharmacyInventory = require('../models/PharmacyInventory');
+const { activePrescriptionFilter, buildPrescriptionQuote } = require('../utils/pharmacyPrescriptionPricing');
+const { assertOrdinaryAllowed } = require('../utils/ordinaryControlledGuard');
+const { saveStandalonePrescription } = require('../utils/saveStandalonePrescription');
 const { getMobileCandidates, normalizeMobileForStorage } = require('../utils/mobileNumber');
 const { sendWhatsAppMessage, isWhatsAppReady } = require('../services/whatsappService');
 
@@ -91,7 +95,7 @@ router.get('/context', async (req, res) => {
       };
     } else if (pharmacy) {
       response.stats = {
-        incoming: await Prescription.countDocuments({ distributionChannel: 'vita_partner_network', isValid: true, dispensedAt: null }),
+        incoming: await Prescription.countDocuments({ ...activePrescriptionFilter(), distributionChannel: 'vita_partner_network' }),
         priced: await PharmacyPrescriptionQuote.countDocuments({ pharmacy: req.user._id, status: 'priced' }),
       };
     }
@@ -270,7 +274,7 @@ router.post('/dentist/prescriptions', requireDentist, async (req, res) => {
       expiryDate: new Date(Date.now() + 30 * 86400000), validityType: 'one-time',
     });
     res.status(201).json({ prescription });
-  } catch (error) { res.status(500).json({ message: 'Failed to create prescription.' }); }
+  } catch (error) { res.status(error.code === 'CONTROLLED_REQUIRED' ? 403 : 500).json({ message: error.code === 'CONTROLLED_REQUIRED' ? error.message : 'Failed to create prescription.' }); }
 });
 
 router.post('/dentist/radiology-referrals', requireDentist, async (req, res) => {
@@ -552,9 +556,33 @@ router.post('/radiology/patients', requireBurj, async (req, res) => {
   } catch (error) { res.status(500).json({ message: 'Failed to create patient account.' }); }
 });
 
+// History is scoped to the authenticated dispensing pharmacy, including expired prescriptions.
+router.get('/pharmacy/prescriptions/dispensed', requireSelectedPharmacy, async (req, res) => {
+  try {
+    const page = Number(req.query.page || 1);
+    if (!Number.isSafeInteger(page) || page < 1 || page > 1000000) return res.status(400).json({ message: 'Invalid page.' });
+    const pageSize = 20;
+    const filter = { dispensedBy: req.user._id, dispensedAt: { $type: 'date' } };
+    const [prescriptions, total] = await Promise.all([
+      Prescription.find(filter).populate('patientId', 'fullName idNumber mobileNumber')
+        .populate('doctorId', 'fullName specialty').sort({ dispensedAt: -1, _id: -1 })
+        .skip((page - 1) * pageSize).limit(pageSize).lean(),
+      Prescription.countDocuments(filter),
+    ]);
+    const quotes = await PharmacyPrescriptionQuote.find({ pharmacy: req.user._id,
+      prescription: { $in: prescriptions.map(item => item._id) }, status: 'dispensed',
+    }).lean();
+    const quotesByPrescription = new Map(quotes.map(quote => [String(quote.prescription), quote]));
+    res.json({ prescriptions: prescriptions.map(item => ({ ...item, pharmacyQuote: quotesByPrescription.get(String(item._id)) || null })),
+      page, total, totalPages: Math.ceil(total / pageSize),
+    });
+  } catch (error) { res.status(500).json({ message: 'تعذر تحميل الوصفات المصروفة.' }); }
+});
+
 router.get('/pharmacy/prescriptions', requireSelectedPharmacy, async (req, res) => {
   try {
-    const filter = { distributionChannel: 'vita_partner_network', isValid: true };
+    const filter = activePrescriptionFilter();
+    if (!req.query.idNumber) filter.distributionChannel = 'vita_partner_network';
     if (req.query.idNumber) {
       if (!idIsValid(req.query.idNumber)) return res.status(400).json({ message: 'Invalid ID number.' });
       const patient = await User.findOne({ role: 'User', idNumber: String(req.query.idNumber).trim() }).select('_id');
@@ -566,35 +594,74 @@ router.get('/pharmacy/prescriptions', requireSelectedPharmacy, async (req, res) 
       .sort({ createdAt: -1 }).limit(200).lean();
     const quotes = await PharmacyPrescriptionQuote.find({ pharmacy: req.user._id, prescription: { $in: prescriptions.map((item) => item._id) } }).lean();
     const quotesByPrescription = new Map(quotes.map((quote) => [String(quote.prescription), quote]));
-    res.json({ prescriptions: prescriptions.map((item) => ({ ...item, pharmacyQuote: quotesByPrescription.get(String(item._id)) || null })) });
+    const inventory = await PharmacyInventory.find({ pharmacyId: req.user._id, isActive: true,
+      drugId: { $in: prescriptions.flatMap(item => item.products.map(product => product.drugId?._id || product.drugId).filter(Boolean)) },
+    }).select('drugId price quantity isAvailable currency').lean();
+    const inventoryByDrug = new Map(inventory.map(item => [String(item.drugId), item]));
+    res.json({ prescriptions: prescriptions.map(item => ({ ...item,
+      products: item.products.map(product => ({ ...product, inventory: inventoryByDrug.get(String(product.drugId?._id || product.drugId)) || null })),
+      pharmacyQuote: quotesByPrescription.get(String(item._id)) || null,
+    })) });
   } catch (error) { res.status(500).json({ message: 'Failed to load prescriptions.' }); }
 });
 
-router.put('/pharmacy/prescriptions/:prescriptionId/quote', requireSelectedPharmacy, async (req, res) => {
+// Prices are per unit; quote totals include prescribed quantities.
+async function savePharmacyPrescription(req, res, dispense) {
+  if (!objectIdIsValid(req.params.prescriptionId)) return res.status(400).json({ message: 'Invalid prescription ID.' });
+  let session;
   try {
-    const prescription = await Prescription.findOne({ _id: req.params.prescriptionId, distributionChannel: 'vita_partner_network', isValid: true });
-    if (!prescription) return res.status(404).json({ message: 'Prescription not found.' });
-    if (!Array.isArray(req.body.items) || req.body.items.length !== prescription.products.length) return res.status(400).json({ message: 'Pricing is required for every medicine.' });
-    const byId = new Map(req.body.items.map((item) => [String(item.prescriptionProductId), item]));
-    const items = prescription.products.map((product) => {
-      const submitted = byId.get(String(product._id));
-      const originalPrice = Number(submitted?.originalPrice);
-      const discountedPrice = Number(submitted?.discountedPrice);
-      if (!Number.isFinite(originalPrice) || !Number.isFinite(discountedPrice) || originalPrice < 0 || discountedPrice < 0 || discountedPrice > originalPrice) throw new Error('INVALID_PRICE');
-      const discountPercentage = originalPrice === 0 ? 0 : Number((((originalPrice - discountedPrice) / originalPrice) * 100).toFixed(2));
-      return { prescriptionProductId: product._id, originalPrice, discountedPrice, discountPercentage, vitaCommission: Number((discountedPrice * 0.02).toFixed(2)) };
+    const topology = await mongoose.connection.db.admin().command({ hello: 1 });
+    if (!topology.setName && topology.msg !== 'isdbgrid') {
+      const quote = await saveStandalonePrescription({
+        Prescription, Inventory: PharmacyInventory, Quote: PharmacyPrescriptionQuote,
+        prescriptionId: req.params.prescriptionId, pharmacyId: req.user._id, items: req.body.items, dispense,
+        validatePrescription: prescription => assertOrdinaryAllowed(prescription.products, req.user),
+        beforeCommit: async () => { const prescription = await Prescription.findById(req.params.prescriptionId); await assertOrdinaryAllowed(prescription.products, req.user); },
+      });
+      return res.json({ quote, dispensed: dispense });
+    }
+    session = await mongoose.startSession();
+    let quote;
+    await session.withTransaction(async () => {
+      const prescription = await Prescription.findOne({ _id: req.params.prescriptionId, ...activePrescriptionFilter(), pharmacyWriteLock: null }).session(session);
+      if (!prescription) throw new Error('UNAVAILABLE');
+      await assertOrdinaryAllowed(prescription.products, req.user);
+      const pricing = buildPrescriptionQuote(prescription.products, req.body.items);
+      // Both pricing and dispensing write the prescription, preventing concurrent stale quotes.
+      const now = new Date();
+      const claimed = await Prescription.updateOne({ _id: prescription._id, ...activePrescriptionFilter(now), pharmacyWriteLock: null },
+        dispense ? { $set: { dispensedAt: now, dispensedBy: req.user._id, workflowStatus: 'completed' }, $inc: { dispensedCount: 1 } }
+          : { $inc: { __v: 1 } }, { session });
+      if (!claimed.modifiedCount) throw new Error('UNAVAILABLE');
+      if (dispense) {
+        for (const product of prescription.products) {
+          if (!product.drugId) throw new Error('STOCK');
+          const quantity = product.quantity ?? 1;
+          const stock = await PharmacyInventory.updateOne({ pharmacyId: req.user._id, drugId: product.drugId,
+            isActive: true, isAvailable: true, quantity: { $gte: quantity } },
+          { $inc: { quantity: -quantity, soldCount: quantity }, $set: { lastSoldDate: now } }, { session });
+          if (!stock.modifiedCount) throw new Error('STOCK');
+        }
+      }
+      quote = await PharmacyPrescriptionQuote.findOneAndUpdate(
+        { prescription: prescription._id, pharmacy: req.user._id },
+        { ...pricing, status: dispense ? 'dispensed' : 'priced' },
+        { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true, session },
+      );
     });
-    const totals = items.reduce((value, item) => ({ original: value.original + item.originalPrice, discounted: value.discounted + item.discountedPrice, commission: value.commission + item.vitaCommission }), { original: 0, discounted: 0, commission: 0 });
-    const quote = await PharmacyPrescriptionQuote.findOneAndUpdate(
-      { prescription: prescription._id, pharmacy: req.user._id },
-      { items, originalTotal: Number(totals.original.toFixed(2)), discountedTotal: Number(totals.discounted.toFixed(2)), vitaCommissionTotal: Number(totals.commission.toFixed(2)), status: 'priced' },
-      { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true },
-    );
-    res.json({ quote });
+    res.json({ quote, dispensed: dispense });
   } catch (error) {
-    if (error.message === 'INVALID_PRICE') return res.status(400).json({ message: 'Discounted price cannot exceed original price.' });
-    res.status(500).json({ message: 'Failed to save medicine prices.' });
-  }
-});
+    if (error.code === 'CONTROLLED_REQUIRED') return res.status(403).json({ message: error.message });
+    if (error.message === 'UNAVAILABLE') return res.status(409).json({ message: 'الوصفة غير متاحة أو منتهية الصلاحية أو تم صرفها.' });
+    if (error.message === 'STOCK') return res.status(409).json({ message: 'الأدوية غير متوفرة بالكميات المطلوبة في مخزون الصيدلية.' });
+    if (error.message === 'INVALID_PRICE') return res.status(400).json({ message: 'أدخل سعراً صالحاً لكل دواء، وسعراً بعد الخصم لا يتجاوز السعر الأصلي.' });
+    // Log only diagnostic metadata, never prices, patient details or credentials.
+    console.error('[pharmacy-prescription-save]', { operation: dispense ? 'dispense' : 'quote', name: error.name, code: error.code, reason: error.message === 'RECOVERY_REQUIRED' ? error.message : undefined, causeCode: error.cause?.code });
+    if (error.message === 'RECOVERY_REQUIRED') return res.status(503).json({ message: 'توقفت العملية بسبب خطأ في الاتصال. يلزم مراجعة حالة الوصفة والمخزون قبل إعادة الصرف.' });
+    res.status(500).json({ message: 'تعذر حفظ الوصفة. يرجى المحاولة مرة أخرى.' });
+  } finally { if (session) await session.endSession(); }
+}
+router.put('/pharmacy/prescriptions/:prescriptionId/quote', requireSelectedPharmacy, (req, res) => savePharmacyPrescription(req, res, false));
+router.put('/pharmacy/prescriptions/:prescriptionId/dispense', requireSelectedPharmacy, (req, res) => savePharmacyPrescription(req, res, true));
 
 module.exports = router;

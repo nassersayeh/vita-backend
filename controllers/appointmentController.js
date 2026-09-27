@@ -40,7 +40,7 @@ const Financial = require('../models/Financial');
 const Points = require('../models/Points');
 const bcrypt = require('bcrypt');
 
-const admin = require('firebase-admin');
+const { getMessaging } = require('firebase-admin/messaging');
 const User = require('../models/User'); // If you need to fetch the user's device token
 const Notification = require('../models/Notification');
 const { sendWhatsAppMessage, isWhatsAppReady } = require('../services/whatsappService');
@@ -422,7 +422,7 @@ const sendPushNotification = async (token, title, body) => {
     token,
   };
   try {
-    const response = await admin.messaging().send(message);
+    const response = await getMessaging().send(message);
     console.log('Successfully sent push notification:', response);
   } catch (error) {
     console.error('Error sending push notification:', error);

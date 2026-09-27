@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const auth = require('../middleware/auth');
+router.use(auth);
 const bcrypt = require('bcryptjs');
 const mongoose = require('mongoose');
 const User = require('../models/User');
@@ -17,6 +18,7 @@ router.get('/patient/:patientId', async (req, res) => {
     const orders = await Order.find({ user: patientId }).populate('items.item');
     res.json(orders);
   } catch (error) {
+    if (error.code === 'CONTROLLED_REQUIRED') return res.status(403).json({ message: error.message });
     console.error('Error fetching patient orders:', error);
     res.status(500).json({ message: 'Server error fetching orders' });
   }
@@ -38,6 +40,7 @@ router.get('/pharmacy/:pharmacyId', async (req, res) => {
     const orders = await Order.find(query).populate('user', 'fullName phone').sort({ createdAt: -1 });
     res.json(orders);
   } catch (error) {
+    if (error.code === 'CONTROLLED_REQUIRED') return res.status(403).json({ message: error.message });
     console.error('Error fetching pharmacy orders:', error);
     res.status(500).json({ message: 'Server error fetching orders' });
   }
@@ -51,6 +54,7 @@ router.post('/', async (req, res) => {
     await order.save();
     res.status(201).json({ success: true, message: 'Order created successfully', order });
   } catch (error) {
+    if (error.code === 'CONTROLLED_REQUIRED') return res.status(403).json({ message: error.message });
     console.error('Error creating order:', error);
     res.status(500).json({ message: 'Server error creating order' });
   }
@@ -64,12 +68,7 @@ router.post('/pos', auth, async (req, res) => {
     // Require authenticated user (pharmacy or employee)
     if (!req.user) return res.status(401).json({ message: 'Unauthorized' });
 
-    // Only allow pharmacies or pharmacy employees to create POS orders
-    const allowedRoles = ['Pharmacy', 'PharmacyEmployee', 'Employee'];
-    if (!allowedRoles.includes(req.user.role) && req.user.role !== 'Pharmacy') {
-      // permit employees tied to pharmacy in a later enhancement
-      // For now allow any authenticated user (if needed change this)
-    }
+    if (req.user.role !== 'Pharmacy' || String(req.user._id) !== String(pharmacyId)) return res.status(403).json({ message: 'Not authorized for this pharmacy.' });
 
     // Find or create customer user for provided phone
     let customer = null;
@@ -110,6 +109,10 @@ router.post('/pos', auth, async (req, res) => {
       details: i || {},
     }));
 
+    const requestedInventoryIds = orderItems.map(item => item.inventoryId).filter(Boolean);
+    const ownedInventory = await PharmacyInventory.find({ _id: { $in: requestedInventoryIds }, pharmacyId }).select('drugId drugName');
+    if (new Set(requestedInventoryIds.map(String)).size !== ownedInventory.length) return res.status(403).json({ message: 'Inventory does not belong to this pharmacy.' });
+    await require('../utils/ordinaryControlledGuard').assertOrdinaryAllowed([...orderItems, ...ownedInventory.map(item => ({ drugId: item.drugId, name: item.drugName }))], req.user);
     // Compute subtotal and tax if provided/required
     const computedSubtotal = orderItems.reduce((s, it) => s + (it.price * it.quantity), 0);
     const vatApplied = !!req.body.includeVat;
@@ -141,7 +144,7 @@ router.post('/pos', auth, async (req, res) => {
       try {
         let inv = null;
         if (it.inventoryId) {
-          inv = await PharmacyInventory.findById(it.inventoryId);
+          inv = await PharmacyInventory.findOne({ _id: it.inventoryId, pharmacyId });
         }
         if (!inv) {
           // try by drugId
@@ -238,6 +241,7 @@ router.post('/pos', auth, async (req, res) => {
 
     res.status(201).json({ success: true, message: 'POS order created', order });
   } catch (error) {
+    if (error.code === 'CONTROLLED_REQUIRED') return res.status(403).json({ message: error.message });
     console.error('Error creating POS order:', error);
     res.status(500).json({ message: 'Server error creating POS order', error: error.message });
   }
@@ -377,6 +381,7 @@ router.put('/:orderId/complete', async (req, res) => {
 
     res.json({ success: true, message: 'Order completed successfully', order });
   } catch (error) {
+    if (error.code === 'CONTROLLED_REQUIRED') return res.status(403).json({ message: error.message });
     console.error('Error completing order:', error);
     res.status(500).json({ message: 'Server error completing order' });
   }

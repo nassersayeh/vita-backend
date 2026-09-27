@@ -61,7 +61,7 @@ const analyticsRoutes = require('./routes/analytics');
 const whatsappWebhookRoutes = require('./routes/whatsappWebhook');
 
 // Firebase admin
-const admin = require('firebase-admin');
+const { initializeApp, cert } = require('firebase-admin/app');
 // Support loading service account from env var (Vercel) or local file
 let serviceAccount;
 try {
@@ -75,7 +75,7 @@ try {
   serviceAccount = null;
 }
 
-// WhatsApp Service (FREE - uses whatsapp-web.js)
+// WhatsApp Service (Baileys)
 let initializeWhatsApp, getWhatsAppStatus, forceReconnectWhatsApp, requestWhatsAppPairingCode;
 try {
   ({ initializeWhatsApp, getWhatsAppStatus, forceReconnectWhatsApp, requestWhatsAppPairingCode } = require('./services/whatsappService'));
@@ -109,14 +109,20 @@ const app = express();
 if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
   throw new Error('JWT_SECRET must be configured with at least 32 characters.');
 }
+if (!process.env.CONTROLLED_SIGNING_KEY || process.env.CONTROLLED_SIGNING_KEY.length < 32) {
+  throw new Error('CONTROLLED_SIGNING_KEY must be configured with at least 32 characters and backed up securely.');
+}
 if (!process.env.MONGODB_URI) {
   throw new Error('MONGODB_URI must be configured.');
 }
 
-app.set('trust proxy', 1);
+// Set to the actual trusted reverse-proxy hop count in deployment.
+app.set('trust proxy', Number(process.env.TRUST_PROXY_HOPS || 1));
 app.disable('x-powered-by');
 app.use((req, res, next) => {
   res.set({
+    'Cache-Control': 'no-store',
+    ...(req.secure ? { 'Strict-Transport-Security': 'max-age=31536000' } : {}),
     'X-Content-Type-Options': 'nosniff',
     'X-Frame-Options': 'DENY',
     'Referrer-Policy': 'no-referrer',
@@ -131,7 +137,7 @@ const allowedOrigins = String(process.env.CORS_ORIGINS || '').split(',').map((va
 const isDevelopment = process.env.NODE_ENV !== 'production';
 const isLocalDevelopmentOrigin = (origin = '') => /^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\]|10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2})(?::\d+)?$/.test(origin);
 const corsOptions = {
-  origin: allowedOrigins.length === 0 ? '*' : (origin, callback) => {
+  origin: (origin, callback) => {
     if (!origin || allowedOrigins.includes(origin) || (isDevelopment && isLocalDevelopmentOrigin(origin))) return callback(null, true);
     return callback(new Error('Origin not allowed by CORS'));
   },
@@ -246,6 +252,7 @@ app.use('/api/insurance-companies', insuranceCompanyRoutes);
 app.use('/api/claims', claimRoutes);
 app.use('/api/doctor-claims', doctorClaimRoutes);
 app.use('/api/oversight', oversightRoutes);
+app.use('/api/controlled', require('./routes/controlledPrescriptions'));
 app.use('/api/ai', aiRoutes);
 app.use('/api/insurance-claims', insuranceClaimsRoutes);
 app.use('/api/notifications', require('./routes/notifications'));
@@ -271,8 +278,8 @@ app.use('/api/messaging', messagingRoutes);
 // Initialize Firebase Admin
 if (serviceAccount) {
   try {
-    admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount),
+    initializeApp({
+      credential: cert(serviceAccount),
     });
     console.log('✅ Firebase Admin initialized');
   } catch (err) {
@@ -283,7 +290,7 @@ if (serviceAccount) {
 }
 
 // WhatsApp status  (to check if QR scan is needed)
-app.get('/api/whatsapp/status', async (req, res) => {
+app.get('/api/whatsapp/status', require('./middleware/auth'), require('./middleware/accountAuthorization').requireAdmin, async (req, res) => {
   try {
     const status = await getWhatsAppStatus();
     res.json({
@@ -300,7 +307,7 @@ app.get('/api/whatsapp/status', async (req, res) => {
 });
 
 // Force reconnect WhatsApp (admin endpoint)
-app.post('/api/whatsapp/reconnect', async (req, res) => {
+app.post('/api/whatsapp/reconnect', require('./middleware/auth'), require('./middleware/accountAuthorization').requireAdmin, async (req, res) => {
   try {
     const result = await forceReconnectWhatsApp();
     const status = await getWhatsAppStatus();
@@ -326,7 +333,7 @@ app.post('/api/whatsapp/reconnect', async (req, res) => {
 });
 
 // Request pairing code (admin endpoint)
-app.post('/api/whatsapp/pair', async (req, res) => {
+app.post('/api/whatsapp/pair', require('./middleware/auth'), require('./middleware/accountAuthorization').requireAdmin, async (req, res) => {
   try {
     const { phoneNumber } = req.body;
     if (!phoneNumber) {

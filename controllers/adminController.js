@@ -1041,6 +1041,7 @@ exports.updateUser = async (req, res) => {
     // Don't allow changing role or username via update
     delete cleanData.role;
     delete cleanData.username;
+    if (cleanData.password) cleanData.passwordChangedAt = new Date();
     
     const user = await User.findByIdAndUpdate(userId, { $set: cleanData }, { new: true }).select('-password');
     

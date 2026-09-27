@@ -2,7 +2,7 @@ const Appointment = require('../models/Appointment');
 const User = require('../models/User');
 const Notification = require('../models/Notification');
 const { sendWhatsAppMessage, isWhatsAppReady } = require('./whatsappService');
-const admin = require('firebase-admin');
+const { getMessaging } = require('firebase-admin/messaging');
 
 // Helper function to format date for WhatsApp message (bilingual)
 const formatAppointmentDate = (date, lang = 'en') => {
@@ -33,7 +33,7 @@ const sendPushNotification = async (token, title, body) => {
     token,
   };
   try {
-    const response = await admin.messaging().send(message);
+    const response = await getMessaging().send(message);
     console.log('✅ Push notification sent:', response);
   } catch (error) {
     console.error('❌ Push notification error:', error.message);

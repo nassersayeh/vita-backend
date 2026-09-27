@@ -6,11 +6,11 @@ const User = require('../models/User');
 router.get('/', async (req, res) => {
   try {
     const role = req.query.role;
-    if (!role) {
+    if (!require('../middleware/userReadAccess').publicRoles.includes(role)) {
       return res.status(400).json({ message: 'Role query parameter is required.' });
     }
     // Support legacy clients while keeping credentials out of the response.
-    const users = await User.find({ role: new RegExp(`^${role}$`, 'i'), isPublic: { $ne: false } }).select('-password');
+    const users = await User.find({ role: new RegExp(`^${role}$`, 'i'), isPublic: { $ne: false } }).select(require('../middleware/userReadAccess').publicFields);
     res.json(users);
   } catch (err) {
     console.error(err);
@@ -18,21 +18,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-router.get('/:userId', async (req, res) => {
-  try {
-    const { userId } = req.params;
-    if (!userId) {
-      return res.status(400).json({ message: 'userId query parameter is required.' });
-    }
-    // Fetch all users with the given role (case-sensitive!)
-    const user = await User.findById( userId );
-    console.log(user)
-    res.json(user);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Error fetching users.' });
-  }
-});
+router.get('/:userId', require('../middleware/userReadAccess').optionalAuth, require('../middleware/userReadAccess').readUser);
 
 router.get('/userids', async (req, res) => {
   try {

@@ -1,63 +1,13 @@
 const express = require('express');
 const router = express.Router();
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
-const OversightAccount = require('../models/OversightAccount');
 const DoctorClaim = require('../models/DoctorClaim');
 const Claim = require('../models/Claim');
 const InsuranceCompany = require('../models/InsuranceCompany');
 
-// Login for oversight accounts
-router.post('/login', async (req, res) => {
-  try {
-    const { username, password, mobile } = req.body;
-    
-    let query = { status: 'active' };
-    if (mobile) {
-      query.phone = mobile;
-    } else if (username) {
-      query.username = username;
-    } else {
-      return res.status(400).json({ message: 'Username or mobile required' });
-    }
-    
-    const account = await OversightAccount.findOne(query);
-    if (!account) {
-      return res.status(400).json({ message: 'Invalid credentials' });
-    }
-    
-    const isMatch = await bcrypt.compare(password, account.password);
-    if (!isMatch) {
-      return res.status(400).json({ message: 'Invalid credentials' });
-    }
-    
-    // Update last login
-    account.lastLoginAt = new Date();
-    await account.save();
-    
-    // Generate token
-    const token = jwt.sign(
-      { accountId: account._id, type: account.type, role: 'oversight' },
-      process.env.JWT_SECRET || 'your-secret-key',
-      { expiresIn: '7d' }
-    );
-    
-    res.json({
-      message: 'Login successful',
-      account: {
-        id: account._id,
-        name: account.name,
-        nameAr: account.nameAr,
-        type: account.type,
-        role: 'oversight'
-      },
-      token
-    });
-  } catch (error) {
-    console.error('Oversight login error:', error);
-    res.status(500).json({ message: 'Server error', error: error.message });
-  }
-});
+// All authority accounts authenticate through /api/auth/login and its limiters.
+router.post('/login', (req, res) => res.status(410).json({ message: 'استخدم صفحة تسجيل الدخول الرئيسية.' }));
+router.use(require('../middleware/controlledAuth'));
+router.use((req, res, next) => req.controlledActor.role === 'pharmacy_syndicate' ? next() : res.status(403).json({ message: 'Forbidden' }));
 
 // Get all claims (both doctor and pharmacy) for oversight view
 router.get('/claims', async (req, res) => {

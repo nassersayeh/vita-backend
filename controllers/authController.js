@@ -198,6 +198,7 @@ exports.signup = async (req, res) => {
     if ([fullName, username, mobile, country, city, idNumber, address, email].some((value) => value && value.length > 200)) {
       return res.status(400).json({ message: 'Invalid registration data.' });
     }
+    if (!['User', 'Doctor', 'Pharmacy', 'Lab', 'Radiology', 'Clinic', 'Institution', 'Hospital'].includes(role)) return res.status(403).json({ message: 'This account role cannot be self-registered.' });
     const normalizedMobile = normalizeLocalMobile(mobile, country);
     
     // Normalize email - treat empty string as undefined
@@ -467,7 +468,8 @@ exports.login = async (req, res) => {
     if (typeof mobile !== 'string' || !mobile || mobile.length > 40 || typeof password !== 'string' || Buffer.byteLength(password, 'utf8') > 72) {
       return res.status(400).json({ message: 'Invalid mobile number or password.' });
     }
-    const user = await User.findOne({ mobileNumber: { $in: getLoginMobileLookupCandidates(mobile) } });
+    const isMobileLogin = /^\+?[\d\s()-]+$/.test(mobile.trim());
+    const user = isMobileLogin ? await User.findOne({ mobileNumber: { $in: getLoginMobileLookupCandidates(mobile) } }) : null;
     
     // If not found in Users, check InsuranceCompany and OversightAccount
     if (!user) {
@@ -475,7 +477,7 @@ exports.login = async (req, res) => {
       const OversightAccount = require('../models/OversightAccount');
       
       // Check insurance companies
-      const insuranceCompany = await InsuranceCompany.findOne({ phone: mobile, status: 'active' });
+      const insuranceCompany = await InsuranceCompany.findOne({ status: 'active', ...(isMobileLogin ? { phone: { $in: getLoginMobileLookupCandidates(mobile) } } : { username: mobile.trim() }) });
       if (insuranceCompany) {
         const isMatch = await bcrypt.compare(password, insuranceCompany.password);
         if (!isMatch) return res.status(400).json({ message: 'Invalid mobile number or password.' });
@@ -505,15 +507,15 @@ exports.login = async (req, res) => {
       }
       
       // Check oversight/union accounts
-      const oversightAccount = await OversightAccount.findOne({ phone: mobile });
+      const oversightAccount = await OversightAccount.findOne({ status: 'active', ...(isMobileLogin ? { phone: { $in: getLoginMobileLookupCandidates(mobile) } } : { username: mobile.trim() }) });
       if (oversightAccount) {
         const isMatch = await bcrypt.compare(password, oversightAccount.password);
         if (!isMatch) return res.status(400).json({ message: 'Invalid mobile number or password.' });
         
         const token = jwt.sign(
-          { accountId: oversightAccount._id, role: 'oversight' },
+          { accountId: oversightAccount._id, role: 'oversight', sessionVersion: oversightAccount.sessionVersion || 0 },
           process.env.JWT_SECRET,
-          { expiresIn: '7d' }
+          { expiresIn: '1h', algorithm: 'HS256' }
         );
         
         return res.json({
@@ -531,7 +533,7 @@ exports.login = async (req, res) => {
             points: 0,
           },
           token,
-          redirectTo: '/pharmacist-union',
+          redirectTo: oversightAccount.type === 'pharmacy_syndicate' ? '/pharmacist-union' : '/controlled-oversight',
         });
       }
       

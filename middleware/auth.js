@@ -10,10 +10,11 @@ const authMiddleware = async (req, res, next) => {
     }
 
     if (!process.env.JWT_SECRET) throw new Error('JWT secret is not configured');
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] });
+    if (!decoded.userId || decoded.accountId || decoded.companyId || !Number.isInteger(decoded.iat) || !Number.isInteger(decoded.exp)) throw new Error('Invalid session');
     const user = await User.findById(decoded.userId).select('+passwordChangedAt');
 
-    if (!user) {
+    if (!user || user.activationStatus !== 'active') {
       throw new Error('User not found');
     }
     if (user.passwordChangedAt && decoded.iat * 1000 < user.passwordChangedAt.getTime()) {

@@ -4,11 +4,14 @@
 const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
+const auth = require('../middleware/auth');
+const { ownerOrAdmin } = require('../middleware/accountAuthorization');
 
 // GET users by role (e.g., /users/role/Doctor)
 router.get('/role/:role', async (req, res) => {
   try {
     const { role } = req.params;
+    if (!require('../middleware/userReadAccess').publicRoles.includes(role)) return res.status(403).json({ message: 'Forbidden' });
     const { city, search } = req.query;
     
     // Roles are stored with a capitalized value, but older accounts may have
@@ -26,7 +29,7 @@ router.get('/role/:role', async (req, res) => {
       ];
     }
     
-    const users = await User.find(filter).select('-password'); // Exclude sensitive fields
+    const users = await User.find(filter).select(require('../middleware/userReadAccess').publicFields); // Public business details only
     res.json(users || []);
   } catch (err) {
     console.error('Error fetching users by role:', err);
@@ -60,21 +63,10 @@ router.get('/:id/clinic-doctors', async (req, res) => {
 });
 
 // GET single user by ID
-router.get('/:id', async (req, res) => {
-  try {
-    const user = await User.findOne({ _id: req.params.id }).select('-password');
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
-    }
-    res.json(user);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Server error fetching user details' });
-  }
-});
+router.get('/:id', require('../middleware/userReadAccess').optionalAuth, require('../middleware/userReadAccess').readUser);
 
 // UPDATE user profile (mobile app)
-router.put('/:id', async (req, res) => {
+router.put('/:id', auth, ownerOrAdmin('id'), async (req, res) => {
   try {
     const { id } = req.params;
     const { fullName, email, mobileNumber, address, city, nationalId, dateOfBirth } = req.body;
@@ -106,7 +98,7 @@ router.put('/:id', async (req, res) => {
 });
 
 // NEW: GET connected doctors for a patient
-router.get('/connected-doctors/:patientId', async (req, res) => {
+router.get('/connected-doctors/:patientId', auth, ownerOrAdmin('patientId'), async (req, res) => {
   try {
     const { patientId } = req.params;
     const doctors = await User.find({
@@ -121,10 +113,12 @@ router.get('/connected-doctors/:patientId', async (req, res) => {
 });
 
 // NEW: UPDATE health profile
-router.put('/:id/health-profile', async (req, res) => {
+router.put('/:id/health-profile', auth, ownerOrAdmin('id'), async (req, res) => {
   try {
     const { id } = req.params;
     const updateData = req.body;
+    const { healthFields, permittedFields } = require('../utils/profileFields');
+    if (!permittedFields(updateData, healthFields)) return res.status(400).json({ message: 'Invalid health profile fields.' });
     const updatedUser = await User.findByIdAndUpdate(
       id,
       { $set: updateData },

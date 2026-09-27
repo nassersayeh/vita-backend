@@ -1,5 +1,7 @@
 const express = require('express');
 const router = express.Router();
+router.use(require('../middleware/auth'));
+router.use(require('../middleware/ordinaryPrescriptionGuard'));
 const Prescription = require('../models/EPrescription');
 const Drug = require('../models/Drug');
 const MedicalTest = require('../models/MedicalTest');

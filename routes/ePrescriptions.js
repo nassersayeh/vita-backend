@@ -1,5 +1,7 @@
 const express = require('express');
 const router = express.Router();
+router.use(require('../middleware/auth'));
+router.use(require('../middleware/ordinaryPrescriptionGuard'));
 const Prescription = require('../models/EPrescription'); // Updated to use Prescription model
 const Notification = require('../models/Notification');
 const User = require('../models/User')

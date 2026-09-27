@@ -28,6 +28,8 @@ const OversightAccountSchema = new mongoose.Schema({
   
   notes: { type: String, default: '' },
   
+  passwordChangedAt: Date,
+  sessionVersion: { type: Number, default: 0 },
   lastLoginAt: { type: Date },
 }, {
   timestamps: true

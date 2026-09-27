@@ -38,6 +38,18 @@ const prescriptionSchema = new mongoose.Schema({
   dispensedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // Pharmacy ID
   dispensingNotes: { type: String },
   
+  // No expiry: an interrupted standalone write must be reconciled before retrying.
+  pharmacyWriteLock: {
+    type: new mongoose.Schema({
+      token: String,
+      startedAt: Date,
+      pharmacyId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      dispense: Boolean,
+    }, { _id: false }),
+    default: null,
+    select: false,
+  },
+
   // Renewal system
   renewalRequests: [{
     requestDate: { type: Date, default: Date.now },
@@ -68,4 +80,8 @@ prescriptionSchema.pre('save', function(next) {
 prescriptionSchema.index({ distributionChannel: 1, isValid: 1, createdAt: -1 });
 prescriptionSchema.index({ doctorId: 1, distributionChannel: 1, createdAt: -1 });
 
+prescriptionSchema.pre('save', async function () {
+  if (this.constructor.schema.path('controlled')) return;
+  await require('../utils/ordinaryControlledGuard').assertOrdinaryAllowed(this.products, this.doctorId);
+});
 module.exports = mongoose.model('EPrescription', prescriptionSchema);

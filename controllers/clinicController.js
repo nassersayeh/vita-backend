@@ -1277,7 +1277,7 @@ exports.resetDoctorPassword = async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(newPassword, salt);
     
-    await User.findByIdAndUpdate(doctorId, { password: hashedPassword });
+    await User.findByIdAndUpdate(doctorId, { password: hashedPassword, passwordChangedAt: new Date() });
     
     res.status(200).json({
       success: true,
@@ -1495,7 +1495,7 @@ exports.resetStaffPassword = async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(newPassword, salt);
     
-    await User.findByIdAndUpdate(staffId, { password: hashedPassword });
+    await User.findByIdAndUpdate(staffId, { password: hashedPassword, passwordChangedAt: new Date() });
     
     res.status(200).json({
       success: true,

@@ -3,6 +3,12 @@ const router = express.Router();
 const User = require('../models/User');
 const Payment = require('../models/Payment');
 const Order = require('../models/Order');
+router.use(require('../middleware/auth'));
+router.use((req, res, next) => {
+  const match = /^\/patient-history\/([a-f\d]{24})\/?$/i.exec(req.path);
+  if (match && (String(req.user._id) === match[1] || (req.user.role === 'Doctor' && req.user.patients?.some(id => String(id) === match[1])))) return next();
+  return require('../middleware/accountAuthorization').requireAdmin(req, res, next);
+});
 
 
 // New route to search users by email
@@ -11,7 +17,6 @@ router.get('/userbyemail', async (req, res) => {
       const { email } = req.query;
       const query = email ? { email: new RegExp(`^${email.trim()}$`, 'i') } : {};
       const users = await User.find(query)
-      console.log(users)
       res.status(200).json(users);
     } catch (error) {
       res.status(500).json({ message: 'خطأ في البحث عن المستخدمين بالبريد الإلكتروني.' });
@@ -19,7 +24,6 @@ router.get('/userbyemail', async (req, res) => {
   });
 
 router.get('/allusers',  async (req, res) => {
-  console.log('hiiii')
   try {
     const users = await User.find();
     res.status(200).json(users);
@@ -132,7 +136,6 @@ router.delete('/orders/:id',  async (req, res) => {
 });
 
 router.put('/profile/:id',  async (req, res) => {
-  console.log('userId ')
   try {
     const userId = req.params.id;
     const updates = req.body;

@@ -33,8 +33,7 @@ exports.uploadImage = upload.fields([{ name: 'profileImage', maxCount: 1 }]);
 
 exports.handleUpload = async (req, res) => {
   try {
-    console.log('Request files:', req.files); // Debug: Check received files
-    console.log('Request body:', req.body); // Debug: Check received body
+    // File metadata and account data must not be logged.
 
     if (!req.files || !req.files.profileImage || req.files.profileImage.length === 0) {
       return res.status(400).json({ message: 'No file uploaded.' });
@@ -44,6 +43,7 @@ exports.handleUpload = async (req, res) => {
     const imageUrl = `${req.protocol}://${req.get('host')}/uploads/${file.filename}`; // Image URL
 
     const userId = req.body.userId;
+    if (String(req.user._id) !== String(userId) && !['Admin', 'Superadmin'].includes(req.user.role)) return res.status(403).json({ message: 'Forbidden' });
     if (!userId) {
       return res.status(400).json({ message: 'User ID is required.' });
     }

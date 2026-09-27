@@ -92,4 +92,12 @@ const OrderSchema = new mongoose.Schema({
   },
 }, { timestamps: true });
 
+// Regulated medicines cannot bypass controlled dispensing through an ordinary sale.
+OrderSchema.pre('save', async function () {
+  if (['cancelled', 'declined', 'rejected'].includes(this.status) || !this.pharmacyId) return;
+  const { assertOrdinaryAllowed } = require('../utils/ordinaryControlledGuard');
+  const products = await require('./Product').find({ _id: { $in: this.items.filter(item => item.onModel === 'Product').map(item => item.item) } }).select('name drugId').lean();
+  const prescriptions = await require('./EPrescription').find({ _id: { $in: this.items.filter(item => item.onModel === 'EPrescription').map(item => item.item) } }).select('products').lean();
+  await assertOrdinaryAllowed([...products, ...prescriptions.flatMap(rx => rx.products), ...this.items.map(item => ({ name: item.name, drugId: item.details?.drugId || item.item }))], this.pharmacyId);
+});
 module.exports = mongoose.model('Order', OrderSchema);

@@ -14,6 +14,8 @@ const requireAdmin = (req, res, next) => {
   next();
 };
 
+router.use(auth, requireAdmin);
+
 router.get('/patient-ordering-pharmacies', auth, requireAdmin, async (req, res) => {
   const pharmacies = await User.find({ role: 'Pharmacy' }).select('fullName city address activationStatus patientOrderingEnabled').sort({ fullName: 1 }).lean();
   res.json({ pharmacies });
@@ -155,7 +157,7 @@ router.put('/user/:id/payment', adminController.updatePaymentStatus);
 
 
 // Create a new user (admin only)
-router.post('/users/create', adminController.createUser);
+router.post('/users/create', auth, requireAdmin, adminController.createUser);
 
 // Search users for gift points modal
 router.get('/users/search-for-gift', adminController.searchUsersForGift);
@@ -164,7 +166,7 @@ router.get('/users/search-for-gift', adminController.searchUsersForGift);
 router.get('/users/:userId', adminController.getUserById);
 
 // Update user data
-router.put('/users/:userId', adminController.updateUser);
+router.put('/users/:userId', auth, requireAdmin, adminController.updateUser);
 
 // Get revenue by month
 router.get('/revenue/:year/:month', adminController.getRevenueByMonth);
@@ -247,7 +249,7 @@ router.get('/subscriptions', async (req, res) => {
 });
 
 // Insurance companies and oversight accounts for admin
-router.get('/insurance-accounts', async (req, res) => {
+router.get('/insurance-accounts', auth, requireAdmin, async (req, res) => {
   try {
     const InsuranceCompany = require('../models/InsuranceCompany');
     const OversightAccount = require('../models/OversightAccount');
@@ -261,7 +263,7 @@ router.get('/insurance-accounts', async (req, res) => {
   }
 });
 
-router.delete('/insurance-accounts/:type/:id', async (req, res) => {
+router.delete('/insurance-accounts/:type/:id', auth, requireAdmin, async (req, res) => {
   try {
     const { type, id } = req.params;
     if (type === 'company') {

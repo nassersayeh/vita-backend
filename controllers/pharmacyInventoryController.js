@@ -154,6 +154,8 @@ exports.updateInventoryItem = async (req, res) => {
     }
     const drug = await Drug.findById(drugId);
     if (drug?.isCustom && drug.ownerPharmacyId?.toString() === pharmacyId) {
+      const metadata = { name, genericName, strength, dosageForm, manufacturer, barcode, description };
+      if (Object.entries(metadata).some(([key, value]) => value !== undefined && value !== drug[key]) && await require('../models/ControlledDrug').exists({ drugId, approved: true })) return res.status(403).json({ message: 'لا يمكن تعديل بيانات دواء معتمد للكونترول.' });
       Object.assign(drug, { name, genericName, strength, dosageForm, manufacturer, barcode, description });
       await drug.save();
       inventoryItem.drugName = name || inventoryItem.drugName;

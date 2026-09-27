@@ -3,7 +3,7 @@ const router = express.Router();
 const User = require('../models/User');
 
 // PUT /api/settings/:userId/settings
-router.put('/:userId/settings', async (req, res) => {
+router.put('/:userId/settings', require('../middleware/auth'), require('../middleware/accountAuthorization').ownerOrAdmin('userId'), async (req, res) => {
   try {
     const { userId } = req.params;
     const { language } = req.body;

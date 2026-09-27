@@ -228,6 +228,7 @@ exports.createOrder = async (req, res) => {
 
     res.status(201).json({ message: 'تم إنشاء الطلب بنجاح', order: newOrder });
   } catch (err) {
+    if (err.code === 'CONTROLLED_REQUIRED') return res.status(403).json({ message: err.message });
     console.error('Error creating order:', err);
     res.status(500).json({ message: 'خطأ في الخادم أثناء إنشاء الطلب.', error: err.message });
   }
@@ -251,6 +252,7 @@ exports.getAdminOrders = async (req, res) => {
 
     res.json({ orders });
   } catch (err) {
+    if (err.code === 'CONTROLLED_REQUIRED') return res.status(403).json({ message: err.message });
     console.error('Error fetching admin orders:', err);
     res.status(500).json({ message: 'Server error fetching admin orders.' });
   }
@@ -263,6 +265,7 @@ exports.getUserOrders = async (req, res) => {
     const orders = await Order.find({ user: userId })
     res.json(orders);
   } catch (err) {
+    if (err.code === 'CONTROLLED_REQUIRED') return res.status(403).json({ message: err.message });
     console.error('Error fetching orders:', err);
     res.status(500).json({ message: 'Server error fetching orders.' });
   }
@@ -342,6 +345,7 @@ exports.getPharmacyOrders = async (req, res) => {
 
     res.json(enrichedOrders);
   } catch (err) {
+    if (err.code === 'CONTROLLED_REQUIRED') return res.status(403).json({ message: err.message });
     console.error('Error fetching pharmacy orders:', err);
     res.status(500).json({ message: 'Server error fetching orders.' });
   }
@@ -374,6 +378,7 @@ exports.getOrderById = async (req, res) => {
 
     res.json({ order });
   } catch (err) {
+    if (err.code === 'CONTROLLED_REQUIRED') return res.status(403).json({ message: err.message });
     console.error('Error fetching order:', err);
     res.status(500).json({ message: 'Server error.' });
   }
@@ -417,6 +422,7 @@ exports.updateOrderStatus = async (req, res) => {
       });
     }
 
+    if (!req.user || (!['Admin', 'Superadmin'].includes(req.user.role) && String(req.user._id) !== String(order.pharmacyId) && !(status === 'cancelled' && String(req.user._id) === String(order.user?._id || order.user)))) return res.status(403).json({ message: 'Not authorized for this order.' });
     const previousStatus = order.status;
     order.status = status;
 
@@ -635,6 +641,7 @@ exports.updateOrderStatus = async (req, res) => {
       newStatus: status
     });
   } catch (err) {
+    if (err.code === 'CONTROLLED_REQUIRED') return res.status(403).json({ message: err.message });
     console.error('Error updating order status:', err);
     res.status(500).json({ message: 'خطأ في الخادم أثناء تحديث الطلب.' });
   }
@@ -697,6 +704,7 @@ exports.reviewOrderByAdmin = async (req, res) => {
     });
     return res.json({ message: 'تم رفض الطلب', order });
   } catch (err) {
+    if (err.code === 'CONTROLLED_REQUIRED') return res.status(403).json({ message: err.message });
     console.error('Error reviewing order by admin:', err);
     res.status(500).json({ message: 'خطأ في الخادم أثناء مراجعة الطلب' });
   }
@@ -711,6 +719,7 @@ exports.deleteOrder = async (req, res) => {
     }
     res.json({ message: 'Order deleted successfully' });
   } catch (err) {
+    if (err.code === 'CONTROLLED_REQUIRED') return res.status(403).json({ message: err.message });
     console.error('Error deleting order:', err);
     res.status(500).json({ message: 'Server error deleting order.' });
   }
@@ -745,6 +754,7 @@ exports.askForPrescription = async (req, res) => {
       order 
     });
   } catch (err) {
+    if (err.code === 'CONTROLLED_REQUIRED') return res.status(403).json({ message: err.message });
     console.error('Error asking for prescription:', err);
     res.status(500).json({ message: 'Server error.' });
   }

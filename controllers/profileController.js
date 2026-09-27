@@ -29,7 +29,7 @@ exports.updateProfile = async (req, res) => {
     const { updates } = req.body;
 
     // Validate that updates is an object
-    if (!updates || typeof updates !== 'object') {
+    if (!require('../utils/profileFields').permittedFields(updates, require('../utils/profileFields').profileFields)) {
       return res.status(400).json({ message: 'Invalid updates payload.' });
     }
 

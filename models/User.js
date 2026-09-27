@@ -268,4 +268,8 @@ const UserSchema = new mongoose.Schema({
 UserSchema.index({ activationStatus: 1, role: 1, fullName: 1 });
 UserSchema.index({ mobileNumber: 1, mobileUniquenessScope: 1 }, { unique: true, name: 'mobileNumber_scope_unique' });
 
+UserSchema.set('toJSON', { transform(doc, ret) {
+  for (const key of ['password', 'passwordChangedAt', 'resetCode', 'resetCodeExpiration', 'resetCodeAttempts', 'verificationCode', 'verificationCodeExpiration', 'twoFactorCode', 'twoFactorCodeExpiry', 'twoFactorCodeExpiration', 'phoneVerificationCode', 'phoneVerificationCodeExpiration', 'twoFactorSecret', 'mobileUniquenessScope']) delete ret[key];
+  return ret;
+} });
 module.exports = mongoose.model('User', UserSchema);

@@ -5,6 +5,7 @@ const pharmacyInventoryController = require('../controllers/pharmacyInventoryCon
 
 // Protect all routes with authentication
 router.use(auth);
+router.use('/pharmacy/:pharmacyId', (req, res, next) => req.user.role === 'Pharmacy' && String(req.user._id) === req.params.pharmacyId ? next() : res.status(403).json({ message: 'Not authorized.' }));
 
 // GET pharmacy inventory
 router.get('/pharmacy/:pharmacyId', 
