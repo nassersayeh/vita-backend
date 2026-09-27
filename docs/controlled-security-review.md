@@ -77,3 +77,7 @@ npm audit --omit=dev
 - لا تعني نتيجة صفر ثغرات في npm audit أن التطبيق خالٍ من الثغرات؛ الفحص يغطي الثغرات المعروفة في المكتبات فقط وقت تشغيله.
 
 استندت المراجعة إلى مبادئ [صلاحيات OWASP](https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html) و[أمان REST](https://cheatsheetseries.owasp.org/cheatsheets/REST_Security_Cheat_Sheet.html). تحديث Excel من [توزيع SheetJS الرسمي](https://docs.sheetjs.com/docs/getting-started/installation/frameworks/)، وتحديث PDF من [إصدارات jsPDF الرسمية](https://github.com/parallax/jsPDF/releases).
+
+## تحديث بعد طلب حذف الوصفة التجريبية
+
+حُذفت الوصفة القديمة غير الموقعة المحددة من المستخدم، مع سجل التسعير وسجل التتبع المرتبطين بها، وتحقق أن عدد السجلات المتبقية لها صفر. لم تُعكس كميات الصرف أو دفعة شراء الرصيد. حُجز موضعها داخل الدفعة في `retiredSlots` دون الاحتفاظ ببياناتها السريرية، لمنع إعادة استعمال السيريال أو زيادة الرصيد المتاح بسبب الحذف.
