@@ -200,12 +200,14 @@ exports.signup = async (req, res) => {
     }
     if (!['User', 'Doctor', 'Pharmacy', 'Lab', 'Radiology', 'Clinic', 'Institution', 'Hospital'].includes(role)) return res.status(403).json({ message: 'This account role cannot be self-registered.' });
     const specialties = require('../utils/specialties').MAP;
-    const specialty = role === 'Doctor' ? req.body.specialty : undefined;
+    const rawSpecialty = role === 'Doctor' ? req.body.specialty : undefined;
+    const specialty = rawSpecialty == null || (typeof rawSpecialty === 'string' && !rawSpecialty.trim())
+      ? undefined : (typeof rawSpecialty === 'string' ? rawSpecialty.trim() : rawSpecialty);
     if (specialty !== undefined && (typeof specialty !== 'string' || !specialties.some(s => s.en === specialty))) {
       return res.status(400).json({ message: 'اختر تخصصاً معتمداً من القائمة.' });
     }
-    if (req.salesManagerId && (!['Doctor', 'Pharmacy'].includes(role) || (role === 'Doctor' && !specialty))) {
-      return res.status(400).json({ message: 'اختر طبيباً مع التخصص أو صيدلية.' });
+    if (req.salesManagerId && !['Doctor', 'Pharmacy'].includes(role)) {
+      return res.status(400).json({ message: 'اختر طبيباً أو صيدلية.' });
     }
     const normalizedMobile = normalizeLocalMobile(mobile, country);
     

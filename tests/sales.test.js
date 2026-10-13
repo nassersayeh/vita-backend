@@ -114,3 +114,36 @@ test('lead customer registration preserves authenticated attribution', async () 
   assert.equal(result.status, 200);
   assert.equal(result.body.owner, 'lead');
 });
+
+test('optional specialty supports web, mobile and sales registration without weakening supplied-value validation', async () => {
+  let saved;
+  class User {
+    constructor(fields) { Object.assign(this, fields); this._id = 'customer'; this.activationStatus = 'pending'; saved = this; }
+    static async findOne() { return null; }
+    async save() { return this; }
+  }
+  const controller = load('../controllers/authController', {
+    '../models/User': User, '../models/Otp': {}, dotenv: { config() {} },
+    '../services/whatsappService': { isWhatsAppReady: async () => false },
+    nodemailer: { createTransport: () => ({}) },
+    jsonwebtoken: { sign: () => 'test-customer-token' }, bcryptjs: { hash: async () => 'hashed' },
+  });
+  for (const channel of ['web', 'mobile', 'sales']) {
+    for (const specialty of [undefined, null, '', '   ', 'Dentistry']) {
+      const req = { body: { fullName: 'Provider', mobile: '0591111111', password: 'strong-12345', country: 'Palestine', city: 'Ramallah', idNumber: '123456789', address: 'Main street', role: 'Doctor', registrationChannel: channel === 'mobile' ? 'mobile' : undefined, ...(specialty !== undefined ? { specialty } : {}) }, ...(channel === 'sales' ? { salesManagerId: 'manager-A' } : {}) };
+      let result;
+      const res = { statusCode: 200, status(code) { this.statusCode = code; return this; }, json(body) { result = body; } };
+      await controller.signup(req, res);
+      assert.equal(res.statusCode, 201, `${channel}: ${JSON.stringify(specialty)}`);
+      assert.equal(saved.specialty, specialty === 'Dentistry' ? 'Dentistry' : undefined);
+      assert.equal(result.token, channel === 'sales' ? undefined : 'test-customer-token');
+    }
+  }
+  for (const specialty of [{ $ne: null }, [], 123, 'Unknown Specialty']) {
+    saved = undefined;
+    const res = { statusCode: 200, status(code) { this.statusCode = code; return this; }, json() {} };
+    await controller.signup({ body: { role: 'Doctor', specialty } }, res);
+    assert.equal(res.statusCode, 400);
+    assert.equal(saved, undefined);
+  }
+});
