@@ -84,3 +84,33 @@ test('shared signup saves attribution and specialty, keeps approval pending and 
   assert.equal(result.token, undefined);
   assert.equal(result.autoLogin, undefined);
 });
+
+test('only lead can create staff, ignoring privileged role and forged attribution', async () => {
+  let created;
+  const app = router({ bcryptjs: { hash: async () => 'hashed' }, '../models/User': {
+    findOne: async () => null, create: async fields => { created = fields; return { ...fields, _id: 'staff-id' }; },
+  } });
+  const body = { fullName: 'New Employee', mobile: '0591234567', password: 'Secure-4567', role: 'Admin', salesCreatedBy: 'forged' };
+  assert.equal((await request(app, 'POST', '/staff', { _id: 'staff', role: 'SalesManager' }, body)).status, 403);
+  assert.equal(created, undefined);
+  const result = await request(app, 'POST', '/staff', { _id: 'lead', role: 'SalesTeamLead' }, body);
+  assert.equal(result.status, 201);
+  assert.equal(created.role, 'SalesManager');
+  assert.equal(created.salesCreatedBy, 'lead');
+  assert.equal(created.activationStatus, 'active');
+  assert.equal(result.body.user.password, undefined);
+  assert.equal(result.body.token, undefined);
+});
+test('staff creation rejects invalid input and duplicate mobile', async () => {
+  const app = router({ '../models/User': { findOne: async () => ({ _id: 'existing' }), create() { throw new Error('Must not create'); } } });
+  const actor = { _id: 'lead', role: 'SalesTeamLead' };
+  assert.equal((await request(app, 'POST', '/staff', actor, { fullName: {}, mobile: '0591234567', password: 'Secure-4567' })).status, 400);
+  assert.equal((await request(app, 'POST', '/staff', actor, { fullName: 'Someone', mobile: '123', password: 'Secure-4567' })).status, 400);
+  assert.equal((await request(app, 'POST', '/staff', actor, { fullName: 'Someone', mobile: '+970591234567', password: 'Secure-4567' })).status, 409);
+});
+test('lead customer registration preserves authenticated attribution', async () => {
+  const app = router({ '../controllers/authController': { signup: (req, res) => res.json({ owner: req.salesManagerId }) } });
+  const result = await request(app, 'POST', '/customers', { _id: 'lead', role: 'SalesTeamLead' }, { role: 'Pharmacy', salesManagerId: 'forged' });
+  assert.equal(result.status, 200);
+  assert.equal(result.body.owner, 'lead');
+});

@@ -8,9 +8,31 @@ const { salesSignupLimiter, salesPasswordLimiter } = require('../middleware/auth
 const { customerMetrics } = require('../services/salesMetrics');
 
 router.use(auth, (req, res, next) => {
-  if (req.user.role !== 'SalesManager') return res.status(403).json({ message: 'غير مصرح بهذا الإجراء.' });
+  if (!['SalesManager', 'SalesTeamLead'].includes(req.user.role)) return res.status(403).json({ message: 'غير مصرح بهذا الإجراء.' });
   res.set('Cache-Control', 'no-store');
   next();
+});
+
+// Team reports and staff provisioning are available only to the team lead.
+router.use('/team', require('./adminSales'));
+router.post('/staff', salesSignupLimiter, async (req, res) => {
+  if (req.user.role !== 'SalesTeamLead') return res.status(403).json({ message: 'هذه الصلاحية لمديرة الفريق فقط.' });
+  try {
+    const { fullName, mobile, password } = req.body || {};
+    const { normalizeMobileForStorage, getMobileCandidates } = require('../utils/mobileNumber');
+    if (typeof fullName !== 'string' || !fullName.trim() || fullName.length > 100 || typeof mobile !== 'string' || mobile.length > 30 || validatePasswordPolicy(password, fullName)) {
+      return res.status(400).json({ message: 'أدخل الاسم ورقم الجوال وكلمة مرور لا تقل عن ٨ أحرف ولا تحتوي على الاسم.' });
+    }
+    const mobileNumber = normalizeMobileForStorage(mobile);
+    if (!/^05[69]\d{7}$/.test(mobileNumber)) return res.status(400).json({ message: 'رقم الجوال الفلسطيني غير صحيح.' });
+    const candidates = getMobileCandidates(mobile);
+    if (await User.findOne({ mobileNumber: { $in: [...candidates, ...candidates.map(value => `+${value}`)] } })) return res.status(409).json({ message: 'رقم الهاتف مستخدم مسبقاً.' });
+    const staff = await User.create({ fullName: fullName.trim(), mobileNumber, password: await bcrypt.hash(password, 12),
+      role: 'SalesManager', country: 'Palestine', language: 'ar', activationStatus: 'active', isPhoneVerified: true, salesCreatedBy: req.user._id });
+    res.status(201).json({ success: true, user: { _id: staff._id, fullName: staff.fullName, mobileNumber: staff.mobileNumber, role: staff.role } });
+  } catch (error) {
+    res.status(error.code === 11000 ? 409 : 500).json({ message: error.code === 11000 ? 'رقم الهاتف مستخدم مسبقاً.' : 'تعذر إنشاء حساب موظفة المبيعات.' });
+  }
 });
 
 router.get('/customers', async (req, res) => {

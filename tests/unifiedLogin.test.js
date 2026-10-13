@@ -51,7 +51,7 @@ test('insurance usernames also use main login and retain insurance routing', asy
 });
 
 test('public signup cannot create an administrator, employee or oversight identity', async () => {
-  for (const role of ['Admin', 'Superadmin', 'Employee', 'oversight', 'ministry_of_health', 'medical_syndicate']) {
+  for (const role of ['Admin', 'Superadmin', 'Employee', 'SalesManager', 'SalesTeamLead', 'oversight', 'ministry_of_health', 'medical_syndicate']) {
     const result = await attempt({ action: 'signup', extra: { role } });
     assert.equal(result.status, 403); assert.equal(result.userLookups, 0);
   }

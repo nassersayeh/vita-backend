@@ -7,7 +7,7 @@ const filename = require.resolve('../routes/adminSales');
 const native = createRequire(filename);
 function load(User, customerMetrics = async rows => rows) {
   const module = { exports: {} };
-  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), { module, console, require: name => name === '../models/User' ? User : name === '../services/salesMetrics' ? { customerMetrics } : native(name) });
+  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), { module, console, require: name => name === '../models/User' ? User : name === '../services/salesMetrics' ? { customerMetrics, teamCommissions: async () => new Map() } : native(name) });
   return module.exports;
 }
 function request(router, url, role = 'Admin', query = {}) {
@@ -60,4 +60,11 @@ test('detail validates manager and scopes pagination to selected staff', async (
   assert.equal(result.body.page, 2);
   const missing = load({ findOne: () => chain(null) });
   assert.equal((await request(missing, `/${id}/customers`)).status, 404);
+});
+
+test('team lead can read team reports', async () => {
+  const router = load({ find: () => chain([]) });
+  const response = await request(router, '/', 'SalesTeamLead');
+  assert.equal(response.status, 200);
+  assert.equal(response.body.managers.length, 0);
 });

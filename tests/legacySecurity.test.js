@@ -32,6 +32,7 @@ test('legacy admin and profile routes reject anonymous and non-admin privilege c
     const router = load(file);
     assert.equal((await request(router, method, url)).status, 401, `${file}: anonymous`);
     assert.equal((await request(router, method, url, { _id: 'attacker', role: 'Doctor' })).status, 403, `${file}: doctor`);
+    assert.equal((await request(router, method, url, { _id: 'lead', role: 'SalesTeamLead' })).status, 403, `${file}: sales team lead`);
   }
 });
 test('legacy self-service profile routes reject writes to another account', async () => {

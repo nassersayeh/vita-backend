@@ -18,12 +18,13 @@ async function customerMetrics(customers) {
   if (!customers.length) return [];
   const doctors = customers.filter(c => c.role === 'Doctor').map(c => c._id);
   const pharmacies = customers.filter(c => c.role === 'Pharmacy').map(c => c._id);
-  const radiology = await LabRequest.aggregate([
+  const diagnostics = await LabRequest.aggregate([
     { $match: { doctorId: { $in: doctors }, status: { $ne: 'cancelled' }, approvalStatus: { $ne: 'rejected' } } },
     { $lookup: { from: User.collection.name, localField: 'labId', foreignField: '_id', as: 'provider' } },
     { $lookup: { from: MedicalTest.collection.name, localField: 'testIds', foreignField: '_id', as: 'tests' } },
-    { $match: { $or: [{ 'provider.role': 'Radiology' }, { 'tests.type': 'radiology' }] } },
-    { $group: { _id: '$doctorId', value: { $sum: 1 }, commission: { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, '$vitaCommissionAmount', 0] } } } },
+    { $addFields: { isRadiology: { $or: [{ $in: ['Radiology', '$provider.role'] }, { $in: ['radiology', '$tests.type'] }] }, isLaboratory: { $or: [{ $in: ['Lab', '$provider.role'] }, { $in: ['laboratory', '$tests.type'] }] } } },
+    { $match: { $or: [{ isRadiology: true }, { isLaboratory: true }] } },
+    { $group: { _id: '$doctorId', value: { $sum: { $cond: ['$isRadiology', 1, 0] } }, labCount: { $sum: { $cond: [{ $and: ['$isLaboratory', { $not: ['$isRadiology'] }] }, 1, 0] } }, commission: { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, '$vitaCommissionAmount', 0] } } } },
   ]);
   const quoteDoctorTotals = (Model, Rx) => Model.aggregate([
     { $match: { status: 'dispensed' } },
@@ -45,14 +46,46 @@ async function customerMetrics(customers) {
     const id = customer._id;
     const doctor = customer.role === 'Doctor';
     const commission = doctor
-      ? valueFor(medicalCommission, id) + valueFor(doctorQuoteCommission, id) + valueFor(controlledDoctorCommission, id) + Number(radiology.find(r => String(r._id) === String(id))?.commission || 0)
+      ? valueFor(medicalCommission, id) + valueFor(doctorQuoteCommission, id) + valueFor(controlledDoctorCommission, id) + Number(diagnostics.find(r => String(r._id) === String(id))?.commission || 0)
       : valueFor(pharmacyCommission, id) + valueFor(controlledPharmacyCommission, id);
     return { ...customer,
       prescriptionCount: doctor ? valueFor(prescriptions, id) + valueFor(controlled, id) : null,
-      radiologyCount: doctor ? valueFor(radiology, id) : null,
+      radiologyCount: doctor ? valueFor(diagnostics, id) : null,
+      labCount: doctor ? Number(diagnostics.find(r => String(r._id) === String(id))?.labCount || 0) : null,
       appointmentCount: doctor ? valueFor(appointments, id) : null,
       vitaCommission: Math.round(commission * 100) / 100,
     };
   });
 }
-module.exports = { customerMetrics };
+// Attribute each realized transaction once per sales owner, even when both
+// prescribing doctor and dispensing pharmacy belong to that owner.
+async function teamCommissions(managerIds) {
+  if (!managerIds.length) return new Map();
+  const ownerLookup = (field, as) => ({ $lookup: { from: User.collection.name, localField: field, foreignField: '_id', as } });
+  const finish = [
+    { $unwind: '$owners' }, { $match: { owners: { $in: managerIds } } },
+    { $group: { _id: '$owners', value: { $sum: '$amount' } } },
+  ];
+  const quoteTotals = (Model, Rx) => Model.aggregate([
+    { $match: { status: 'dispensed' } },
+    { $lookup: { from: Rx.collection.name, localField: 'prescription', foreignField: '_id', as: 'rx' } },
+    ownerLookup('rx.doctorId', 'doctor'), ownerLookup('pharmacy', 'pharmacyOwner'),
+    { $project: { amount: '$vitaCommissionTotal', owners: { $setUnion: ['$doctor.salesManager', '$pharmacyOwner.salesManager'] } } }, ...finish,
+  ]);
+  const results = await Promise.all([
+    quoteTotals(Quote, Prescription), quoteTotals(ControlledQuote, Controlled),
+    MedicalRecord.aggregate([{ $match: { 'billing.paidAmount': { $gt: 0 } } }, ownerLookup('doctor', 'provider'), { $project: { amount: '$vitaCommissionAmount', owners: '$provider.salesManager' } }, ...finish]),
+    LabRequest.aggregate([
+      { $match: { status: 'completed', approvalStatus: { $ne: 'rejected' } } },
+      ownerLookup('doctorId', 'doctor'), ownerLookup('labId', 'provider'),
+      { $lookup: { from: MedicalTest.collection.name, localField: 'testIds', foreignField: '_id', as: 'tests' } },
+      { $match: { $or: [{ 'provider.role': { $in: ['Lab', 'Radiology'] } }, { 'tests.type': { $in: ['laboratory', 'radiology'] } }] } },
+      { $project: { amount: '$vitaCommissionAmount', owners: '$doctor.salesManager' } }, ...finish,
+    ]),
+  ]);
+  const totals = new Map();
+  for (const row of results.flat()) totals.set(String(row._id), (totals.get(String(row._id)) || 0) + Number(row.value || 0));
+  for (const [id, value] of totals) totals.set(id, Math.round(value * 100) / 100);
+  return totals;
+}
+module.exports = { customerMetrics, teamCommissions };

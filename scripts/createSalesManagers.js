@@ -3,7 +3,8 @@ require('dotenv').config({ path: require('path').join(__dirname, '../.env'), qui
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const User = require('../models/User');
-const accounts = [
+const role = process.argv.includes('--team-lead') ? 'SalesTeamLead' : 'SalesManager';
+const accounts = role === 'SalesTeamLead' ? [{ fullName: 'ابرار مجد', mobileNumber: '0597915019' }] : [
   { fullName: 'افنان نوفل', mobileNumber: '0592928619' },
   { fullName: 'يارا ابو كشك', mobileNumber: '0594583945' },
   { fullName: 'سيدرا نصير', mobileNumber: '0569538756' },
@@ -15,18 +16,18 @@ const accounts = [
   for (const account of accounts) {
     const digits = account.mobileNumber.slice(1);
     const existing = await User.findOne({ mobileNumber: { $in: [account.mobileNumber, digits, `970${digits}`, `+970${digits}`, `972${digits}`, `+972${digits}`] } });
-    if (existing && (existing.role !== 'SalesManager' || existing.fullName !== account.fullName)) throw new Error(`Account conflict for ${account.fullName}; nothing reassigned`);
+    if (existing && (existing.role !== role || existing.fullName !== account.fullName)) throw new Error(`Account conflict for ${account.fullName}; nothing reassigned`);
     account.existing = existing;
   }
   for (const account of accounts) {
     let user = account.existing;
     if (!user) user = await User.create({
       fullName: account.fullName, mobileNumber: account.mobileNumber,
-      role: 'SalesManager', country: 'Palestine', activationStatus: 'active', isPhoneVerified: true,
+      role, country: 'Palestine', activationStatus: 'active', isPhoneVerified: true,
       language: 'ar', password: await bcrypt.hash(process.env.SALES_INITIAL_PASSWORD, 12),
     });
     const verified = await User.findById(user._id);
-    if (verified.role !== 'SalesManager' || verified.activationStatus !== 'active') throw new Error('Account verification failed');
+    if (verified.role !== role || verified.activationStatus !== 'active') throw new Error('Account verification failed');
     console.log(JSON.stringify({ name: verified.fullName, mobile: verified.mobileNumber, role: verified.role, created: !account.existing }));
   }
 })().catch(error => {

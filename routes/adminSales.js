@@ -1,17 +1,17 @@
-// Mounted below auth + requireAdmin in the admin router.
+// Mounted below auth in sales/team and below auth + requireAdmin in admin/sales.
 const router = require('express').Router();
 const mongoose = require('mongoose');
 const User = require('../models/User');
-const { customerMetrics } = require('../services/salesMetrics');
+const { customerMetrics, teamCommissions } = require('../services/salesMetrics');
 router.use((req, res, next) => {
-  if (!['Admin', 'Superadmin'].includes(req.user?.role)) return res.status(403).json({ message: 'غير مصرح بهذا الإجراء.' });
+  if (!['Admin', 'Superadmin', 'SalesTeamLead'].includes(req.user?.role)) return res.status(403).json({ message: 'غير مصرح بهذا الإجراء.' });
   res.set('Cache-Control', 'no-store');
   next();
 });
 router.get('/', async (req, res) => {
   try {
     const managers = await User.find({ role: 'SalesManager' }).select('fullName mobileNumber activationStatus').sort({ fullName: 1 }).lean();
-    const rows = managers.map(manager => ({ ...manager, customerCount: 0, prescriptionCount: 0, radiologyCount: 0, appointmentCount: 0 }));
+    const rows = managers.map(manager => ({ ...manager, customerCount: 0, prescriptionCount: 0, radiologyCount: 0, appointmentCount: 0, labCount: 0, vitaCommission: 0 }));
     const byId = new Map(rows.map(row => [String(row._id), row]));
     // Walk every customer, independently of the paginated detail table.
     let lastId;
@@ -22,11 +22,13 @@ router.get('/', async (req, res) => {
       for (const customer of await customerMetrics(customers)) {
         const row = byId.get(String(customer.salesManager));
         row.customerCount++;
-        for (const field of ['prescriptionCount', 'radiologyCount', 'appointmentCount']) row[field] += customer[field] || 0;
+        for (const field of ['prescriptionCount', 'radiologyCount', 'appointmentCount', 'labCount']) row[field] += customer[field] || 0;
       }
       lastId = customers[customers.length - 1]._id;
       if (customers.length < 250) break;
     }
+    const commissions = await teamCommissions(managers.map(manager => manager._id));
+    for (const row of rows) row.vitaCommission = commissions.get(String(row._id)) || 0;
     res.json({ managers: rows });
   } catch (error) {
     console.error('Admin sales summary failed:', error.message);

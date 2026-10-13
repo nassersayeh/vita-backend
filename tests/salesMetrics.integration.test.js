@@ -14,8 +14,9 @@ test('sales totals exclude unused tickets, pending appointments and undispensed 
       models[name] = connection.model(prefix + name, new mongoose.Schema({}, { strict: false }), prefix + name);
     }
     const id = () => new mongoose.Types.ObjectId();
+    const manager = id(), secondManager = id();
     const doctor = id(), pharmacy = id(), outsider = id(), radiology = id(), lab = id(), prescription = id(), controlled = id();
-    await models.User.insertMany([{ _id: radiology, role: 'Radiology' }, { _id: lab, role: 'Lab' }]);
+    await models.User.insertMany([{ _id: doctor, role: 'Doctor', salesManager: manager }, { _id: pharmacy, role: 'Pharmacy', salesManager: manager }, { _id: radiology, role: 'Radiology' }, { _id: lab, role: 'Lab' }]);
     await models.EPrescription.insertMany([{ _id: prescription, doctorId: doctor }, { doctorId: outsider }]);
     await models.ControlledPrescription.insertMany([{ _id: controlled, doctorId: doctor, issuedAt: new Date() }, { doctorId: doctor }, { doctorId: doctor, issuedAt: null }]);
     await models.Appointment.insertMany(['completed', 'pending', 'cancelled'].map(status => ({ doctorId: doctor, status })));
@@ -34,9 +35,17 @@ test('sales totals exclude unused tickets, pending appointments and undispensed 
     assert.equal(rows[0].prescriptionCount, 2);
     assert.equal(rows[0].radiologyCount, 2);
     assert.equal(rows[0].appointmentCount, 1);
-    assert.equal(rows[0].vitaCommission, 15);
+    assert.equal(rows[0].labCount, 1);
+    assert.equal(rows[0].vitaCommission, 105);
     assert.equal(rows[1].vitaCommission, 5);
     assert.equal(rows[1].prescriptionCount, null);
+    const commissions = await module.exports.teamCommissions([manager, secondManager]);
+    assert.equal(commissions.get(String(manager)), 105, 'same pharmacy and doctor owner is credited only once');
+    await models.User.updateOne({ _id: pharmacy }, { $set: { salesManager: secondManager } });
+    const separate = await module.exports.teamCommissions([manager, secondManager]);
+    assert.equal(separate.get(String(manager)), 105);
+    assert.equal(separate.get(String(secondManager)), 5);
+
   } finally {
     for (const model of Object.values(models)) await model.collection.drop().catch(error => { if (error.code !== 26) throw error; });
     await connection.close();
