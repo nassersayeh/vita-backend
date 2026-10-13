@@ -46,6 +46,8 @@ const byAccount = (name, windowMs, max) => createRateLimiter({ name, windowMs, m
 const byUsername = (name, windowMs, max) => createRateLimiter({ name, windowMs, max, key: getUsername });
 
 module.exports = {
+  salesSignupLimiter: createRateLimiter({ name: 'sales-signup', windowMs: 60 * 60 * 1000, max: 60, key: req => String(req.user._id) }),
+  salesPasswordLimiter: createRateLimiter({ name: 'sales-password', windowMs: 15 * 60 * 1000, max: 8, key: req => String(req.user._id) }),
   controlledAccountLimiter: createRateLimiter({ name: 'controlled-account', windowMs: 15 * 60 * 1000, max: 8, key: req => String(req.controlledActor.id) }),
   controlledLimiter: createRateLimiter({ name: 'controlled', windowMs: 60 * 1000, max: 120, key: req => String(req.controlledActor.id) }),
   signupLimiters: [byIp('signup-ip', 60 * 60 * 1000, 8)],

@@ -117,6 +117,7 @@ const MAP = [
   { key: 'public_health', en: 'Public Health', ar: 'الصحة العامة' },
   { key: 'occupational_medicine', en: 'Occupational Medicine', ar: 'طب المهن' },
   { key: 'preventive_medicine', en: 'Preventive Medicine', ar: 'الطب الوقائي' },
+  { key: 'dentistry', en: 'Dentistry', ar: 'طب أسنان' },
   { key: 'dental_surgery', en: 'Dental Surgery', ar: 'جراحة الأسنان' },
   { key: 'orthodontics', en: 'Orthodontics', ar: 'تقويم الأسنان' },
   { key: 'audiology', en: 'Audiology', ar: 'السمعيات' },

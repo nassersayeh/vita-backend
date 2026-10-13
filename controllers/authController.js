@@ -199,6 +199,14 @@ exports.signup = async (req, res) => {
       return res.status(400).json({ message: 'Invalid registration data.' });
     }
     if (!['User', 'Doctor', 'Pharmacy', 'Lab', 'Radiology', 'Clinic', 'Institution', 'Hospital'].includes(role)) return res.status(403).json({ message: 'This account role cannot be self-registered.' });
+    const specialties = require('../utils/specialties').MAP;
+    const specialty = role === 'Doctor' ? req.body.specialty : undefined;
+    if (specialty !== undefined && (typeof specialty !== 'string' || !specialties.some(s => s.en === specialty))) {
+      return res.status(400).json({ message: 'اختر تخصصاً معتمداً من القائمة.' });
+    }
+    if (req.salesManagerId && (!['Doctor', 'Pharmacy'].includes(role) || (role === 'Doctor' && !specialty))) {
+      return res.status(400).json({ message: 'اختر طبيباً مع التخصص أو صيدلية.' });
+    }
     const normalizedMobile = normalizeLocalMobile(mobile, country);
     
     // Normalize email - treat empty string as undefined
@@ -256,6 +264,8 @@ exports.signup = async (req, res) => {
     
     const newUser = new User({
       fullName,
+      specialty,
+      salesManager: req.salesManagerId,
       username: normalizedUsername,
       mobileNumber: normalizedMobile,
       email: normalizedEmail,
@@ -330,6 +340,12 @@ exports.signup = async (req, res) => {
         console.error('Welcome WhatsApp message failed:', waErr.message);
       }
       
+      // Sales onboarding never returns a customer's session to the sales manager.
+      if (req.salesManagerId) return res.status(201).json({
+        success: true, message: 'تم إنشاء الحساب بانتظار موافقة الأدمن.',
+        user: { _id: newUser._id, fullName: newUser.fullName, role: newUser.role, activationStatus: newUser.activationStatus },
+      });
+
       // Auto-generate token so pharmacy can login immediately
       const token = jwt.sign(
         { userId: newUser._id, role: newUser.role },

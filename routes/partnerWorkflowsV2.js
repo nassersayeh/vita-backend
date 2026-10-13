@@ -36,15 +36,14 @@ const resultUpload = multer({
 const normalize = (value = '') => String(value).trim().toLowerCase()
   .normalize('NFKD').replace(/[\u064B-\u065F\u0670]/g, '').replace(/أ|إ|آ/g, 'ا');
 const isDentist = (user) => ['dentist', 'dental', 'dentistry', 'اسنان'].some((term) => normalize(user?.specialty).includes(term));
-const isNablus = (user) => ['nablus', 'نابلس'].some((term) => normalize(user?.city).includes(term));
 const isBurj = (user) => ['البرج', 'al burj', 'albourj', 'burj'].some((term) => normalize(user?.fullName).includes(term));
 const idIsValid = (id) => /^[\p{L}\d-]{5,24}$/u.test(String(id || '').trim());
 const objectIdIsValid = (id) => mongoose.Types.ObjectId.isValid(id);
 const isSelectedPharmacy = (user) => user?.role === 'Pharmacy' && user?.activationStatus === 'active' && user?.patientOrderingEnabled !== false;
 
 const requireDentist = (req, res, next) => {
-  if (req.user.role !== 'Doctor' || !isDentist(req.user) || !isNablus(req.user)) {
-    return res.status(403).json({ message: 'This workflow is available to dentists in Nablus only.' });
+  if (req.user.role !== 'Doctor' || !isDentist(req.user)) {
+    return res.status(403).json({ message: 'This workflow is available to dentists only.' });
   }
   next();
 };
@@ -71,7 +70,7 @@ const findBurjCenters = () => User.find({
 
 router.get('/context', async (req, res) => {
   try {
-    const dentist = req.user.role === 'Doctor' && isDentist(req.user) && isNablus(req.user);
+    const dentist = req.user.role === 'Doctor' && isDentist(req.user);
     const burj = req.user.role === 'Radiology' && isBurj(req.user);
     const pharmacy = isSelectedPharmacy(req.user);
     const response = { capabilities: { dentist, burj, pharmacy } };
@@ -107,7 +106,7 @@ router.get('/context', async (req, res) => {
 
 router.get('/patients/by-id/:idNumber', async (req, res) => {
   try {
-    const allowed = (req.user.role === 'Doctor' && isDentist(req.user) && isNablus(req.user)) || isSelectedPharmacy(req.user) || (req.user.role === 'Radiology' && isBurj(req.user));
+    const allowed = (req.user.role === 'Doctor' && isDentist(req.user)) || isSelectedPharmacy(req.user) || (req.user.role === 'Radiology' && isBurj(req.user));
     if (!allowed) return res.status(403).json({ message: 'Not allowed.' });
     if (!idIsValid(req.params.idNumber)) return res.status(400).json({ message: 'Invalid ID number.' });
     const patient = await User.findOne({ role: 'User', idNumber: String(req.params.idNumber).trim() })

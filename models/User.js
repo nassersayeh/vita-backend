@@ -28,7 +28,8 @@ const UserSchema = new mongoose.Schema({
     unique: true, 
     sparse: true 
   }, // Updated with sparse: true
-  role: { type: String, enum: ['User', 'Doctor', 'Pharmacy', 'Lab', 'Radiology', 'Admin', 'Superadmin', 'Institution', 'Hospital', 'Employee', 'Clinic', 'Nurse', 'Accountant', 'LabTech'], required: true },
+  role: { type: String, enum: ['User', 'Doctor', 'Pharmacy', 'Lab', 'Radiology', 'Admin', 'Superadmin', 'Institution', 'Hospital', 'Employee', 'Clinic', 'Nurse', 'Accountant', 'LabTech', 'SalesManager'], required: true },
+  salesManager: { type: mongoose.Schema.Types.ObjectId, ref: 'User', immutable: true, index: true },
   profileImage: { type: String, default: '' },
   mobileNumber: { type: String, required: true },
   // Global accounts use the `global` scope. Only authorized Al-Shaab household
@@ -36,7 +37,7 @@ const UserSchema = new mongoose.Schema({
   mobileUniquenessScope: { type: String, default: 'global', select: false },
   householdRelation: { type: String, enum: ['self', 'son', 'daughter', 'husband', 'wife'], default: 'self' },
   country: { type: String, required: function() { return this.role !== 'Employee'; } },
-  city: { type: String, required: function() { return this.role !== 'Employee'; } },
+  city: { type: String, required: function() { return !['Employee', 'SalesManager'].includes(this.role); } },
   // Mobile patient onboarding collects these immediately after the first login.
   // Public web registration still enforces them in authController.
   idNumber: { type: String, required: false, unique: true, sparse: true }, // Primary identifier
