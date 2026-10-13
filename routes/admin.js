@@ -15,6 +15,7 @@ const requireAdmin = (req, res, next) => {
 };
 
 router.use(auth, requireAdmin);
+router.use('/sales', require('./adminSales'));
 
 router.get('/patient-ordering-pharmacies', auth, requireAdmin, async (req, res) => {
   const pharmacies = await User.find({ role: 'Pharmacy' }).select('fullName city address activationStatus patientOrderingEnabled').sort({ fullName: 1 }).lean();
