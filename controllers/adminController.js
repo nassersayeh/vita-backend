@@ -547,6 +547,10 @@ exports.approveUser = async (req, res) => {
       });
     }
 
+    if (status === 'declined' && user.activationStatus !== 'pending') {
+      return res.status(400).json({ message: 'Only pending registration requests can be rejected.' });
+    }
+
     user.activationStatus = status;
     user.approvedBy = adminId;
     user.approvedAt = new Date();
@@ -647,6 +651,12 @@ exports.approveUser = async (req, res) => {
       }
     } catch (waErr) {
       console.error('WhatsApp approval notification error:', waErr.message);
+    }
+
+    if (status === 'declined') {
+      await User.findByIdAndDelete(user._id);
+      await Points.deleteOne({ userId: user._id });
+      return res.json({ message: 'Registration request rejected and user deleted successfully' });
     }
 
     res.json({
