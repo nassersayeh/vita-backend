@@ -31,6 +31,7 @@ const UserSchema = new mongoose.Schema({
   role: { type: String, enum: ['User', 'Doctor', 'Pharmacy', 'Lab', 'Radiology', 'Admin', 'Superadmin', 'Institution', 'Hospital', 'Employee', 'Clinic', 'Nurse', 'Accountant', 'LabTech', 'SalesManager', 'SalesTeamLead'], required: true },
   salesCreatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', immutable: true },
   salesManager: { type: mongoose.Schema.Types.ObjectId, ref: 'User', immutable: true, index: true },
+  registeredBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', immutable: true, default: null },
   profileImage: { type: String, default: '' },
   mobileNumber: { type: String, required: true },
   // Global accounts use the `global` scope. Only authorized Al-Shaab household

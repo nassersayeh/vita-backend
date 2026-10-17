@@ -79,6 +79,7 @@ test('shared signup saves attribution and specialty, keeps approval pending and 
   await controller.signup({ salesManagerId: 'manager-A', body: { fullName: 'Dentist', mobile: '0591111111', password: 'strong-12345', country: 'Palestine', city: 'Ramallah', idNumber: '123456789', address: 'Main street', role: 'Doctor', specialty: 'Dentistry', salesManager: 'manager-B', activationStatus: 'active' } }, res);
   assert.equal(res.statusCode, 201);
   assert.equal(saved.salesManager, 'manager-A');
+  assert.equal(saved.registeredBy, 'manager-A');
   assert.equal(saved.specialty, 'Dentistry');
   assert.equal(result.user.activationStatus, 'pending');
   assert.equal(result.token, undefined);

@@ -161,6 +161,7 @@ router.post('/dentist/patients', requireDentist, async (req, res) => {
     createdPatient = await User.create({
       fullName, mobileNumber, idNumber, address: address || req.user.address || 'Not provided',
       country: req.user.country || 'Palestine', city: req.user.city || 'Nablus', role: 'User',
+      registeredBy: req.user._id,
       password: await bcrypt.hash(temporaryPassword, 12), activationStatus: 'active',
       isPhoneVerified: false, profileCompletionPromptDismissed: false,
     });
@@ -549,7 +550,7 @@ router.post('/radiology/patients', requireBurj, async (req, res) => {
     const patient = await User.create({
       fullName: String(fullName).trim().slice(0, 120), mobileNumber: String(mobileNumber).trim(), idNumber: String(idNumber).trim(),
       address: String(address).trim().slice(0, 300), city: String(city).trim(), country: String(country).trim(), birthdate, sex,
-      role: 'User', password: await bcrypt.hash(temporaryPassword, 12), activationStatus: 'active', isPhoneVerified: false,
+      role: 'User', registeredBy: req.user._id, password: await bcrypt.hash(temporaryPassword, 12), activationStatus: 'active', isPhoneVerified: false,
     });
     res.status(201).json({ patient: publicPatient(patient), temporaryPassword });
   } catch (error) { res.status(500).json({ message: 'Failed to create patient account.' }); }

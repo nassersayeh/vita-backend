@@ -698,6 +698,9 @@ exports.getAllUsers = async (req, res) => {
     if (String(limit).toLowerCase() === 'all') {
       users = await User.find(filter)
         .select('-password')
+        .populate('registeredBy', 'fullName role')
+        .populate('salesManager', 'fullName role')
+        .populate('salesCreatedBy', 'fullName role')
         .sort({ createdAt: -1 });
       total = users.length;
       res.json({
@@ -709,6 +712,9 @@ exports.getAllUsers = async (req, res) => {
     } else {
       users = await User.find(filter)
         .select('-password')
+        .populate('registeredBy', 'fullName role')
+        .populate('salesManager', 'fullName role')
+        .populate('salesCreatedBy', 'fullName role')
         .sort({ createdAt: -1 })
         .limit(Number(limit) * 1)
         .skip((Number(page) - 1) * Number(limit));
@@ -957,7 +963,7 @@ exports.createUser = async (req, res) => {
       userData.password = await bcrypt.hash(userData.password, salt);
     }
 
-    const newUser = new User(userData);
+    const newUser = new User({ ...userData, registeredBy: req.user._id });
     await newUser.save();
 
     // Auto-assign default drug inventory when creating a Pharmacy user

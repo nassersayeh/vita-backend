@@ -62,7 +62,8 @@ exports.createCustomerForPharmacy = async (req, res) => {
         fullName: name,
         mobileNumber: phone,
         password: hashed,
-        country: 'N/A', city: 'N/A', idNumber: `guest-${Date.now()}`, address: 'N/A', role: 'User', isPhoneVerified: false
+        country: 'N/A', city: 'N/A', idNumber: `guest-${Date.now()}`, address: 'N/A', role: 'User',
+        registeredBy: req.user?._id, isPhoneVerified: false
       });
       await user.save({ validateBeforeSave: false });
     }

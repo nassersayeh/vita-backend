@@ -62,6 +62,7 @@ router.post('/pharmacy/:pharmacyId', auth, async (req, res) => {
       mobileNumber,
       password: hashedPassword,
       role: 'Employee',
+      registeredBy: req.user._id,
       country: 'Israel',
       city: 'Unknown',
       idNumber: mobileNumber, // Use mobile as idNumber for now

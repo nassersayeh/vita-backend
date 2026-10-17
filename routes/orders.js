@@ -88,6 +88,7 @@ router.post('/pos', auth, async (req, res) => {
           idNumber: guestId,
           address: 'N/A',
           role: 'User',
+          registeredBy: req.user._id,
           isPhoneVerified: false
         });
         // Save without running full validation if some required fields are missing

@@ -160,6 +160,7 @@ exports.addDoctor = async (req, res) => {
       city: clinicOwner.city,
       address: clinicOwner.address || '',
       idNumber: `CLINIC-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      registeredBy: clinicOwnerId,
       isPhoneVerified: true,
       activationStatus: 'active',
       isPaid: true, // Clinic pays for doctors
@@ -1341,6 +1342,7 @@ exports.addStaff = async (req, res) => {
       city: clinicOwner.city,
       address: clinicOwner.address || '',
       idNumber: `CLINIC-STAFF-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      registeredBy: clinicOwnerId,
       isPhoneVerified: true,
       activationStatus: 'active',
       isPaid: true,

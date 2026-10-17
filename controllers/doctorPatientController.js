@@ -169,6 +169,7 @@ exports.createPatient = async (req, res) => {
       idNumber,
       address: address || city,
       role: 'User',
+      registeredBy: req.user?._id,
       activationStatus: 'active',
       email: `${normalizedMobile}@vita.local`, // Temporary email
       password: hashedPassword,

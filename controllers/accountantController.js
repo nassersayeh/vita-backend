@@ -331,6 +331,7 @@ exports.registerPatient = async (req, res) => {
       idNumber,
       password: hashedPassword,
       role: 'User',
+      registeredBy: req.user?._id,
       birthdate,
       sex,
       address: address || clinicOwner?.address || clinicOwner?.city || city || 'Not provided',

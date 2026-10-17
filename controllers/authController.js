@@ -268,6 +268,7 @@ exports.signup = async (req, res) => {
       fullName,
       specialty,
       salesManager: req.salesManagerId,
+      registeredBy: req.salesManagerId,
       username: normalizedUsername,
       mobileNumber: normalizedMobile,
       email: normalizedEmail,

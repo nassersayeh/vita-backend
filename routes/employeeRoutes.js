@@ -126,6 +126,7 @@ router.post('/doctor/:doctorId', authMiddleware, [
       mobileNumber,
       password: hashedPassword,
       role: 'Employee',
+      registeredBy: req.user._id,
       country: req.user.country,
       city: req.user.city,
       address: req.user.address,
