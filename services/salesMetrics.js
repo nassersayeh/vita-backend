@@ -7,6 +7,7 @@ const Quote = require('../models/PharmacyPrescriptionQuote');
 const ControlledQuote = require('../models/ControlledQuote');
 const User = require('../models/User');
 const MedicalTest = require('../models/MedicalTest');
+const MedicalExamRequest = require('../models/MedicalExamRequest');
 
 const grouped = (Model, match, field, value = 1) => Model.aggregate([
   { $match: match }, { $group: { _id: `$${field}`, value: { $sum: value } } },
@@ -32,7 +33,7 @@ async function customerMetrics(customers) {
     { $unwind: '$rx' }, { $match: { 'rx.doctorId': { $in: doctors } } },
     { $group: { _id: '$rx.doctorId', value: { $sum: '$vitaCommissionTotal' } } },
   ]);
-  const [prescriptions, controlled, appointments, medicalCommission, pharmacyCommission, controlledPharmacyCommission, doctorQuoteCommission, controlledDoctorCommission] = await Promise.all([
+  const [prescriptions, controlled, appointments, medicalCommission, pharmacyCommission, controlledPharmacyCommission, doctorQuoteCommission, controlledDoctorCommission, medicalExamCounts] = await Promise.all([
     grouped(Prescription, { doctorId: { $in: doctors } }, 'doctorId'),
     grouped(Controlled, { doctorId: { $in: doctors }, issuedAt: { $ne: null } }, 'doctorId'),
     grouped(Appointment, { doctorId: { $in: doctors }, status: 'completed' }, 'doctorId'),
@@ -41,6 +42,7 @@ async function customerMetrics(customers) {
     grouped(ControlledQuote, { pharmacy: { $in: pharmacies }, status: 'dispensed' }, 'pharmacy', '$vitaCommissionTotal'),
     doctors.length ? quoteDoctorTotals(Quote, Prescription) : [],
     doctors.length ? quoteDoctorTotals(ControlledQuote, Controlled) : [],
+    grouped(MedicalExamRequest, { doctorId: { $in: doctors }, status: { $in: ['pending', 'completed'] } }, 'doctorId'),
   ]);
   return customers.map(customer => {
     const id = customer._id;
@@ -51,7 +53,7 @@ async function customerMetrics(customers) {
     return { ...customer,
       prescriptionCount: doctor ? valueFor(prescriptions, id) + valueFor(controlled, id) : null,
       radiologyCount: doctor ? valueFor(diagnostics, id) : null,
-      labCount: doctor ? Number(diagnostics.find(r => String(r._id) === String(id))?.labCount || 0) : null,
+      labCount: doctor ? Number(diagnostics.find(r => String(r._id) === String(id))?.labCount || 0) + valueFor(medicalExamCounts, id) : null,
       appointmentCount: doctor ? valueFor(appointments, id) : null,
       vitaCommission: Math.round(commission * 100) / 100,
     };

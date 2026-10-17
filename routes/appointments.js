@@ -32,7 +32,7 @@ router.get('/', async (req, res) => {
 });
 
 // POST /api/appointments - Create a new appointment
-router.post('/', appointmentController.createAppointment);
+router.post('/', (req, res, next) => req.headers.authorization ? require('../middleware/auth')(req, res, next) : next(), appointmentController.createAppointment);
 
 // GET /api/appointments/available-dates - Get available dates for doctor's workplaces
 router.get('/available-dates', appointmentController.getAvailableDatesAndTimes);

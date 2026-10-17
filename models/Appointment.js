@@ -27,8 +27,11 @@ const appointmentSchema = new mongoose.Schema({
   rating: { type: Number, default: null }, // Patient's rating for this appointment
   isRated: { type: Boolean, default: false }, // Whether the patient has rated this appointment
   // Blocked slot (for cancelled appointments where doctor wants to keep the time blocked)
+  cancellationReason: { type: String, default: '', maxlength: 1000 },
+  cancelledAt: { type: Date },
   blockedSlot: { type: Boolean, default: false }, // If true, the time slot remains unavailable even when cancelled
   // Track who created the appointment (e.g. accountant)
+  bookingSource: { type: String, enum: ['vita', 'manual', 'unknown'], default: 'unknown' },
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   // Clinic management - if set, this appointment is managed by the clinic, not the doctor
   clinicId: { type: mongoose.Schema.Types.ObjectId, ref: 'Clinic' },

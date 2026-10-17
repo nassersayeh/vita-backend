@@ -475,6 +475,8 @@ exports.createAppointment = async (req, res) => {
     const appointment = new Appointment({
       doctorId,
       patient: patientId,
+      bookingSource: req.user?.role === 'User' && String(req.user._id) === String(patientId) ? 'vita' : req.user ? 'manual' : 'unknown',
+      ...(req.user ? { createdBy: req.user._id } : {}),
       appointmentDateTime,
       workplaceName,
       workplaceAddress,
@@ -1133,6 +1135,7 @@ exports.createPublicDoctorBooking = async (req, res) => {
     const appointment = new Appointment({
       doctorId,
       patient: patient._id,
+      bookingSource: 'vita',
       appointmentDateTime,
       workplaceName,
       workplaceAddress,

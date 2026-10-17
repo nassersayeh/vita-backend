@@ -21,8 +21,16 @@ const { saveStandalonePrescription } = require('../utils/saveStandalonePrescript
 const { getMobileCandidates, normalizeMobileForStorage } = require('../utils/mobileNumber');
 const { sendWhatsAppMessage, isWhatsAppReady } = require('../services/whatsappService');
 
+const { isDentist, usesLegacyClinicDashboard } = require('../utils/partnerAccess');
 const router = express.Router();
 router.use(auth);
+router.use(async (req, res, next) => {
+  try { req.legacyClinicDashboard = await usesLegacyClinicDashboard(req.user); next(); }
+  catch { res.status(503).json({ message: 'تعذر التحقق من إعدادات الحساب.' }); }
+});
+router.get('/dashboard-policy', (req, res) => res.json({ legacy: req.legacyClinicDashboard }));
+router.use((req, res, next) => req.legacyClinicDashboard ? res.status(403).json({ message: 'يرجى استخدام لوحة المستوصف الحالية.' }) : next());
+
 
 const resultUpload = multer({
   storage: multer.diskStorage({
@@ -33,23 +41,27 @@ const resultUpload = multer({
   limits: { fileSize: 10 * 1024 * 1024, files: 20 },
 });
 
-const normalize = (value = '') => String(value).trim().toLowerCase()
-  .normalize('NFKD').replace(/[\u064B-\u065F\u0670]/g, '').replace(/أ|إ|آ/g, 'ا');
-const isDentist = (user) => ['dentist', 'dental', 'dentistry', 'اسنان'].some((term) => normalize(user?.specialty).includes(term));
-const isBurj = (user) => ['البرج', 'al burj', 'albourj', 'burj'].some((term) => normalize(user?.fullName).includes(term));
+const isRadiologyCenter = user => user?.role === 'Radiology' && user.isPublic !== false && !user.clinicId;
 const idIsValid = (id) => /^[\p{L}\d-]{5,24}$/u.test(String(id || '').trim());
 const objectIdIsValid = (id) => mongoose.Types.ObjectId.isValid(id);
 const isSelectedPharmacy = (user) => user?.role === 'Pharmacy' && user?.activationStatus === 'active' && user?.patientOrderingEnabled !== false;
 
-const requireDentist = (req, res, next) => {
-  if (req.user.role !== 'Doctor' || !isDentist(req.user)) {
-    return res.status(403).json({ message: 'This workflow is available to dentists only.' });
+const requireDoctor = (req, res, next) => {
+  if (req.user.role !== 'Doctor' || req.legacyClinicDashboard) {
+    return res.status(403).json({ message: 'This workflow is available to independent doctors only.' });
   }
   next();
 };
-const requireBurj = (req, res, next) => {
-  if (req.user.role !== 'Radiology' || !isBurj(req.user)) {
-    return res.status(403).json({ message: 'This workflow is available to Al Burj Radiology Center only.' });
+const requireLinkedPatient = (req, res, next) => {
+  const patientId = req.body?.patientId;
+  if (!objectIdIsValid(patientId) || !(req.user.patients || []).some(id => String(id) === String(patientId))) {
+    return res.status(403).json({ message: 'This patient is not linked to your account.' });
+  }
+  next();
+};
+const requireRadiologyCenter = (req, res, next) => {
+  if (req.user.role !== 'Radiology' || !isRadiologyCenter(req.user) || req.legacyClinicDashboard) {
+    return res.status(403).json({ message: 'This workflow is available to independent radiology centers only.' });
   }
   next();
 };
@@ -63,19 +75,21 @@ const publicPatient = (patient) => ({
   mobileNumber: patient.mobileNumber, birthdate: patient.birthdate, sex: patient.sex,
 });
 
-const findBurjCenters = () => User.find({
-  role: 'Radiology', activationStatus: 'active',
-  $or: [{ fullName: /البرج/i }, { fullName: /al\s*burj/i }, { fullName: /albourj/i }],
-}).select('fullName city address mobileNumber').sort({ fullName: 1 }).lean();
+const findRadiologyCenters = async () => {
+  const centers = await User.find({ role: 'Radiology', activationStatus: 'active', isPublic: { $ne: false }, clinicId: null })
+    .select('fullName city address mobileNumber clinicId').sort({ fullName: 1 }).lean();
+  const eligible = await Promise.all(centers.map(async center => await usesLegacyClinicDashboard(center) ? null : center));
+  return eligible.filter(Boolean);
+};
 
 router.get('/context', async (req, res) => {
   try {
-    const dentist = req.user.role === 'Doctor' && isDentist(req.user);
-    const burj = req.user.role === 'Radiology' && isBurj(req.user);
+    const dentist = req.user.role === 'Doctor' && !req.legacyClinicDashboard;
+    const burj = req.user.role === 'Radiology' && isRadiologyCenter(req.user);
     const pharmacy = isSelectedPharmacy(req.user);
     const response = { capabilities: { dentist, burj, pharmacy } };
     if (dentist) {
-      const centers = await findBurjCenters();
+      const centers = await findRadiologyCenters();
       const center = centers[0] || null;
       response.radiologyCenter = center;
       response.radiologyCenters = centers;
@@ -106,7 +120,7 @@ router.get('/context', async (req, res) => {
 
 router.get('/patients/by-id/:idNumber', async (req, res) => {
   try {
-    const allowed = (req.user.role === 'Doctor' && isDentist(req.user)) || isSelectedPharmacy(req.user) || (req.user.role === 'Radiology' && isBurj(req.user));
+    const allowed = (req.user.role === 'Doctor' && !req.legacyClinicDashboard) || isSelectedPharmacy(req.user) || (req.user.role === 'Radiology' && isRadiologyCenter(req.user));
     if (!allowed) return res.status(403).json({ message: 'Not allowed.' });
     if (!idIsValid(req.params.idNumber)) return res.status(400).json({ message: 'Invalid ID number.' });
     const patient = await User.findOne({ role: 'User', idNumber: String(req.params.idNumber).trim() })
@@ -116,7 +130,7 @@ router.get('/patients/by-id/:idNumber', async (req, res) => {
   } catch (error) { res.status(500).json({ message: 'Failed to find patient.' }); }
 });
 
-router.get('/dentist/patients', requireDentist, async (req, res) => {
+router.get('/dentist/patients', requireDoctor, async (req, res) => {
   try {
     const search = String(req.query.search || '').trim().slice(0, 80);
     const page = Math.max(Number(req.query.page) || 1, 1);
@@ -140,7 +154,7 @@ router.get('/dentist/patients', requireDentist, async (req, res) => {
   } catch (error) { res.status(500).json({ message: 'Failed to load doctor patients.' }); }
 });
 
-router.post('/dentist/patients', requireDentist, async (req, res) => {
+router.post('/dentist/patients', requireDoctor, async (req, res) => {
   let createdPatient = null;
   try {
     const fullName = String(req.body.fullName || '').trim().slice(0, 120);
@@ -174,7 +188,17 @@ router.post('/dentist/patients', requireDentist, async (req, res) => {
   }
 });
 
-router.get('/dentist/patients/:patientId/billing', requireDentist, async (req, res) => {
+const partnerAppointments = require('../controllers/partnerAppointmentsController');
+router.post('/dentist/appointments', requireDoctor, partnerAppointments.create);
+router.get('/dentist/appointments/new-slots', requireDoctor, partnerAppointments.newSlots);
+router.get('/dentist/appointments', requireDoctor, partnerAppointments.list);
+router.get('/dentist/appointments/:id/slots', requireDoctor, partnerAppointments.slots);
+router.patch('/dentist/appointments/:id', requireDoctor, partnerAppointments.update);
+
+router.get('/dentist/accounts/report', requireDoctor, require('../controllers/partnerAccountsController').report);
+router.post('/dentist/accounts', requireDoctor, require('../controllers/partnerAccountsController').create);
+
+router.get('/dentist/patients/:patientId/billing', requireDoctor, async (req, res) => {
   try {
     if (!objectIdIsValid(req.params.patientId)) return res.status(400).json({ message: 'Invalid patient.' });
     const isLinked = (req.user.patients || []).some((id) => String(id) === String(req.params.patientId));
@@ -194,7 +218,7 @@ router.get('/dentist/patients/:patientId/billing', requireDentist, async (req, r
   } catch (error) { res.status(500).json({ message: 'Failed to load patient billing history.' }); }
 });
 
-router.get('/dentist/patients/:patientId/history', requireDentist, async (req, res) => {
+router.get('/dentist/patients/:patientId/history', requireDoctor, async (req, res) => {
   try {
     if (!objectIdIsValid(req.params.patientId)) return res.status(400).json({ message: 'Invalid patient.' });
     const patientId = String(req.params.patientId);
@@ -247,7 +271,7 @@ router.get('/dentist/patients/:patientId/history', requireDentist, async (req, r
   } catch (error) { res.status(500).json({ message: 'Failed to load patient clinical history.' }); }
 });
 
-router.post('/dentist/prescriptions', requireDentist, async (req, res) => {
+router.post('/dentist/prescriptions', requireDoctor, requireLinkedPatient, async (req, res) => {
   try {
     const { patientId, products, diagnosis = '', notes = '' } = req.body;
     if (!objectIdIsValid(patientId) || !Array.isArray(products) || !products.length || products.length > 30) {
@@ -277,15 +301,15 @@ router.post('/dentist/prescriptions', requireDentist, async (req, res) => {
   } catch (error) { res.status(error.code === 'CONTROLLED_REQUIRED' ? 403 : 500).json({ message: error.code === 'CONTROLLED_REQUIRED' ? error.message : 'Failed to create prescription.' }); }
 });
 
-router.post('/dentist/radiology-referrals', requireDentist, async (req, res) => {
+router.post('/dentist/radiology-referrals', requireDoctor, requireLinkedPatient, async (req, res) => {
   try {
     const { patientId, centerId, testIds, notes = '' } = req.body;
     if (!objectIdIsValid(patientId) || !objectIdIsValid(centerId) || !Array.isArray(testIds) || !testIds.length || testIds.length > 20) {
       return res.status(400).json({ message: 'Patient, radiology branch, and imaging types are required.' });
     }
-    const [patient, center] = await Promise.all([User.findOne({ _id: patientId, role: 'User' }).select('_id fullName'), User.findOne({ _id: centerId, role: 'Radiology', activationStatus: 'active' }).select('fullName mobileNumber')]);
+    const [patient, center] = await Promise.all([User.findOne({ _id: patientId, role: 'User' }).select('_id fullName'), User.findOne({ _id: centerId, role: 'Radiology', activationStatus: 'active' }).select('fullName mobileNumber role isPublic clinicId')]);
     if (!patient) return res.status(404).json({ message: 'Patient not found.' });
-    if (!center || !isBurj(center)) return res.status(409).json({ message: 'The selected Al Burj branch is not active.' });
+    if (!center || !isRadiologyCenter(center) || await usesLegacyClinicDashboard(center)) return res.status(409).json({ message: 'The selected radiology center is not available.' });
     const services = await MedicalTest.find({ _id: { $in: testIds }, providerId: center._id, type: 'radiology', isActive: true }).select('price name');
     if (services.length !== [...new Set(testIds)].length) return res.status(400).json({ message: 'One or more imaging types are unavailable.' });
     const originalCost = services.reduce((sum, service) => sum + (Number(service.price) || 0), 0);
@@ -311,10 +335,10 @@ router.post('/dentist/radiology-referrals', requireDentist, async (req, res) => 
   } catch (error) { res.status(500).json({ message: 'Failed to send radiology referral.' }); }
 });
 
-router.post('/dentist/reports', requireDentist, async (req, res) => {
+router.post('/dentist/reports', requireDoctor, requireLinkedPatient, async (req, res) => {
   try {
     const { patientId, diagnosis, title = '', chiefComplaint = '', treatment = '', recommendations = '', notes = '', selectedTeeth = [], billing = {} } = req.body;
-    if (!objectIdIsValid(patientId) || !String(diagnosis || '').trim() || !Array.isArray(selectedTeeth) || selectedTeeth.length === 0) return res.status(400).json({ message: 'Patient, diagnosis, and at least one treated tooth are required.' });
+    if (!objectIdIsValid(patientId) || !String(diagnosis || '').trim() || !Array.isArray(selectedTeeth) || (isDentist(req.user) && selectedTeeth.length === 0)) return res.status(400).json({ message: 'Patient and diagnosis are required; dentists must select a treated tooth.' });
     const patient = await User.findOne({ _id: patientId, role: 'User' }).select('_id');
     if (!patient) return res.status(404).json({ message: 'Patient not found.' });
     const paymentMethod = String(billing.paymentMethod || 'cash');
@@ -339,7 +363,7 @@ router.post('/dentist/reports', requireDentist, async (req, res) => {
       title: String(title).trim().slice(0, 200), chiefComplaint: String(chiefComplaint).trim().slice(0, 1000),
       diagnosis: String(diagnosis).trim().slice(0, 1000), treatment: String(treatment).trim().slice(0, 2000),
       recommendations: String(recommendations).trim().slice(0, 2000), notes: String(notes).trim().slice(0, 2000),
-      selectedTeeth: cleanedTeeth, dentalTreatment: String(treatment).trim().slice(0, 2000), treatmentCost: totalAmount,
+      selectedTeeth: isDentist(req.user) ? cleanedTeeth : [], dentalTreatment: String(treatment).trim().slice(0, 2000), treatmentCost: totalAmount,
       billing: { paymentMethod, totalAmount, paidAmount, remainingAmount, debtorType, insuranceCompanyName: String(billing.insuranceCompanyName || '').trim().slice(0, 160), insuranceNumber: String(billing.insuranceNumber || '').trim().slice(0, 80) },
       partnerSourceChannel: 'vita_partner_network', vitaCommissionPercent: 5,
       vitaCommissionAmount: Number((paidAmount * 0.05).toFixed(2)),
@@ -348,7 +372,7 @@ router.post('/dentist/reports', requireDentist, async (req, res) => {
     try {
       let financial = await Financial.findOne({ doctorId: req.user._id });
       if (!financial) financial = new Financial({ doctorId: req.user._id, transactions: [], expenses: [], debts: [] });
-      const description = `Dental treatment - ${patientId} - ${record._id}`;
+      const description = `${isDentist(req.user) ? 'Dental' : 'Medical'} treatment - ${patientId} - ${record._id}`;
       if (paidAmount > 0) {
         financial.transactions.push({ amount: paidAmount, description, patientId, medicalRecordId: record._id, paymentMethod: 'Cash' });
         financial.totalEarnings = Number(financial.totalEarnings || 0) + paidAmount;
@@ -371,7 +395,7 @@ router.post('/dentist/reports', requireDentist, async (req, res) => {
   } catch (error) { res.status(500).json({ message: 'Failed to create dental report.' }); }
 });
 
-router.get('/radiology/requests', requireBurj, async (req, res) => {
+router.get('/radiology/requests', requireRadiologyCenter, async (req, res) => {
   try {
     const filter = { labId: req.user._id };
     const page = Math.max(Number(req.query.page) || 1, 1);
@@ -386,7 +410,7 @@ router.get('/radiology/requests', requireBurj, async (req, res) => {
   } catch (error) { res.status(500).json({ message: 'Failed to load radiology requests.' }); }
 });
 
-router.get('/radiology/accounts', requireBurj, async (req, res) => {
+router.get('/radiology/accounts', requireRadiologyCenter, async (req, res) => {
   try {
     const now = new Date();
     const year = Math.min(2100, Math.max(2020, Number(req.query.year) || now.getFullYear()));
@@ -423,7 +447,7 @@ router.get('/radiology/accounts', requireBurj, async (req, res) => {
   } catch (error) { res.status(500).json({ message: 'Failed to load radiology accounts.' }); }
 });
 
-router.delete('/radiology/requests/:requestId', requireBurj, async (req, res) => {
+router.delete('/radiology/requests/:requestId', requireRadiologyCenter, async (req, res) => {
   try {
     const request = await LabRequest.findOneAndDelete({ _id: req.params.requestId, labId: req.user._id });
     if (!request) return res.status(404).json({ message: 'Request not found.' });
@@ -431,7 +455,7 @@ router.delete('/radiology/requests/:requestId', requireBurj, async (req, res) =>
   } catch (error) { res.status(500).json({ message: 'Failed to delete request.' }); }
 });
 
-router.get('/radiology/services', requireBurj, async (req, res) => {
+router.get('/radiology/services', requireRadiologyCenter, async (req, res) => {
   try {
     const services = await MedicalTest.find({ providerId: req.user._id, type: 'radiology' })
       .select('name category description price estimatedDuration isActive createdAt').sort({ isActive: -1, category: 1, name: 1 }).lean();
@@ -439,7 +463,7 @@ router.get('/radiology/services', requireBurj, async (req, res) => {
   } catch (error) { res.status(500).json({ message: 'Failed to load imaging services.' }); }
 });
 
-router.post('/radiology/services', requireBurj, async (req, res) => {
+router.post('/radiology/services', requireRadiologyCenter, async (req, res) => {
   try {
     const name = String(req.body.name || '').trim().slice(0, 160);
     const category = String(req.body.category || '').trim().slice(0, 120);
@@ -452,7 +476,7 @@ router.post('/radiology/services', requireBurj, async (req, res) => {
   } catch (error) { res.status(500).json({ message: 'Failed to create imaging service.' }); }
 });
 
-router.put('/radiology/services/:serviceId', requireBurj, async (req, res) => {
+router.put('/radiology/services/:serviceId', requireRadiologyCenter, async (req, res) => {
   try {
     const service = await MedicalTest.findOne({ _id: req.params.serviceId, providerId: req.user._id, type: 'radiology' });
     if (!service) return res.status(404).json({ message: 'Imaging service not found.' });
@@ -470,7 +494,7 @@ router.put('/radiology/services/:serviceId', requireBurj, async (req, res) => {
   } catch (error) { res.status(500).json({ message: 'Failed to update imaging service.' }); }
 });
 
-router.delete('/radiology/services/:serviceId', requireBurj, async (req, res) => {
+router.delete('/radiology/services/:serviceId', requireRadiologyCenter, async (req, res) => {
   try {
     const service = await MedicalTest.findOne({ _id: req.params.serviceId, providerId: req.user._id, type: 'radiology' });
     if (!service) return res.status(404).json({ message: 'Imaging service not found.' });
@@ -480,7 +504,7 @@ router.delete('/radiology/services/:serviceId', requireBurj, async (req, res) =>
   } catch (error) { res.status(500).json({ message: 'Failed to delete imaging service.' }); }
 });
 
-router.patch('/radiology/requests/:requestId/discount', requireBurj, async (req, res) => {
+router.patch('/radiology/requests/:requestId/discount', requireRadiologyCenter, async (req, res) => {
   try {
     const discountPercentage = Number(req.body.discountPercentage);
     const submittedOriginalCost = req.body.originalCost === undefined ? null : Number(req.body.originalCost);
@@ -512,7 +536,7 @@ router.patch('/radiology/requests/:requestId/discount', requireBurj, async (req,
   } catch (error) { res.status(500).json({ message: 'Failed to update discount.' }); }
 });
 
-router.patch('/radiology/requests/:requestId/status', requireBurj, async (req, res) => {
+router.patch('/radiology/requests/:requestId/status', requireRadiologyCenter, async (req, res) => {
   try {
     const status = req.body.status === 'in-progress' ? 'in_progress' : req.body.status;
     if (!['pending', 'in_progress', 'completed', 'cancelled'].includes(status)) return res.status(400).json({ message: 'Invalid status.' });
@@ -525,7 +549,7 @@ router.patch('/radiology/requests/:requestId/status', requireBurj, async (req, r
   } catch (error) { res.status(500).json({ message: 'Failed to update request status.' }); }
 });
 
-router.post('/radiology/requests/:requestId/results', requireBurj, resultUpload.array('files', 20), async (req, res) => {
+router.post('/radiology/requests/:requestId/results', requireRadiologyCenter, resultUpload.array('files', 20), async (req, res) => {
   try {
     const request = await LabRequest.findOne({ _id: req.params.requestId, labId: req.user._id });
     if (!request) return res.status(404).json({ message: 'Request not found.' });
@@ -540,7 +564,7 @@ router.post('/radiology/requests/:requestId/results', requireBurj, resultUpload.
   } catch (error) { res.status(500).json({ message: 'Failed to upload radiology results.' }); }
 });
 
-router.post('/radiology/patients', requireBurj, async (req, res) => {
+router.post('/radiology/patients', requireRadiologyCenter, async (req, res) => {
   try {
     const { fullName, mobileNumber, idNumber, address, city = 'Nablus', country = 'Palestine', birthdate, sex } = req.body;
     if (!String(fullName || '').trim() || !String(mobileNumber || '').trim() || !idIsValid(idNumber) || !String(address || '').trim()) return res.status(400).json({ message: 'Name, mobile, ID number, and address are required.' });

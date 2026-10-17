@@ -180,6 +180,7 @@ app.use(async (req, res, next) => {
 
 // Mount existing routes
 app.use('/api/auth', authRoutes);
+app.use('/api/medical-exam-requests', require('./routes/medicalExamRequests'));
 app.use('/api/sales', require('./routes/sales'));
 app.use('/api/otp', otpRoutes);
 app.use('/api/upload', uploadRoutes);

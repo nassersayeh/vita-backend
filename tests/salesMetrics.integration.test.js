@@ -10,7 +10,7 @@ test('sales totals exclude unused tickets, pending appointments and undispensed 
   const prefix = `vita_sales_test_${randomUUID().replaceAll('-', '')}_`;
   const models = {};
   try {
-    for (const name of ['User', 'MedicalTest', 'EPrescription', 'ControlledPrescription', 'Appointment', 'LabRequest', 'MedicalRecord', 'PharmacyPrescriptionQuote', 'ControlledQuote']) {
+    for (const name of ['User', 'MedicalTest', 'EPrescription', 'ControlledPrescription', 'Appointment', 'LabRequest', 'MedicalRecord', 'PharmacyPrescriptionQuote', 'ControlledQuote', 'MedicalExamRequest']) {
       models[name] = connection.model(prefix + name, new mongoose.Schema({}, { strict: false }), prefix + name);
     }
     const id = () => new mongoose.Types.ObjectId();
@@ -19,6 +19,7 @@ test('sales totals exclude unused tickets, pending appointments and undispensed 
     await models.User.insertMany([{ _id: doctor, role: 'Doctor', salesManager: manager }, { _id: pharmacy, role: 'Pharmacy', salesManager: manager }, { _id: radiology, role: 'Radiology' }, { _id: lab, role: 'Lab' }]);
     await models.EPrescription.insertMany([{ _id: prescription, doctorId: doctor }, { doctorId: outsider }]);
     await models.ControlledPrescription.insertMany([{ _id: controlled, doctorId: doctor, issuedAt: new Date() }, { doctorId: doctor }, { doctorId: doctor, issuedAt: null }]);
+    await models.MedicalExamRequest.insertMany([{ doctorId: doctor, status: 'awaiting_laboratory' }, { doctorId: doctor, status: 'pending' }, { doctorId: doctor, status: 'completed' }]);
     await models.Appointment.insertMany(['completed', 'pending', 'cancelled'].map(status => ({ doctorId: doctor, status })));
     await models.LabRequest.insertMany([
       { doctorId: doctor, labId: radiology, status: 'completed', vitaCommissionAmount: 5 },
@@ -35,7 +36,7 @@ test('sales totals exclude unused tickets, pending appointments and undispensed 
     assert.equal(rows[0].prescriptionCount, 2);
     assert.equal(rows[0].radiologyCount, 2);
     assert.equal(rows[0].appointmentCount, 1);
-    assert.equal(rows[0].labCount, 1);
+    assert.equal(rows[0].labCount, 3, 'sent medical exams count; unsent requests do not');
     assert.equal(rows[0].vitaCommission, 105);
     assert.equal(rows[1].vitaCommission, 5);
     assert.equal(rows[1].prescriptionCount, null);
