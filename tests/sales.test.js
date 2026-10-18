@@ -81,6 +81,7 @@ test('shared signup saves attribution and specialty, keeps approval pending and 
   assert.equal(saved.salesManager, 'manager-A');
   assert.equal(saved.registeredBy, 'manager-A');
   assert.equal(saved.specialty, 'Dentistry');
+  assert.equal(saved.licenseNumber, '123456789');
   assert.equal(result.user.activationStatus, 'pending');
   assert.equal(result.token, undefined);
   assert.equal(result.autoLogin, undefined);
