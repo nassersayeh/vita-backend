@@ -36,6 +36,7 @@ router.post('/password', auth, (req, res, next) => {
 // Doctor-patient connection static routes
 router.get('/search-patients', auth, doctorPatientController.searchPatients);
 router.post('/create-patient', auth, doctorPatientController.createPatient);
+router.post('/:doctorId/patients/add-existing', auth, doctorPatientController.addExistingPatient);
 router.get('/:doctorId/connected-patients', auth, doctorPatientController.getDoctorPatients);
 
 // Reset patient password (doctor can reset password for their patients)

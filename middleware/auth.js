@@ -14,11 +14,17 @@ const authMiddleware = async (req, res, next) => {
     if (!decoded.userId || decoded.accountId || decoded.companyId || !Number.isInteger(decoded.iat) || !Number.isInteger(decoded.exp)) throw new Error('Invalid session');
     const user = await User.findById(decoded.userId).select('+passwordChangedAt');
 
-    if (!user || user.activationStatus !== 'active') {
+    if (!user) {
       throw new Error('User not found');
     }
     if (user.passwordChangedAt && decoded.iat * 1000 < user.passwordChangedAt.getTime()) {
       throw new Error('Session expired after password change');
+    }
+    if (user.activationStatus !== 'active') {
+      return res.status(403).json({
+        code: user.activationStatus === 'pending' ? 'ACCOUNT_PENDING_APPROVAL' : 'ACCOUNT_INACTIVE',
+        message: user.activationStatus === 'pending' ? 'Your account is awaiting admin approval.' : 'Your account is not active.',
+      });
     }
 
     req.user = user;

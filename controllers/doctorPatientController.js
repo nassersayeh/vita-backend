@@ -96,22 +96,45 @@ exports.searchPatients = async (req, res) => {
     if (!['Doctor', 'Clinic', 'Employee', 'Admin', 'Superadmin'].includes(req.user?.role)) {
       return res.status(403).json({ message: 'Access denied.' });
     }
-    const { mobileNumber } = req.query;
+    const mobileNumber = req.query.query ?? req.query.mobileNumber;
     
-    if (!mobileNumber || mobileNumber.trim().length < 5) {
-      return res.status(400).json({ message: 'Please provide at least 5 digits of mobile number' });
+    if (typeof mobileNumber !== 'string' || mobileNumber.trim().length < 5 || mobileNumber.length > 40 || !/^[\d+\s()-]+$/.test(mobileNumber)) {
+      return res.status(400).json({ message: 'Please provide at least 5 digits of mobile number or ID number' });
     }
+    const search = mobileNumber.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
     // Search for patients with matching mobile number
     const patients = await User.find({
-      mobileNumber: { $regex: mobileNumber, $options: 'i' },
+      $or: [{ mobileNumber: { $regex: search } }, { idNumber: { $regex: search } }],
       role: 'User'
-    }).select('_id fullName mobileNumber city idNumber bloodType');
+    }).select('_id fullName mobileNumber city idNumber bloodType').limit(20);
 
     res.json(patients);
   } catch (error) {
     console.error('Error searching patients:', error);
     res.status(500).json({ message: 'Server error searching patients' });
+  }
+};
+
+exports.addExistingPatient = async (req, res) => {
+  try {
+    const { doctorId } = req.params;
+    const { patientId } = req.body;
+    if (!(await canActAsDoctor(req.user, doctorId))) {
+      return res.status(403).json({ message: 'You cannot add patients for this doctor.' });
+    }
+    if (!/^[a-f\d]{24}$/i.test(String(patientId || '')) || !/^[a-f\d]{24}$/i.test(String(doctorId))) {
+      return res.status(400).json({ message: 'Invalid doctor or patient ID.' });
+    }
+    const [doctor, patient] = await Promise.all([
+      User.findOne({ _id: doctorId, role: 'Doctor' }),
+      User.findOne({ _id: patientId, role: 'User' }).select('_id fullName mobileNumber city idNumber'),
+    ]);
+    if (!doctor || !patient) return res.status(404).json({ message: 'Doctor or patient not found.' });
+    await autoConnectPatientToDoctor(doctorId, patientId);
+    res.json({ success: true, patient });
+  } catch (error) {
+    res.status(500).json({ message: 'Could not add patient to doctor.' });
   }
 };
 
