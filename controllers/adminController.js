@@ -799,23 +799,17 @@ exports.sendNotification = async (req, res) => {
 exports.getDashboardAnalytics = async (req, res) => {
   try {
     const { period = '30' } = req.query; // days
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - parseInt(period));
+    const days = Number(period);
+    if (!Number.isInteger(days) || days < 1 || days > 3650) {
+      return res.status(400).json({ message: 'Period must be an integer between 1 and 3650 days' });
+    }
+    const endDate = new Date();
+    const startDate = new Date(endDate.getTime() - days * 86400000);
 
     // User statistics
-    const totalUsers = await User.countDocuments();
-    const activeUsers = await User.countDocuments({ activationStatus: 'active' });
-    const pendingUsers = await User.countDocuments({ activationStatus: 'pending' });
-    
-    const usersByRole = await User.aggregate([
-      { $group: { _id: '$role', count: { $sum: 1 } } }
-    ]);
-
-    // Recent registrations by role
-    const recentRegistrations = await User.aggregate([
-      { $match: { createdAt: { $gte: startDate } } },
-      { $group: { _id: '$role', count: { $sum: 1 } } }
-    ]);
+    const { userDistributionPipeline, summarizeUserDistribution } = require('../utils/userDistribution');
+    const distribution = await User.aggregate(userDistributionPipeline(startDate, endDate));
+    const userStatistics = summarizeUserDistribution(distribution, User.schema.path('role').enumValues);
 
     // Appointment statistics
     const totalAppointments = await Appointment.countDocuments();
@@ -868,13 +862,7 @@ exports.getDashboardAnalytics = async (req, res) => {
     ]);
 
     res.json({
-      users: {
-        total: totalUsers,
-        active: activeUsers,
-        pending: pendingUsers,
-        byRole: usersByRole.reduce((acc, curr) => ({ ...acc, [curr._id]: curr.count }), {}),
-        recentRegistrations: recentRegistrations.reduce((acc, curr) => ({ ...acc, [curr._id]: curr.count }), {})
-      },
+      users: userStatistics,
       appointments: {
         total: totalAppointments,
         recent: recentAppointments
