@@ -688,17 +688,25 @@ exports.approveUser = async (req, res) => {
 // Get all users with filtering
 exports.getAllUsers = async (req, res) => {
   try {
-    const { role, status, city, page = 1, limit = 20, search } = req.query;
+    const { role, status, city, page = 1, limit = 20, search, view, includeCities } = req.query;
+    // The list needs account summaries; editing fetches the full account by ID.
+    const selection = view === 'directory'
+      ? 'fullName username email mobileNumber role city country address activationStatus createdAt registeredBy salesManager salesCreatedBy specialty licenseNumber pharmacyName pharmacyLicense labName labLicense hospitalName hospitalLicense institutionName institutionType institutionLicense isPaid trialEndDate subscriptionEndDate lastPaymentAmount subscriptionPlanUnit subscriptionPlanValue subscriptionPlanKey subscriptionBillingCycle'
+      : '-password';
     
     let filter = {};
     if (role) filter.role = role;
     if (status) filter.activationStatus = status;
     if (city?.trim()) filter.city = city.trim();
     if (search) {
+      const keyword = String(search).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       filter.$or = [
-        { fullName: { $regex: search, $options: 'i' } },
-        { email: { $regex: search, $options: 'i' } },
-        { idNumber: { $regex: search, $options: 'i' } }
+        { fullName: { $regex: keyword, $options: 'i' } },
+        { email: { $regex: keyword, $options: 'i' } },
+        { idNumber: { $regex: keyword, $options: 'i' } },
+        { username: { $regex: keyword, $options: 'i' } },
+        { mobileNumber: { $regex: keyword, $options: 'i' } },
+        { role: { $regex: keyword, $options: 'i' } }
       ];
     }
 
@@ -707,11 +715,12 @@ exports.getAllUsers = async (req, res) => {
     let total;
     if (String(limit).toLowerCase() === 'all') {
       users = await User.find(filter)
-        .select('-password')
+        .select(selection)
         .populate('registeredBy', 'fullName role')
         .populate('salesManager', 'fullName role')
         .populate('salesCreatedBy', 'fullName role')
-        .sort({ createdAt: -1 });
+        .sort({ createdAt: -1 })
+        .lean(view === 'directory');
       total = users.length;
       res.json({
         users,
@@ -720,22 +729,28 @@ exports.getAllUsers = async (req, res) => {
         total
       });
     } else {
-      users = await User.find(filter)
-        .select('-password')
+      const usersQuery = User.find(filter)
+        .select(selection)
         .populate('registeredBy', 'fullName role')
         .populate('salesManager', 'fullName role')
         .populate('salesCreatedBy', 'fullName role')
         .sort({ createdAt: -1 })
         .limit(Number(limit) * 1)
-        .skip((Number(page) - 1) * Number(limit));
+        .skip((Number(page) - 1) * Number(limit))
+        .lean(view === 'directory');
 
-      total = await User.countDocuments(filter);
+      const results = await Promise.all([
+        usersQuery, User.countDocuments(filter),
+        includeCities === 'true' ? User.distinct('city') : Promise.resolve(undefined)
+      ]);
+      [users, total] = results;
 
       res.json({
         users,
         totalPages: Math.ceil(total / Number(limit)),
         currentPage: Number(page),
-        total
+        total,
+        ...(results[2] ? { cities: [...new Set(results[2].map(value => String(value || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ar')) } : {})
       });
     }
   } catch (error) {
@@ -808,58 +823,30 @@ exports.getDashboardAnalytics = async (req, res) => {
 
     // User statistics
     const { userDistributionPipeline, summarizeUserDistribution } = require('../utils/userDistribution');
-    const distribution = await User.aggregate(userDistributionPipeline(startDate, endDate));
+    // Independent collections can be queried together instead of paying a round trip per query.
+    const [distribution, totalAppointments, recentAppointments, totalOrders, recentOrders,
+      orderRevenue, subscriptionRevenue, totalPointsAwarded, financialOverview] = await Promise.all([
+      User.aggregate(userDistributionPipeline(startDate, endDate)),
+      Appointment.countDocuments(),
+      Appointment.countDocuments({ createdAt: { $gte: startDate } }),
+      Order.countDocuments(),
+      Order.countDocuments({ createdAt: { $gte: startDate } }),
+      Order.aggregate([
+        { $match: { createdAt: { $gte: startDate }, status: { $ne: 'cancelled' } } },
+        { $group: { _id: null, totalRevenue: { $sum: '$total' } } }
+      ]),
+      User.aggregate([
+        { $match: { isPaid: true, lastPaymentAt: { $gte: startDate }, lastPaymentAmount: { $exists: true, $ne: null } } },
+        { $group: { _id: null, totalRevenue: { $sum: '$lastPaymentAmount' } } }
+      ]),
+      Points.aggregate([{ $group: { _id: null, total: { $sum: '$totalPoints' } } }]),
+      Financial.aggregate([
+        { $match: { createdAt: { $gte: startDate } } },
+        { $group: { _id: null, totalEarnings: { $sum: '$totalEarnings' }, totalExpenses: { $sum: '$totalExpenses' } } }
+      ]),
+    ]);
     const userStatistics = summarizeUserDistribution(distribution, User.schema.path('role').enumValues);
-
-    // Appointment statistics
-    const totalAppointments = await Appointment.countDocuments();
-    const recentAppointments = await Appointment.countDocuments({
-      createdAt: { $gte: startDate }
-    });
-
-    // Order statistics
-    const totalOrders = await Order.countDocuments();
-    const recentOrders = await Order.countDocuments({
-      createdAt: { $gte: startDate }
-    });
-
-    // Revenue from orders
-    const orderRevenue = await Order.aggregate([
-      { $match: { createdAt: { $gte: startDate }, status: { $ne: 'cancelled' } } },
-      { $group: { _id: null, totalRevenue: { $sum: '$total' } } }
-    ]);
-
-    // Revenue from provider subscriptions (paid users)
-    const subscriptionRevenue = await User.aggregate([
-      { 
-        $match: { 
-          isPaid: true, 
-          lastPaymentAt: { $gte: startDate },
-          lastPaymentAmount: { $exists: true, $ne: null }
-        } 
-      },
-      { $group: { _id: null, totalRevenue: { $sum: '$lastPaymentAmount' } } }
-    ]);
-
-    // Total revenue = orders + subscriptions
     const totalRevenue = (orderRevenue[0]?.totalRevenue || 0) + (subscriptionRevenue[0]?.totalRevenue || 0);
-
-    // Points statistics
-    const totalPointsAwarded = await Points.aggregate([
-      { $group: { _id: null, total: { $sum: '$totalPoints' } } }
-    ]);
-
-    // Financial overview
-    const financialOverview = await Financial.aggregate([
-      { $match: { createdAt: { $gte: startDate } } },
-      {
-        $group: {
-          _id: null,
-          totalEarnings: { $sum: '$totalEarnings' },
-          totalExpenses: { $sum: '$totalExpenses' }
-        }
-      }
-    ]);
 
     res.json({
       users: userStatistics,
