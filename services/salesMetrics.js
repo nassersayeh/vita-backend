@@ -19,21 +19,21 @@ async function customerMetrics(customers) {
   if (!customers.length) return [];
   const doctors = customers.filter(c => c.role === 'Doctor').map(c => c._id);
   const pharmacies = customers.filter(c => c.role === 'Pharmacy').map(c => c._id);
-  const diagnostics = await LabRequest.aggregate([
+  const diagnosticsQuery = doctors.length ? LabRequest.aggregate([
     { $match: { doctorId: { $in: doctors }, status: { $ne: 'cancelled' }, approvalStatus: { $ne: 'rejected' } } },
     { $lookup: { from: User.collection.name, localField: 'labId', foreignField: '_id', as: 'provider' } },
     { $lookup: { from: MedicalTest.collection.name, localField: 'testIds', foreignField: '_id', as: 'tests' } },
     { $addFields: { isRadiology: { $or: [{ $in: ['Radiology', '$provider.role'] }, { $in: ['radiology', '$tests.type'] }] }, isLaboratory: { $or: [{ $in: ['Lab', '$provider.role'] }, { $in: ['laboratory', '$tests.type'] }] } } },
     { $match: { $or: [{ isRadiology: true }, { isLaboratory: true }] } },
     { $group: { _id: '$doctorId', value: { $sum: { $cond: ['$isRadiology', 1, 0] } }, labCount: { $sum: { $cond: [{ $and: ['$isLaboratory', { $not: ['$isRadiology'] }] }, 1, 0] } }, commission: { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, '$vitaCommissionAmount', 0] } } } },
-  ]);
+  ]) : Promise.resolve([]);
   const quoteDoctorTotals = (Model, Rx) => Model.aggregate([
     { $match: { status: 'dispensed' } },
     { $lookup: { from: Rx.collection.name, localField: 'prescription', foreignField: '_id', as: 'rx' } },
     { $unwind: '$rx' }, { $match: { 'rx.doctorId': { $in: doctors } } },
     { $group: { _id: '$rx.doctorId', value: { $sum: '$vitaCommissionTotal' } } },
   ]);
-  const [prescriptions, controlled, appointments, medicalCommission, pharmacyCommission, controlledPharmacyCommission, doctorQuoteCommission, controlledDoctorCommission, medicalExamCounts] = await Promise.all([
+  const [prescriptions, controlled, appointments, medicalCommission, pharmacyCommission, controlledPharmacyCommission, doctorQuoteCommission, controlledDoctorCommission, medicalExamCounts, diagnostics] = await Promise.all([
     grouped(Prescription, { doctorId: { $in: doctors } }, 'doctorId'),
     grouped(Controlled, { doctorId: { $in: doctors }, issuedAt: { $ne: null } }, 'doctorId'),
     grouped(Appointment, { doctorId: { $in: doctors }, status: 'completed' }, 'doctorId'),
@@ -43,6 +43,7 @@ async function customerMetrics(customers) {
     doctors.length ? quoteDoctorTotals(Quote, Prescription) : [],
     doctors.length ? quoteDoctorTotals(ControlledQuote, Controlled) : [],
     grouped(MedicalExamRequest, { doctorId: { $in: doctors }, status: { $in: ['pending', 'completed'] } }, 'doctorId'),
+    diagnosticsQuery,
   ]);
   return customers.map(customer => {
     const id = customer._id;

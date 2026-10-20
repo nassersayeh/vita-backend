@@ -17,12 +17,12 @@ const requireAdmin = (req, res, next) => {
 router.use(auth, requireAdmin);
 router.use('/sales', require('./adminSales'));
 
-router.get('/patient-ordering-pharmacies', auth, requireAdmin, async (req, res) => {
+router.get('/patient-ordering-pharmacies', async (req, res) => {
   const pharmacies = await User.find({ role: 'Pharmacy' }).select('fullName city address activationStatus patientOrderingEnabled').sort({ fullName: 1 }).lean();
   res.json({ pharmacies });
 });
 
-router.put('/patient-ordering-pharmacies/:pharmacyId', auth, requireAdmin, async (req, res) => {
+router.put('/patient-ordering-pharmacies/:pharmacyId', async (req, res) => {
   const pharmacy = await User.findOneAndUpdate(
     { _id: req.params.pharmacyId, role: 'Pharmacy' },
     { $set: { patientOrderingEnabled: req.body.enabled === true } },
@@ -62,7 +62,7 @@ const summarizePendingCommissions = async () => {
   return summaries.flat().sort((a, b) => b.vitaCommissionAmount - a.vitaCommissionAmount);
 };
 
-router.get('/partner-commissions', auth, requireAdmin, async (req, res) => {
+router.get('/partner-commissions', async (req, res) => {
   try {
     const year = Math.min(2100, Math.max(2020, Number(req.query.year) || new Date().getFullYear()));
     const month = Math.min(12, Math.max(1, Number(req.query.month) || new Date().getMonth() + 1));
@@ -79,7 +79,7 @@ router.get('/partner-commissions', auth, requireAdmin, async (req, res) => {
   } catch (error) { res.status(500).json({ message: 'Failed to load partner commissions.' }); }
 });
 
-router.post('/partner-commissions/receive', auth, requireAdmin, async (req, res) => {
+router.post('/partner-commissions/receive', async (req, res) => {
   const config = commissionSource[req.body.providerType];
   if (!config || !mongoose.isValidObjectId(req.body.providerId)) return res.status(400).json({ message: 'Invalid provider settlement.' });
   const settlementId = new mongoose.Types.ObjectId();
@@ -158,7 +158,7 @@ router.put('/user/:id/payment', adminController.updatePaymentStatus);
 
 
 // Create a new user (admin only)
-router.post('/users/create', auth, requireAdmin, adminController.createUser);
+router.post('/users/create', adminController.createUser);
 
 // Search users for gift points modal
 router.get('/users/search-for-gift', adminController.searchUsersForGift);
@@ -167,7 +167,7 @@ router.get('/users/search-for-gift', adminController.searchUsersForGift);
 router.get('/users/:userId', adminController.getUserById);
 
 // Update user data
-router.put('/users/:userId', auth, requireAdmin, adminController.updateUser);
+router.put('/users/:userId', adminController.updateUser);
 
 // Get revenue by month
 router.get('/revenue/:year/:month', adminController.getRevenueByMonth);
@@ -223,7 +223,7 @@ router.get('/subscriptions', async (req, res) => {
     const now = new Date();
 
     // Platform subscriptions
-    const platformSubs = await User.find({
+    const platformQuery = User.find({
       role: { $in: ['Pharmacy', 'Doctor'] },
       $or: [
         { subscriptionEndDate: { $ne: null } },
@@ -233,15 +233,17 @@ router.get('/subscriptions', async (req, res) => {
     }).select('name fullName clinicName role phone city subscriptionEndDate subscriptionPlanUnit subscriptionPlanValue lastPaymentAmount lastPaymentAt isPaid hasAcceptedOffer offerAcceptedAt trialEndDate').lean();
 
     // Vita AI subscriptions
-    const aiSubs = await User.find({
+    const aiQuery = User.find({
       'vitatAI.isSubscribed': true,
     }).select('name fullName clinicName role phone city vitatAI').lean();
 
     // Vita AI trial users
-    const aiTrials = await User.find({
+    const trialsQuery = User.find({
       'vitatAI.hasAcceptedTrial': true,
       'vitatAI.isSubscribed': { $ne: true },
     }).select('name fullName clinicName role phone city vitatAI').lean();
+
+    const [platformSubs, aiSubs, aiTrials] = await Promise.all([platformQuery, aiQuery, trialsQuery]);
 
     res.json({ platformSubs, aiSubs, aiTrials });
   } catch (err) {
@@ -250,7 +252,7 @@ router.get('/subscriptions', async (req, res) => {
 });
 
 // Insurance companies and oversight accounts for admin
-router.get('/insurance-accounts', auth, requireAdmin, async (req, res) => {
+router.get('/insurance-accounts', async (req, res) => {
   try {
     const InsuranceCompany = require('../models/InsuranceCompany');
     const OversightAccount = require('../models/OversightAccount');
@@ -264,7 +266,7 @@ router.get('/insurance-accounts', auth, requireAdmin, async (req, res) => {
   }
 });
 
-router.delete('/insurance-accounts/:type/:id', auth, requireAdmin, async (req, res) => {
+router.delete('/insurance-accounts/:type/:id', async (req, res) => {
   try {
     const { type, id } = req.params;
     if (type === 'company') {

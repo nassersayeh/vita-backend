@@ -269,6 +269,7 @@ const UserSchema = new mongoose.Schema({
 
 // Supports the public provider discovery query as the network grows.
 UserSchema.index({ activationStatus: 1, role: 1, fullName: 1 });
+for (const { key, name } of require('../utils/adminIndexes').users) UserSchema.index(key, { name });
 UserSchema.index({ mobileNumber: 1, mobileUniquenessScope: 1 }, { unique: true, name: 'mobileNumber_scope_unique' });
 
 UserSchema.set('toJSON', { transform(doc, ret) {

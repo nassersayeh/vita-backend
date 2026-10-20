@@ -25,4 +25,5 @@ const demoRequestSchema = new mongoose.Schema({
   handledAt: { type: Date, default: null },
 }, { timestamps: true });
 
+for (const { key, name } of require('../utils/adminIndexes').demorequests) demoRequestSchema.index(key, { name });
 module.exports = mongoose.model('DemoRequest', demoRequestSchema);

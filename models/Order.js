@@ -100,4 +100,5 @@ OrderSchema.pre('save', async function () {
   const prescriptions = await require('./EPrescription').find({ _id: { $in: this.items.filter(item => item.onModel === 'EPrescription').map(item => item.item) } }).select('products').lean();
   await assertOrdinaryAllowed([...products, ...prescriptions.flatMap(rx => rx.products), ...this.items.map(item => ({ name: item.name, drugId: item.details?.drugId || item.item }))], this.pharmacyId);
 });
+for (const { key, name } of require('../utils/adminIndexes').orders) OrderSchema.index(key, { name });
 module.exports = mongoose.model('Order', OrderSchema);

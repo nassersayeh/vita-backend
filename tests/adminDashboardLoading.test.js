@@ -25,6 +25,7 @@ test('analytics starts all independent queries together and preserves summary va
   const controller = load({
     User: {
       schema: { path: () => ({ enumValues: ['User', 'Doctor'] }) },
+      find: () => ({ select() { return this; }, sort() { return this; }, limit(value) { assert.equal(value, 5); return this; }, lean() { return query([{ fullName: 'Latest account', role: 'User' }]); } }),
       aggregate: pipeline => query(pipeline[0].$group ? [{ _id: 'User', count: 10, active: 7, pending: 3, recent: 2 }] : [{ totalRevenue: 50 }])
     },
     Appointment: { countDocuments: filter => query(filter ? 2 : 8) },
@@ -34,7 +35,7 @@ test('analytics starts all independent queries together and preserves summary va
   });
   let result;
   const pending = controller.getDashboardAnalytics({ query: {} }, { json(value) { result = value; }, status() { throw new Error('Unexpected failure'); } });
-  assert.equal(releases.length, 9, 'all nine queries start before the first result resolves');
+  assert.equal(releases.length, 10, 'all summary queries start before the first result resolves');
   releases.forEach(release => release());
   await pending;
   assert.equal(result.users.total, 10);
@@ -46,6 +47,7 @@ test('analytics starts all independent queries together and preserves summary va
   assert.equal(result.orders.revenue, 150);
   assert.equal(result.points.totalAwarded, 30);
   assert.equal(result.financial.totalExpenses, 20);
+  assert.equal(result.latestUsers[0].fullName, 'Latest account');
 });
 
 test('invalid periods fail before accessing the database', async () => {
@@ -55,6 +57,25 @@ test('invalid periods fail before accessing the database', async () => {
     status(value) { status = value; return this; }, json() {}
   });
   assert.equal(status, 400);
+});
+
+test('pending registrations and plan changes are read together with their displayed fields', async () => {
+  const releases = [];
+  const selections = [];
+  const controller = load({ User: { find(filter) {
+    return { select(value) { selections.push(value); return this; }, sort() { return this; }, lean() {
+      return new Promise(resolve => releases.push(() => resolve([{ _id: filter.activationStatus, activationStatus: filter.activationStatus, planChangeRequest: { requestedAt: '2026-10-20' } }])));
+    } };
+  } } });
+  let result;
+  const response = controller.getPendingApprovals({}, { json(value) { result = value; }, status() { throw Error('Unexpected failure'); } });
+  assert.equal(releases.length, 2);
+  releases.forEach(release => release());
+  await response;
+  assert.equal(result.length, 2);
+  assert.equal(result[0].approvalRequestType, 'plan_change');
+  assert.equal(result[1].approvalRequestType, 'registration');
+  assert.ok(selections.every(value => value.includes('mobileNumber') && value.includes('planChangeRequest') && !value.includes('patients')));
 });
 
 test('directory uses account summary fields and keeps full account requests compatible', async () => {

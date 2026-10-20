@@ -430,17 +430,21 @@ const fetchPharmacyLeads = async () => {
     .filter((lead) => lead.name);
 };
 
+let potentialClientsRequest;
 const getPotentialClientsData = async (forceRefresh = false) => {
   const now = Date.now();
   if (!forceRefresh && potentialClientsCache.data && now - potentialClientsCache.fetchedAt < POTENTIAL_CLIENTS_CACHE_MS) {
     return potentialClientsCache.data;
   }
 
+  if (potentialClientsRequest) return potentialClientsRequest;
+  potentialClientsRequest = (async () => {
   const results = await Promise.allSettled([
     fetchSmartHealthLeads(),
     fetchPharmacyLeads(),
   ]);
 
+  if (results.every(result => result.status === 'rejected')) throw new Error('External directories are unavailable');
   const leads = results.flatMap((result) => (result.status === 'fulfilled' ? result.value : []));
   const unique = Array.from(
     new Map(leads.map((lead) => [`${lead.source}:${lead.sourceKey}`, lead])).values()
@@ -449,29 +453,32 @@ const getPotentialClientsData = async (forceRefresh = false) => {
   potentialClientsCache.data = unique;
   potentialClientsCache.fetchedAt = now;
   return unique;
+  })().finally(() => { potentialClientsRequest = null; });
+  return potentialClientsRequest;
 };
 
 // Get pending provider approvals
 exports.getPendingApprovals = async (req, res) => {
   try {
-    const pendingRegistrationUsers = await User.find({
+    const selection = 'fullName email mobileNumber role city address activationStatus createdAt updatedAt subscriptionPlanKey subscriptionBillingCycle subscriptionPlanName subscriptionSelectedPrice paymentMethod planChangeRequest requestedAt';
+    const [pendingRegistrationUsers, pendingPlanRequests] = await Promise.all([User.find({
       activationStatus: 'pending',
       role: { $in: ['Doctor', 'Pharmacy', 'Lab', 'Institution', 'Hospital'] }
-    }).select('-password').sort({ createdAt: -1 });
+    }).select(selection).sort({ createdAt: -1 }).lean(),
 
-    const pendingPlanRequests = await User.find({
+    User.find({
       role: { $in: ['Doctor', 'Pharmacy', 'Lab', 'Institution', 'Hospital'] },
       activationStatus: 'active',
       'planChangeRequest.status': 'pending',
-    }).select('-password').sort({ 'planChangeRequest.requestedAt': -1 });
+    }).select(selection).sort({ 'planChangeRequest.requestedAt': -1 }).lean()]);
 
     const registrationRequests = pendingRegistrationUsers.map((user) => ({
-      ...user.toObject(),
+      ...user,
       approvalRequestType: 'registration',
     }));
 
     const planRequests = pendingPlanRequests.map((user) => ({
-      ...user.toObject(),
+      ...user,
       approvalRequestType: 'plan_change',
       requestedAt: user.planChangeRequest?.requestedAt || user.updatedAt,
     }));
@@ -487,7 +494,12 @@ exports.getPendingApprovals = async (req, res) => {
 exports.approveUser = async (req, res) => {
   try {
     const { userId } = req.params;
-    const { status, adminId, rejectionReason, requestType } = req.body;
+    const { status, rejectionReason, requestType } = req.body;
+    const adminId = req.user?._id || req.user?.id || req.body.adminId;
+    const salesLead = req.user?.role === 'SalesTeamLead';
+    if (salesLead && (status !== 'active' || (requestType && requestType !== 'registration'))) {
+      return res.status(403).json({ message: 'Sales team leads can approve new registrations only.' });
+    }
 
     if (!['active', 'declined'].includes(status)) {
       return res.status(400).json({ message: 'Invalid status' });
@@ -496,6 +508,15 @@ exports.approveUser = async (req, res) => {
     const user = await User.findById(userId);
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
+    }
+
+    if (salesLead) {
+      if (!['Doctor', 'Pharmacy', 'Lab', 'Institution', 'Hospital'].includes(user.role)) {
+        return res.status(403).json({ message: 'This account role cannot be approved by the sales team.' });
+      }
+      if (user.activationStatus !== 'pending') {
+        return res.status(409).json({ message: 'This registration is no longer pending. Refresh the requests.' });
+      }
     }
 
     const isPlanChangeRequest = requestType === 'plan_change' || (
@@ -606,6 +627,8 @@ exports.approveUser = async (req, res) => {
 
     await user.save({ validateBeforeSave: false });
 
+    await Promise.all([
+      (async () => {
     // Auto-assign default drug inventory when a Pharmacy is approved
     if (status === 'active' && user.role === 'Pharmacy') {
       try {
@@ -617,6 +640,8 @@ exports.approveUser = async (req, res) => {
       }
     }
 
+      })(),
+      (async () => {
     // Send WhatsApp notification to user about approval/rejection
     try {
       const { sendWhatsAppMessage, isWhatsAppReady } = require('../services/whatsappService');
@@ -652,6 +677,9 @@ exports.approveUser = async (req, res) => {
     } catch (waErr) {
       console.error('WhatsApp approval notification error:', waErr.message);
     }
+
+      })(),
+    ]);
 
     if (status === 'declined') {
       await User.findByIdAndDelete(user._id);
@@ -692,7 +720,9 @@ exports.getAllUsers = async (req, res) => {
     // The list needs account summaries; editing fetches the full account by ID.
     const selection = view === 'directory'
       ? 'fullName username email mobileNumber role city country address activationStatus createdAt registeredBy salesManager salesCreatedBy specialty licenseNumber pharmacyName pharmacyLicense labName labLicense hospitalName hospitalLicense institutionName institutionType institutionLicense isPaid trialEndDate subscriptionEndDate lastPaymentAmount subscriptionPlanUnit subscriptionPlanValue subscriptionPlanKey subscriptionBillingCycle'
-      : '-password';
+      : view === 'revenue'
+        ? 'fullName email mobileNumber role city isPaid trialEndDate subscriptionEndDate subscriptionPlanUnit subscriptionPlanValue lastPaymentAt lastPaymentAmount activationStatus createdAt'
+        : '-password';
     
     let filter = {};
     if (role) filter.role = role;
@@ -720,7 +750,7 @@ exports.getAllUsers = async (req, res) => {
         .populate('salesManager', 'fullName role')
         .populate('salesCreatedBy', 'fullName role')
         .sort({ createdAt: -1 })
-        .lean(view === 'directory');
+        .lean(['directory', 'revenue'].includes(view));
       total = users.length;
       res.json({
         users,
@@ -737,7 +767,7 @@ exports.getAllUsers = async (req, res) => {
         .sort({ createdAt: -1 })
         .limit(Number(limit) * 1)
         .skip((Number(page) - 1) * Number(limit))
-        .lean(view === 'directory');
+        .lean(['directory', 'revenue'].includes(view));
 
       const results = await Promise.all([
         usersQuery, User.countDocuments(filter),
@@ -825,7 +855,7 @@ exports.getDashboardAnalytics = async (req, res) => {
     const { userDistributionPipeline, summarizeUserDistribution } = require('../utils/userDistribution');
     // Independent collections can be queried together instead of paying a round trip per query.
     const [distribution, totalAppointments, recentAppointments, totalOrders, recentOrders,
-      orderRevenue, subscriptionRevenue, totalPointsAwarded, financialOverview] = await Promise.all([
+      orderRevenue, subscriptionRevenue, totalPointsAwarded, financialOverview, latestUsers] = await Promise.all([
       User.aggregate(userDistributionPipeline(startDate, endDate)),
       Appointment.countDocuments(),
       Appointment.countDocuments({ createdAt: { $gte: startDate } }),
@@ -844,12 +874,14 @@ exports.getDashboardAnalytics = async (req, res) => {
         { $match: { createdAt: { $gte: startDate } } },
         { $group: { _id: null, totalEarnings: { $sum: '$totalEarnings' }, totalExpenses: { $sum: '$totalExpenses' } } }
       ]),
+      User.find().select('fullName role city createdAt activationStatus').sort({ createdAt: -1, _id: -1 }).limit(5).lean(),
     ]);
     const userStatistics = summarizeUserDistribution(distribution, User.schema.path('role').enumValues);
     const totalRevenue = (orderRevenue[0]?.totalRevenue || 0) + (subscriptionRevenue[0]?.totalRevenue || 0);
 
     res.json({
       users: userStatistics,
+      latestUsers,
       appointments: {
         total: totalAppointments,
         recent: recentAppointments
@@ -972,7 +1004,10 @@ exports.createUser = async (req, res) => {
 exports.getUserById = async (req, res) => {
   try {
     const { userId } = req.params;
-    const user = await User.findById(userId).select('-password');
+    const selection = req.query?.view === 'edit'
+      ? 'username email mobileNumber role fullName specialty licenseNumber idNumber yearsOfExperience clinicAddress bio pharmacyName labName institutionName institutionType hospitalName dateOfBirth gender bloodType allergies chronicConditions address city country'
+      : '-password';
+    const user = await User.findById(userId).select(selection);
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
     }

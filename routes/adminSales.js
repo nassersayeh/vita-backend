@@ -8,6 +8,26 @@ router.use((req, res, next) => {
   res.set('Cache-Control', 'no-store');
   next();
 });
+// Only new provider registrations: no staff/admin roles or subscription renewals.
+router.get('/join-requests', async (req, res) => {
+  try {
+    const page = Math.max(1, Math.min(100000, Number.parseInt(req.query.page, 10) || 1));
+    const filter = { activationStatus: 'pending', role: { $in: ['Doctor', 'Pharmacy', 'Lab', 'Institution', 'Hospital'] } };
+    const [requests, total] = await Promise.all([
+      User.find(filter).select('fullName email mobileNumber role specialty city address createdAt subscriptionPlanKey subscriptionBillingCycle subscriptionSelectedPrice paymentMethod')
+        .sort({ createdAt: -1, _id: -1 }).skip((page - 1) * 25).limit(25).lean(),
+      User.countDocuments(filter),
+    ]);
+    res.json({ requests, total, page, pageSize: 25 });
+  } catch (error) {
+    res.status(500).json({ message: 'تعذّر تحميل طلبات الانضمام.' });
+  }
+});
+router.put('/join-requests/:userId/approve', (req, res) => {
+  if (!/^[a-f\d]{24}$/i.test(req.params.userId)) return res.status(400).json({ message: 'معرّف الطلب غير صحيح.' });
+  req.body = { status: 'active', requestType: 'registration', adminId: req.user._id || req.user.id };
+  return require('../controllers/adminController').approveUser(req, res);
+});
 router.get('/', async (req, res) => {
   try {
     const managers = await User.find({ role: 'SalesManager' }).select('fullName mobileNumber activationStatus').sort({ fullName: 1 }).lean();

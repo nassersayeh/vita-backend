@@ -22,7 +22,7 @@ async function assignDefaultInventory(pharmacyId) {
       return existingCount;
     }
 
-    const allDrugs = await Drug.find({ isActive: true }).lean();
+    const allDrugs = await Drug.find({ isActive: true }).select('name genericName unitSellingPrice lastPurchasePrice').lean();
     if (allDrugs.length === 0) {
       console.log('No drugs found in Drug collection, skipping inventory assignment.');
       return 0;

@@ -58,4 +58,5 @@ appointmentSchema.index(
   }
 );
 
+for (const { key, name } of require('../utils/adminIndexes').appointments) appointmentSchema.index(key, { name });
 module.exports = mongoose.model('Appointment', appointmentSchema);
