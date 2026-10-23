@@ -44,11 +44,7 @@ async function approved(userId, role) {
   return user;
 }
 const pagination = req => { const page = Number(req.query.page || 1); if (!Number.isSafeInteger(page) || page < 1 || page > 100000) fail('رقم الصفحة غير صحيح.'); return { page, limit: 30 }; };
-const identityFilter = async idNumber => {
-  if (typeof idNumber !== 'string' || !/^[\p{L}\d-]{5,24}$/u.test(idNumber.trim())) fail('رقم الهوية غير صحيح.');
-  const patient = await User.findOne({ role: 'User', idNumber: idNumber.trim() }).select('_id');
-  return patient?._id || new mongoose.Types.ObjectId();
-};
+const identityFilter = async query => await require('../utils/pharmacyPatientLookup').findPrescriptionPatient(User, query) || new mongoose.Types.ObjectId();
 
 router.get('/context', route(async (req, res) => {
   const { id, role, user, account } = req.controlledActor;
@@ -279,8 +275,7 @@ router.get('/prescriptions', route(async (req, res) => {
     else {
       const user = await User.findById(id); const access = await Access.findOne({ userId: id });
       if (!canPractice(user, access, 'Pharmacy')) return res.json({ rows: [], page, total: 0, totalPages: 0 });
-      if (!req.query.idNumber) fail('أدخل رقم هوية المريض.');
-      Object.assign(filter, activePrescriptionFilter(), { patientId: await identityFilter(req.query.idNumber) });
+      Object.assign(filter, activePrescriptionFilter(), { patientId: await identityFilter(req.query.patientSearch ?? req.query.idNumber ?? req.query.mobileNumber) });
     }
   } else if (!oversightRoles.includes(role)) fail('لا تملك هذه الصلاحية.', 403);
   if (req.query.doctorId && oversightRoles.includes(role)) filter.doctorId = validId(req.query.doctorId);

@@ -121,18 +121,26 @@ exports.addDrugToInventory = async (req, res) => {
   }
 };
 
-// Add a pharmacy-only medicine that is not in the shared catalog.
+// Add or link a shared catalog medicine and save this pharmacy's stock separately.
 exports.addManualDrugToInventory = async (req, res) => {
   try {
     const { pharmacyId } = req.params;
     if (req.user._id.toString() !== pharmacyId) return res.status(403).json({ message: 'Not authorized' });
-    const { name, genericName, strength, dosageForm, manufacturer, barcode, description, quantity, price, costPrice, minimumStock } = req.body;
-    if (!name || quantity == null || price == null) return res.status(400).json({ message: 'Name, quantity, and price are required' });
-    const drug = await Drug.create({ name, genericName, strength, dosageForm, manufacturer, barcode: barcode || undefined, description, isCustom: true, ownerPharmacyId: pharmacyId });
-    const inventory = await PharmacyInventory.create({ pharmacyId, drugId: drug._id, drugName: name, drugGenericName: genericName, quantity, price, costPrice: costPrice || null, minimumStock: minimumStock || 5, isAvailable: true });
-    res.status(201).json({ message: 'Manual medicine added', inventory });
+    const { quantity, price, costPrice, minimumStock } = req.body;
+    const valid = value => value !== null && value !== undefined && String(value).trim() !== '' && typeof value !== 'boolean' && Number.isFinite(Number(value)) && Number(value) >= 0;
+    if (!valid(quantity) || !Number.isInteger(Number(quantity)) || !valid(price) || (costPrice != null && costPrice !== '' && !valid(costPrice)) || (minimumStock != null && !valid(minimumStock))) return res.status(400).json({ message: 'Valid quantity and selling price are required' });
+    const resolveDrug = require('../utils/sharedDrugCatalog').createCatalogService(Drug, require('../models/DrugCatalogLock'));
+    const { drug, created, linked } = await resolveDrug(req.body);
+    const fields = { drugName: drug.name, drugGenericName: drug.genericName, quantity: Number(quantity), price: Number(price), minimumStock: minimumStock == null ? 5 : Number(minimumStock), isAvailable: true, isActive: true };
+    if (costPrice != null && costPrice !== '') fields.costPrice = Number(costPrice);
+    // Quantity is an absolute stock count, making retries safe (never double-restock).
+    let inventory;
+    try { inventory = await PharmacyInventory.findOneAndUpdate({ pharmacyId, drugId: drug._id }, { $set: fields }, { upsert: true, new: true, runValidators: true }); }
+    catch (error) { if (error.code !== 11000) throw error; inventory = await PharmacyInventory.findOneAndUpdate({ pharmacyId, drugId: drug._id }, { $set: fields }, { new: true, runValidators: true }); }
+    await inventory.populate('drugId', 'name genericName strength dosageForm manufacturer barcode unitSellingPrice');
+    res.status(201).json({ message: 'Medicine saved in catalog and inventory', inventory, drug, created, linked });
   } catch (error) {
-    res.status(500).json({ message: 'Failed to add manual medicine', error: error.message });
+    res.status(error.status || 500).json({ message: error.status ? error.message : 'Failed to save medicine' });
   }
 };
 

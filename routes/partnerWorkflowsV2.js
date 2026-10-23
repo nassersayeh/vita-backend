@@ -15,6 +15,8 @@ const LegacyRecord = require('../models/Record');
 const Financial = require('../models/Financial');
 const PharmacyPrescriptionQuote = require('../models/PharmacyPrescriptionQuote');
 const PharmacyInventory = require('../models/PharmacyInventory');
+const PatientOrder = require('../models/Order');
+const { findPrescriptionPatient, patientOrderFilter } = require('../utils/pharmacyPatientLookup');
 const { activePrescriptionFilter, buildPrescriptionQuote } = require('../utils/pharmacyPrescriptionPricing');
 const { assertOrdinaryAllowed } = require('../utils/ordinaryControlledGuard');
 const { saveStandalonePrescription } = require('../utils/saveStandalonePrescription');
@@ -108,7 +110,7 @@ router.get('/context', async (req, res) => {
       };
     } else if (pharmacy) {
       response.stats = {
-        incoming: await Prescription.countDocuments({ ...activePrescriptionFilter(), distributionChannel: 'vita_partner_network' }),
+        incoming: await PatientOrder.countDocuments({ ...patientOrderFilter(req.user._id), status: 'pending' }),
         priced: await PharmacyPrescriptionQuote.countDocuments({ pharmacy: req.user._id, status: 'priced' }),
       };
     }
@@ -603,16 +605,28 @@ router.get('/pharmacy/prescriptions/dispensed', requireSelectedPharmacy, async (
   } catch (error) { res.status(500).json({ message: 'تعذر تحميل الوصفات المصروفة.' }); }
 });
 
+router.get('/pharmacy/orders', requireSelectedPharmacy, async (req, res) => {
+  try {
+    const page = Number(req.query.page || 1), pageSize = 25;
+    if (!Number.isSafeInteger(page) || page < 1 || page > 100000) return res.status(400).json({ message: 'Invalid page' });
+    const filter = patientOrderFilter(req.user._id);
+    const [orders, total, pendingCount] = await Promise.all([
+      PatientOrder.find(filter).sort({ adminApprovedAt: -1, createdAt: -1 }).skip((page - 1) * pageSize).limit(pageSize)
+        .populate('user', 'fullName mobileNumber').lean(),
+      PatientOrder.countDocuments(filter),
+      PatientOrder.countDocuments({ ...filter, status: 'pending' }),
+    ]);
+    res.json({ orders, total, pendingCount, page, totalPages: Math.ceil(total / pageSize) });
+  } catch { res.status(500).json({ message: 'تعذر تحميل طلبات المرضى.' }); }
+});
+router.put('/pharmacy/orders/:orderId/status', requireSelectedPharmacy, (req, res) => require('../controllers/orderController').updateOrderStatus(req, res));
+
 router.get('/pharmacy/prescriptions', requireSelectedPharmacy, async (req, res) => {
   try {
     const filter = activePrescriptionFilter();
-    if (!req.query.idNumber) filter.distributionChannel = 'vita_partner_network';
-    if (req.query.idNumber) {
-      if (!idIsValid(req.query.idNumber)) return res.status(400).json({ message: 'Invalid ID number.' });
-      const patient = await User.findOne({ role: 'User', idNumber: String(req.query.idNumber).trim() }).select('_id');
-      if (!patient) return res.json({ prescriptions: [] });
-      filter.patientId = patient._id;
-    }
+    const patientId = await findPrescriptionPatient(User, req.query.patientSearch ?? req.query.idNumber ?? req.query.mobileNumber);
+    if (!patientId) return res.json({ prescriptions: [] });
+    filter.patientId = patientId;
     const prescriptions = await Prescription.find(filter).populate('patientId', 'fullName idNumber mobileNumber')
       .populate('doctorId', 'fullName specialty mobileNumber').populate('products.drugId', 'name genericName strength dosageForm')
       .sort({ createdAt: -1 }).limit(200).lean();
@@ -626,7 +640,7 @@ router.get('/pharmacy/prescriptions', requireSelectedPharmacy, async (req, res) 
       products: item.products.map(product => ({ ...product, inventory: inventoryByDrug.get(String(product.drugId?._id || product.drugId)) || null })),
       pharmacyQuote: quotesByPrescription.get(String(item._id)) || null,
     })) });
-  } catch (error) { res.status(500).json({ message: 'Failed to load prescriptions.' }); }
+  } catch (error) { res.status(error.status || 500).json({ message: error.status ? error.message : 'Failed to load prescriptions.' }); }
 });
 
 // Prices are per unit; quote totals include prescribed quantities.

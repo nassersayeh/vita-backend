@@ -3,6 +3,7 @@ const router = express.Router();
 const Drug = require('../models/Drug');
 const Order = require('../models/Order');
 const auth = require('../middleware/auth');
+const resolveSharedDrug = require('../utils/sharedDrugCatalog').createCatalogService(Drug, require('../models/DrugCatalogLock'));
 const { requireAdmin } = require('../middleware/accountAuthorization');
 const multer = require('multer');
 const fs = require('fs');
@@ -109,6 +110,16 @@ router.get('/', async (req, res) => {
     console.error('Get drugs error:', error);
     res.status(500).json({ message: 'Server error' });
   }
+});
+
+// Shared catalog contributions: no inventory, purchase cost, or arbitrary model fields.
+router.post('/catalog', auth, async (req, res) => {
+  if (!['Doctor', 'Pharmacy', 'Admin', 'Superadmin'].includes(req.user.role)) return res.status(403).json({ message: 'Not authorized' });
+  if (req.user.activationStatus && req.user.activationStatus !== 'active') return res.status(403).json({ message: 'Account approval required' });
+  try {
+    const result = await resolveSharedDrug(req.body);
+    res.status(result.created ? 201 : 200).json(result);
+  } catch (error) { res.status(error.status || 500).json({ message: error.status ? error.message : 'Could not save medicine' }); }
 });
 
 // Add new drug (admin/pharmacy)
