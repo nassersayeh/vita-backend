@@ -15,7 +15,9 @@ const authMiddleware = async (req, res, next) => {
     // Admin routes need identity and current authorization, not the account's
     // patient lists, inventories, or medical history. Still check DB every time.
     const adminRoute = req.baseUrl === '/api/admin' || req.baseUrl?.startsWith('/api/admin/');
-    const user = await User.findById(decoded.userId).select(adminRoute
+    const pricingRoute = (req.baseUrl === '/api/pharmacy-inventory' && req.path?.startsWith('/ordering/')) ||
+      (req.baseUrl === '/api/drugs' && req.path === '/checkout-prices');
+    const user = await User.findById(decoded.userId).select(adminRoute || pricingRoute
       ? '_id fullName role activationStatus +passwordChangedAt'
       : '+passwordChangedAt');
 

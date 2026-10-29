@@ -78,6 +78,7 @@ exports.getProviderDetails = async (req, res) => {
   try {
     const { id } = req.params;
     const requestedType = String(req.query.type || '').toLowerCase();
+    if (!require('mongoose').isValidObjectId(id)) return res.status(400).json({ success: false, message: 'Invalid provider id' });
     if (!id) return res.status(400).json({ success: false, message: 'Missing provider id' });
 
     // Find provider by id and role
@@ -85,8 +86,12 @@ exports.getProviderDetails = async (req, res) => {
       ? ['Doctor']
       : requestedType === 'center'
         ? PUBLIC_PROVIDER_ROLES.filter((role) => role !== 'Doctor')
-        : PUBLIC_PROVIDER_ROLES;
-    const provider = await User.findOne({ _id: id, role: { $in: roleFilter }, isPublic: { $ne: false }, activationStatus: 'active' });
+        : requestedType === 'pharmacy' ? ['Pharmacy']
+        : ['lab', 'laboratory'].includes(requestedType) ? ['Lab']
+        : requestedType === 'radiology' ? ['Radiology']
+        : [...PUBLIC_PROVIDER_ROLES, 'Pharmacy'];
+    const provider = await User.findOne({ _id: id, role: { $in: roleFilter }, isPublic: { $ne: false }, activationStatus: 'active' })
+      .select('fullName profileImage city address mobileNumber role bio generalDetails specialty yearsOfExperience experience appointmentDurationOptions allowPatientDurationChoice workingSchedule workplaces rating ratingsCount' + (requestedType === 'doctor' ? ' patients' : ''));
     if (!provider) return res.status(404).json({ success: false, message: 'Provider not found' });
 
     // Build details object
@@ -151,22 +156,11 @@ exports.getProviderDetails = async (req, res) => {
         details.connectionStatus = 'not_connected';
       }
     }
-    // Pharmacy-specific
-    if (provider.role === 'Pharmacy') {
-      // TODO: Calculate open/close status from workingHours
-      details.isOpen = true;
-      details.whatsapp = provider.mobileNumber;
-      // Fetch inventory items for this pharmacy
-      const PharmacyInventory = require('../models/PharmacyInventory');
-      const inventoryItems = await PharmacyInventory.find({ pharmacyId: provider._id, isAvailable: true, isActive: true, quantity: { $gt: 0 } });
-      details.inventory = inventoryItems.map(item => ({
-        id: item.drugId,
-        name: item.drugName,
-        genericName: item.drugGenericName,
-        price: item.price,
-        quantity: item.quantity,
-        currency: item.currency
-      }));
+    if (['Lab', 'Radiology'].includes(provider.role)) {
+      const type = provider.role === 'Lab' ? 'laboratory' : 'radiology';
+      details.services = await require('../models/MedicalTest').find(
+        require('../utils/patientServiceBooking').serviceFilter(provider._id, type)
+      ).select('name category description price preparationInstructions estimatedDuration').sort({ name: 1 }).lean();
     }
     // Lab/Hospital/Clinic
     if (provider.role !== 'Doctor') {
@@ -252,5 +246,29 @@ exports.connectProvider = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Connection request already exists' });
     }
     res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
+/** Load at most twenty public medicines; never attach the full inventory to a profile. */
+exports.getProviderMedicines = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!require('mongoose').isValidObjectId(id)) return res.status(400).json({ message: 'Invalid provider id' });
+    const provider = await User.findOne({ _id: id, role: 'Pharmacy', activationStatus: 'active', isPublic: { $ne: false } }).select('_id').lean();
+    if (!provider) return res.status(404).json({ message: 'Provider not found' });
+    const page = Math.max(1, Math.min(10000, parseInt(req.query.page, 10) || 1));
+    const search = String(req.query.search || '').trim().slice(0, 100);
+    const filter = { pharmacyId: id, isAvailable: true, isActive: true, quantity: { $gt: 0 } };
+    if (search) filter.drugName = { $regex: search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' };
+    const items = await require('../models/PharmacyInventory').find(filter).select('drugId')
+      .sort({ _id: 1 }).skip((page - 1) * 20).limit(21).maxTimeMS(5000)
+      .populate({ path: 'drugId', select: 'name genericName unitSellingPrice isActive' }).lean();
+    const medicines = items.slice(0, 20).filter(item => item.drugId && item.drugId.isActive !== false).map(({ drugId: drug }) => ({
+      id: drug._id, name: drug.name, genericName: drug.genericName,
+      price: typeof drug.unitSellingPrice === 'number' ? drug.unitSellingPrice : null,
+    }));
+    res.json({ medicines, page, hasMore: items.length > 20 });
+  } catch {
+    res.status(503).json({ message: 'Unable to load medicines. Please retry.' });
   }
 };

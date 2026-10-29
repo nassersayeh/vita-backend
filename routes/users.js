@@ -10,7 +10,9 @@ router.get('/', async (req, res) => {
       return res.status(400).json({ message: 'Role query parameter is required.' });
     }
     // Support legacy clients while keeping credentials out of the response.
-    const users = await User.find({ role: new RegExp(`^${role}$`, 'i'), isPublic: { $ne: false } }).select(require('../middleware/userReadAccess').publicFields);
+    const users = await User.find({ role: new RegExp(`^${role}$`, 'i'), isPublic: { $ne: false },
+      ...(role === 'Pharmacy' ? { prescriptionDispensingEnabled: true, activationStatus: 'active' } : {}),
+    }).select(require('../middleware/userReadAccess').publicFields);
     res.json(users);
   } catch (err) {
     console.error(err);

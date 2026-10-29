@@ -7,6 +7,8 @@ const Drug = require('../models/Drug');
 const MedicalTest = require('../models/MedicalTest');
 const PharmacyInventory = require('../models/PharmacyInventory');
 const User = require('../models/User');
+const Order = require('../models/Order');
+const { orderablePrescriptionFilter, annotatePatientPrescription, prescriptionBlockingOrders } = require('../utils/patientPrescriptionEligibility');
 
 // Create new prescription
 router.post('/', async (req, res) => {
@@ -230,6 +232,10 @@ router.get('/:patientId', async (req, res) => {
 
     // Search for prescriptions where patientId OR patient field matches
     let filter = { patientId };
+    // Resolve eligibility before pagination; do not download the patient's order
+    // history on the phone or briefly show consumed one-time prescriptions.
+    const usedIds = await Order.distinct('prescriptionId', { user: patientId, prescriptionId: { $ne: null }, ...prescriptionBlockingOrders() });
+    if (req.query.orderable === 'true') Object.assign(filter, orderablePrescriptionFilter(usedIds));
     
     if (status === 'valid') filter.isValid = true;
     if (status === 'invalid') filter.isValid = false;
@@ -254,10 +260,19 @@ router.get('/:patientId', async (req, res) => {
 
     console.log(`Found ${prescriptions.length} prescriptions for patient ${patientId}`);
 
-    const total = await Prescription.countDocuments(filter);
+    const [total, selectedPrescription] = await Promise.all([
+      Prescription.countDocuments(filter),
+      req.query.orderable === 'true' && /^[a-f\d]{24}$/i.test(req.query.selectedPrescriptionId || '')
+        ? Prescription.findOne({ ...filter, _id: req.query.selectedPrescriptionId })
+          .populate('doctorId', 'fullName specialty')
+          .populate('products.drugId', 'name genericName')
+        : Promise.resolve(null),
+    ]);
+    const usedIdSet = new Set(usedIds.map(String));
 
     res.json({
-      prescriptions,
+      prescriptions: prescriptions.map(prescription => annotatePatientPrescription(prescription, usedIdSet)),
+      selectedPrescription: selectedPrescription ? annotatePatientPrescription(selectedPrescription, usedIdSet) : null,
       totalPages: Math.ceil(total / limit),
       currentPage: page,
       total

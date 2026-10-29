@@ -134,7 +134,9 @@ exports.getAllPharmacies = async (req, res) => {
       role: 'Pharmacy',
       activationStatus: 'active',
       isPublic: { $ne: false },
-      patientOrderingEnabled: { $ne: false },
+      ...(req.query?.network === 'true'
+        ? { prescriptionDispensingEnabled: true }
+        : { patientOrderingEnabled: { $ne: false } }),
     }).select('fullName city address mobileNumber profileImage');
     res.json(pharmacies);
   } catch (error) {

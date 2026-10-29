@@ -189,6 +189,7 @@ app.use('/api/doctors', doctorsRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/orders', require('./routes/orders')); // Add new orders route
 app.use('/api/addresses', addressRoutes);
+app.use('/api/patient-services', require('./routes/patientServices'));
 app.use('/uploads', express.static('uploads'));
 app.use('/api/users', usersRoutes);
 app.use('/api/user', userRoutes);

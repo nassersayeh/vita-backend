@@ -672,6 +672,13 @@ async function patientAssistantChat({
   const counts = dataCounts(context);
   const contextJson = JSON.stringify(context);
 
+  const centerRole = /أشعة|اشعة|تصوير|radiology|x.?ray|mri|ct scan/i.test(message) ? 'Radiology'
+    : /مختبر|تحاليل|فحوصات|laborator|lab\b/i.test(message) ? 'Lab' : null;
+  if (centerRole) return {
+    responseType: 'center_search', providerRole: centerRole, needsCity: !city, city: city || '',
+    needsDoctorReferral: false,
+    assistantMessage: isArabic ? 'هذه المراكز المتوفرة في شبكة Vita. افتح الملف لعرض الخدمات والأسعار.' : 'Explore Vita centers and open their profiles for services and prices.',
+  };
   if (isPharmacyRequest(message)) {
     return {
       responseType: 'pharmacy_search',

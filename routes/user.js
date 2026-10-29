@@ -17,6 +17,7 @@ router.get('/role/:role', async (req, res) => {
     // Roles are stored with a capitalized value, but older accounts may have
     // been created with a different casing (for example `radiology`).
     let filter = { role: new RegExp(`^${role}$`, 'i'), isPublic: { $ne: false } };
+    if (role === 'Pharmacy') Object.assign(filter, { prescriptionDispensingEnabled: true, activationStatus: 'active' });
     
     if (city) {
       filter.city = city;

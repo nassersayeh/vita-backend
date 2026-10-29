@@ -19,6 +19,7 @@ const ItemSchema = new mongoose.Schema({
   },
   name: { type: String, required: true }, // Added for store items
   price: { type: Number, required: true }, // Added for store items
+  originalPrice: { type: Number, min: 0 },
   details: { type: mongoose.Schema.Types.Mixed }, // Full item details (barcode, inventoryId, drugId, etc.)
   prescriptionDetails: { // Added for ePrescriptions
     doctorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
@@ -39,6 +40,13 @@ const OrderSchema = new mongoose.Schema({
   items: { type: [ItemSchema], default: [] },
   total: { type: Number, required: true },
   subtotal: { type: Number },
+  originalSubtotal: { type: Number },
+  originalTotal: { type: Number },
+  discountAmount: { type: Number, min: 0, default: 0 },
+  discountPercentage: { type: Number, min: 0, max: 100, default: 0 },
+  pharmacyPricedAt: { type: Date },
+  deliveryFee: { type: Number, min: 0, default: 0 },
+  deliveryFeeEstimated: { type: Boolean, default: false },
   taxAmount: { type: Number, default: 0 },
   vatApplied: { type: Boolean, default: false },
   vatRate: { type: Number, default: 0 },

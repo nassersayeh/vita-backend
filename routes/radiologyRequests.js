@@ -50,14 +50,14 @@ router.get('/patient/me', auth, async (req, res) => {
     if (req.query.status) legacyFilter.status = req.query.status;
     const [modernRequests, modernTotal, legacyRequests, legacyTotal] = await Promise.all([
       LabRequest.find(filter)
-        .select('doctorId labId testIds status requestDate scheduledDate completedDate notes results createdAt')
+        .select('doctorId labId testIds status requestDate scheduledDate completedDate notes results createdAt totalCost originalCost discount discountAmount pricingItems')
         .populate('doctorId', 'fullName specialty')
         .populate('labId', 'fullName city address')
         .populate('testIds', 'name type category')
         .sort({ createdAt: -1 }).limit(page * limit).lean(),
       LabRequest.countDocuments(filter),
       ImageRequest.find(legacyFilter)
-        .select('doctorId imageType bodyPart status requestDate scheduledDate completedDate notes images radiologistNotes findings createdAt')
+        .select('doctorId imageType bodyPart status requestDate scheduledDate completedDate notes images radiologistNotes findings createdAt totalCost')
         .populate('doctorId', 'fullName specialty')
         .sort({ createdAt: -1 }).limit(page * limit).lean(),
       ImageRequest.countDocuments(legacyFilter),

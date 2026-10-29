@@ -100,6 +100,7 @@ exports.addDrugToInventory = async (req, res) => {
       drugGenericName: drug.genericName,
       quantity,
       price,
+      priceSource: 'manual',
       costPrice: costPrice || null,
       minimumStock: minimumStock || 5,
       notes: notes || '',
@@ -131,7 +132,7 @@ exports.addManualDrugToInventory = async (req, res) => {
     if (!valid(quantity) || !Number.isInteger(Number(quantity)) || !valid(price) || (costPrice != null && costPrice !== '' && !valid(costPrice)) || (minimumStock != null && !valid(minimumStock))) return res.status(400).json({ message: 'Valid quantity and selling price are required' });
     const resolveDrug = require('../utils/sharedDrugCatalog').createCatalogService(Drug, require('../models/DrugCatalogLock'));
     const { drug, created, linked } = await resolveDrug(req.body);
-    const fields = { drugName: drug.name, drugGenericName: drug.genericName, quantity: Number(quantity), price: Number(price), minimumStock: minimumStock == null ? 5 : Number(minimumStock), isAvailable: true, isActive: true };
+    const fields = { drugName: drug.name, drugGenericName: drug.genericName, quantity: Number(quantity), price: Number(price), priceSource: 'manual', minimumStock: minimumStock == null ? 5 : Number(minimumStock), isAvailable: true, isActive: true };
     if (costPrice != null && costPrice !== '') fields.costPrice = Number(costPrice);
     // Quantity is an absolute stock count, making retries safe (never double-restock).
     let inventory;
@@ -183,6 +184,7 @@ exports.updateInventoryItem = async (req, res) => {
         return res.status(400).json({ message: 'Price must be positive' });
       }
       inventoryItem.price = price;
+      inventoryItem.priceSource = 'manual';
     }
 
     if (costPrice != null) {

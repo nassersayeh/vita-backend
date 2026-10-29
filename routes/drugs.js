@@ -6,6 +6,7 @@ const auth = require('../middleware/auth');
 const resolveSharedDrug = require('../utils/sharedDrugCatalog').createCatalogService(Drug, require('../models/DrugCatalogLock'));
 const { requireAdmin } = require('../middleware/accountAuthorization');
 const multer = require('multer');
+router.post('/checkout-prices', auth, require('../controllers/catalogCheckoutPricingController').getPrices);
 const fs = require('fs');
 const path = require('path');
 

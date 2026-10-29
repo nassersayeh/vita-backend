@@ -5,6 +5,9 @@ const pharmacyInventoryController = require('../controllers/pharmacyInventoryCon
 
 // Protect all routes with authentication
 router.use(auth);
+// Patient-facing prices must be registered outside the owner-only inventory path.
+router.get('/ordering/:pharmacyId', require('../controllers/patientPharmacyPricingController').getPrices);
+router.post('/ordering/:pharmacyId', require('../controllers/patientPharmacyPricingController').getPrices);
 router.use('/pharmacy/:pharmacyId', (req, res, next) => req.user.role === 'Pharmacy' && String(req.user._id) === req.params.pharmacyId ? next() : res.status(403).json({ message: 'Not authorized.' }));
 
 // GET pharmacy inventory

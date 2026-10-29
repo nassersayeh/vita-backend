@@ -487,6 +487,7 @@ router.post('/patient-assistant/chat', verifyPatient, async (req, res) => {
     
     let doctors = [];
     let pharmacies = [];
+    let centers = [];
 
     // Handle different response types - be more selective about when to show doctors
     console.log(`AI Response Type: ${aiResult.responseType}, needsDoctorReferral: ${aiResult.needsDoctorReferral}, detectedSpecialty: ${aiResult.detectedSpecialty}`);
@@ -603,9 +604,15 @@ router.post('/patient-assistant/chat', verifyPatient, async (req, res) => {
       }
     }
 
+    if (aiResult.responseType === 'center_search' && finalCity) {
+      centers = await User.find({ role: aiResult.providerRole, activationStatus: 'active', isPublic: { $ne: false }, city: cityPattern })
+        .select('_id fullName role city address mobileNumber profileImage').sort({ fullName: 1 }).limit(10).lean();
+      if (!centers.length) aiResult.assistantMessage = lang === 'ar' ? 'لا توجد مراكز متاحة في هذه المدينة حالياً. جرّب مدينة أخرى.' : 'No centers available in this city yet. Try another city.';
+    }
     if (aiResult.responseType === 'pharmacy_search' && finalCity) {
       pharmacies = await User.find({
         role: 'Pharmacy',
+        isPublic: { $ne: false },
         activationStatus: 'active',
         city: cityPattern
       })
@@ -628,7 +635,8 @@ router.post('/patient-assistant/chat', verifyPatient, async (req, res) => {
         ...aiResult,
         city: finalCity || null,
         doctors,
-        pharmacies
+        pharmacies,
+        centers
       },
       message: lang === 'ar' ? 'تمت معالجة طلب المساعد الذكي بنجاح' : 'Patient assistant request processed successfully'
     });

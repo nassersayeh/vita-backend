@@ -17,6 +17,29 @@ const requireAdmin = (req, res, next) => {
 router.use(auth, requireAdmin);
 router.use('/sales', require('./adminSales'));
 
+router.get('/prescription-pharmacies', async (req, res) => {
+  try {
+    const pharmacies = await User.find({ role: 'Pharmacy' })
+      .select('fullName city address activationStatus prescriptionDispensingEnabled').sort({ fullName: 1 }).lean();
+    res.json({ pharmacies });
+  } catch { res.status(500).json({ message: 'Unable to load pharmacies' }); }
+});
+
+router.put('/prescription-pharmacies/:pharmacyId', async (req, res) => {
+  if (!mongoose.isValidObjectId(req.params.pharmacyId) || typeof req.body.enabled !== 'boolean') {
+    return res.status(400).json({ message: 'Valid pharmacy ID and boolean enabled are required' });
+  }
+  try {
+    const pharmacy = await User.findOneAndUpdate(
+      { _id: req.params.pharmacyId, role: 'Pharmacy' },
+      { $set: { prescriptionDispensingEnabled: req.body.enabled } },
+      { new: true, runValidators: true }
+    ).select('fullName city address activationStatus prescriptionDispensingEnabled');
+    if (!pharmacy) return res.status(404).json({ message: 'Pharmacy not found' });
+    res.json({ pharmacy });
+  } catch { res.status(500).json({ message: 'Unable to update pharmacy' }); }
+});
+
 router.get('/patient-ordering-pharmacies', async (req, res) => {
   const pharmacies = await User.find({ role: 'Pharmacy' }).select('fullName city address activationStatus patientOrderingEnabled').sort({ fullName: 1 }).lean();
   res.json({ pharmacies });

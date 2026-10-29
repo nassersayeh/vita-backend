@@ -4,6 +4,7 @@ const providerController = require('../controllers/providerController');
 const auth = require('../middleware/auth');
 
 router.get('/', providerController.getBookableProviders);
+router.get('/:id/medicines', providerController.getProviderMedicines);
 router.get('/:id', providerController.getProviderDetails);
 router.post('/:id/connect', auth, providerController.connectProvider);
 

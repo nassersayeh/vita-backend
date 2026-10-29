@@ -39,6 +39,7 @@ async function assignDefaultInventory(pharmacyId) {
         drugGenericName: drug.genericName || '',
         quantity: DEFAULT_QUANTITY,
         price: drug.unitSellingPrice || 0,
+        priceSource: 'catalog',
         costPrice: drug.lastPurchasePrice || 0,
         currency: 'ILS',
         isAvailable: true,

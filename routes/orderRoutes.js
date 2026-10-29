@@ -192,8 +192,8 @@ router.get('/user/:userId', OrderController.getUserOrders);
 router.get('/:orderId', OrderController.getOrderById);
 
 // Update order status (supports both routes for compatibility)
-router.put('/:orderId/status', OrderController.updateOrderStatus);
-router.put('/:orderId', OrderController.updateOrderStatus);
+router.put('/:orderId/status', auth, OrderController.updateOrderStatus);
+router.put('/:orderId', auth, OrderController.updateOrderStatus);
 
 // Ask for prescription
 router.post('/:orderId/ask-prescription', OrderController.askForPrescription);

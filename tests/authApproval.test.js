@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const jwt = require('jsonwebtoken');
 
-async function authenticate(user, invalidSignature = false, baseUrl) {
+async function authenticate(user, invalidSignature = false, baseUrl, path) {
   const secret = 'isolated-approval-test-secret';
   const moduleObject = { exports: {} };
   let selection;
@@ -14,7 +14,7 @@ async function authenticate(user, invalidSignature = false, baseUrl) {
   });
   const token = jwt.sign({ userId: 'doctor-id', role: 'Doctor' }, invalidSignature ? 'incorrect' : secret, { expiresIn: '1h' });
   let status; let body; let next = false;
-  await moduleObject.exports({ header: () => `Bearer ${token}`, baseUrl }, {
+  await moduleObject.exports({ header: () => `Bearer ${token}`, baseUrl, path }, {
     status(value) { status = value; return this; }, json(value) { body = value; },
   }, () => { next = true; });
   return { status, body, next, selection };
@@ -25,6 +25,18 @@ test('pending doctors retain their session but cannot access protected data', as
   assert.equal(result.status, 403);
   assert.equal(result.body.code, 'ACCOUNT_PENDING_APPROVAL');
   assert.equal(result.next, false);
+});
+
+test('patient pricing loads only identity fields while retaining session and account checks', async () => {
+  const route = '/api/pharmacy-inventory';
+  const path = '/ordering/aaaaaaaaaaaaaaaaaaaaaaaa';
+  const result = await authenticate({ activationStatus: 'active', role: 'User' }, false, route, path);
+  assert.equal(result.next, true);
+  assert.equal(result.selection, '_id fullName role activationStatus +passwordChangedAt');
+  assert.equal((await authenticate({ activationStatus: 'pending' }, false, route, path)).status, 403);
+  assert.equal((await authenticate({ activationStatus: 'active' }, true, route, path)).status, 401);
+  assert.equal((await authenticate({ activationStatus: 'active', passwordChangedAt: new Date(Date.now() + 1000) }, false, route, path)).status, 401);
+  assert.equal((await authenticate({ activationStatus: 'active' }, false, route, '/pharmacy/owner')).selection, '+passwordChangedAt');
 });
 test('active doctors can access protected routes', async () => {
   assert.equal((await authenticate({ activationStatus: 'active' })).next, true);

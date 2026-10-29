@@ -10,6 +10,10 @@ const Points = require('../models/Points');
 const EPrescription = require('../models/EPrescription');
 const Financial = require('../models/Financial');
 const { sendWhatsAppMessage } = require('../services/whatsappService');
+const { catalogCheckoutPricing } = require('../utils/catalogCheckoutPricing');
+const { patientOrderTotals } = require('../utils/patientOrderTotals');
+const { prescriptionBlockingOrders } = require('../utils/patientPrescriptionEligibility');
+const { buildPatientOrderQuote } = require('../utils/patientOrderQuote');
 
 exports.createOrder = async (req, res) => {
   try {
@@ -59,8 +63,9 @@ exports.createOrder = async (req, res) => {
         const prescription = await EPrescription.findOne({ _id: prescriptionId, patientId: authenticatedUserId });
         if (!prescription) return res.status(404).json({ message: 'Prescription not found for this patient.' });
         if (prescription && prescription.validityType === 'one-time') {
+          if (prescription.dispensedAt || Number(prescription.dispensedCount) > 0) return res.status(400).json({ message: 'This one-time prescription has already been dispensed.' });
           // Check if an order already exists for this one-time prescription
-          const existingOrder = await Order.findOne({ prescriptionId: prescriptionId });
+          const existingOrder = await Order.findOne({ prescriptionId, ...prescriptionBlockingOrders() });
           if (existingOrder) {
             return res.status(400).json({ 
               message: 'This is a one-time prescription and has already been ordered. You cannot create another order with it.' 
@@ -69,7 +74,7 @@ exports.createOrder = async (req, res) => {
         }
       } catch (prescriptionError) {
         console.warn('Error checking prescription validity:', prescriptionError);
-        // Continue with order creation even if prescription check fails
+        return res.status(503).json({ message: 'Unable to verify prescription availability. Please retry.' });
       }
     }
 
@@ -128,7 +133,24 @@ exports.createOrder = async (req, res) => {
       return res.status(400).json({ message: 'No valid items to process.' });
     }
 
-    const finalTotal = Number(total);
+    // Re-read catalog prices at confirmation; the client and pharmacy inventory
+    // cannot override the amount charged for patient medication orders.
+    if (!isUploadedPrescriptionOrder) {
+      const quote = await catalogCheckoutPricing(processedItems.map(item => ({ id: String(item.item || ''), name: item.name })));
+      if (quote.some(item => item.price === null) || processedItems.some(item => !Number.isInteger(Number(item.quantity)) || Number(item.quantity) < 1)) {
+        return res.status(400).json({ message: 'Some medicines have no catalog selling price or a valid quantity.' });
+      }
+      processedItems.forEach((item, index) => {
+        item.item = quote[index].drugId;
+        item.name = quote[index].drugName;
+        item.price = quote[index].price;
+      });
+    }
+    const totals = patientOrderTotals(processedItems, deliveryMethod);
+    const finalTotal = totals.total;
+    if (!isUploadedPrescriptionOrder && Math.abs(Number(total) - finalTotal) > 0.009) {
+      return res.status(409).json({ code: 'CATALOG_PRICE_CHANGED', message: 'Medicine prices changed. Reload prices before confirming the order.', total: finalTotal });
+    }
     if (!Number.isFinite(finalTotal) || finalTotal < 0) {
       return res.status(400).json({ message: 'قيمة إجمالي الطلب غير صالحة' });
     }
@@ -144,6 +166,9 @@ exports.createOrder = async (req, res) => {
       user: authenticatedUserId,
       items: processedItems,
       total: finalTotal,
+      subtotal: totals.subtotal,
+      deliveryFee: totals.deliveryFee,
+      deliveryFeeEstimated: deliveryMethod === 'delivery',
       // Patient-selected pharmacy receives the order immediately.
       status: 'pending',
       adminApprovalStatus: 'approved',
@@ -228,6 +253,7 @@ exports.createOrder = async (req, res) => {
 
     res.status(201).json({ message: 'تم إنشاء الطلب بنجاح', order: newOrder });
   } catch (err) {
+    if (err.status === 400) return res.status(400).json({ message: err.message });
     if (err.code === 'CONTROLLED_REQUIRED') return res.status(403).json({ message: err.message });
     console.error('Error creating order:', err);
     res.status(500).json({ message: 'خطأ في الخادم أثناء إنشاء الطلب.', error: err.message });
@@ -423,6 +449,19 @@ exports.updateOrderStatus = async (req, res) => {
     }
 
     if (!req.user || (!['Admin', 'Superadmin'].includes(req.user.role) && String(req.user._id) !== String(order.pharmacyId) && !(status === 'cancelled' && String(req.user._id) === String(order.user?._id || order.user)))) return res.status(403).json({ message: 'Not authorized for this order.' });
+    if (req.user.role === 'User' && order.status !== 'pending') return res.status(400).json({ message: 'Only pending orders can be cancelled by the patient.' });
+    if (req.body.pricingItems !== undefined) {
+      if (status !== 'accepted' || order.status !== 'pending') return res.status(400).json({ message: 'Pricing is only allowed when accepting a pending order.' });
+      const quote = buildPatientOrderQuote(order.items, req.body.pricingItems, order.deliveryFee || 0);
+      order.items = quote.items;
+      order.originalSubtotal = quote.originalSubtotal;
+      order.originalTotal = quote.originalTotal;
+      order.subtotal = quote.subtotal;
+      order.total = quote.total;
+      order.discountAmount = quote.discountAmount;
+      order.discountPercentage = quote.discountPercentage;
+      order.pharmacyPricedAt = new Date();
+    }
     const previousStatus = order.status;
     order.status = status;
 
@@ -643,6 +682,7 @@ exports.updateOrderStatus = async (req, res) => {
   } catch (err) {
     if (err.code === 'CONTROLLED_REQUIRED') return res.status(403).json({ message: err.message });
     console.error('Error updating order status:', err);
+    if (err.status === 400) return res.status(400).json({ message: err.message });
     res.status(500).json({ message: 'خطأ في الخادم أثناء تحديث الطلب.' });
   }
 };

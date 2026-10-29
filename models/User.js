@@ -129,6 +129,7 @@ const UserSchema = new mongoose.Schema({
   isPublic: { type: Boolean, default: true },
   // Admin-controlled visibility in the patient medication ordering flow.
   patientOrderingEnabled: { type: Boolean, default: true, index: true },
+  prescriptionDispensingEnabled: { type: Boolean, default: false, index: true },
   internalDepartment: { type: String, enum: ['laboratory', 'pharmacy', 'secretariat', 'clinic', ''], default: '' },
   bio: { type: String, default: '' },
   specialty: { type: String, default: '' },

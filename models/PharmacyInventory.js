@@ -18,6 +18,7 @@ const PharmacyInventorySchema = new mongoose.Schema({
   // Pharmacy-specific pricing and inventory
   quantity: { type: Number, required: true, min: 0 }, // Stock amount
   price: { type: Number, required: true, min: 0 }, // Pharmacy's selling price
+  priceSource: { type: String, enum: ['manual', 'catalog'] },
   costPrice: { type: Number }, // Cost price for the pharmacy (optional)
   currency: { type: String, default: 'ILS' }, // Currency code
   
