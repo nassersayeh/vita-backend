@@ -1,0 +1,392 @@
+[
+  {
+    "name": "CBC",
+    "price": 30,
+    "category": "Routine"
+  },
+  {
+    "name": "Blood Group",
+    "price": 20,
+    "category": "Routine"
+  },
+  {
+    "name": "PT",
+    "price": 30,
+    "category": "Routine"
+  },
+  {
+    "name": "PTT",
+    "price": 30,
+    "category": "Routine"
+  },
+  {
+    "name": "Hb-Electrophoresis",
+    "price": 150,
+    "category": "Routine"
+  },
+  {
+    "name": "FBS",
+    "price": 20,
+    "category": "Routine"
+  },
+  {
+    "name": "Urea",
+    "price": 25,
+    "category": "Routine"
+  },
+  {
+    "name": "Creatinine",
+    "price": 25,
+    "category": "Routine"
+  },
+  {
+    "name": "GPT",
+    "price": 25,
+    "category": "Routine"
+  },
+  {
+    "name": "GOT",
+    "price": 25,
+    "category": "Routine"
+  },
+  {
+    "name": "Alkaline Phosphatase",
+    "price": 25,
+    "category": "Routine"
+  },
+  {
+    "name": "T. Bilirubin",
+    "price": 30,
+    "category": "Routine"
+  },
+  {
+    "name": "D. Bilirubin",
+    "price": 25,
+    "category": "Routine"
+  },
+  {
+    "name": "Uric Acid",
+    "price": 25,
+    "category": "Routine"
+  },
+  {
+    "name": "Calcium",
+    "price": 30,
+    "category": "Routine"
+  },
+  {
+    "name": "Magnesium",
+    "price": 50,
+    "category": "Routine"
+  },
+  {
+    "name": "Na",
+    "price": 25,
+    "category": "Routine"
+  },
+  {
+    "name": "K",
+    "price": 25,
+    "category": "Routine"
+  },
+  {
+    "name": "PO4",
+    "price": 25,
+    "category": "Routine"
+  },
+  {
+    "name": "Lipase",
+    "price": 90,
+    "category": "Routine"
+  },
+  {
+    "name": "Amylase",
+    "price": 50,
+    "category": "Routine"
+  },
+  {
+    "name": "Zinc",
+    "price": 80,
+    "category": "Routine"
+  },
+  {
+    "name": "LDH",
+    "price": 40,
+    "category": "Routine"
+  },
+  {
+    "name": "Iron",
+    "price": 40,
+    "category": "Routine"
+  },
+  {
+    "name": "Cholesterol",
+    "price": 25,
+    "category": "Routine"
+  },
+  {
+    "name": "Triglycerides",
+    "price": 30,
+    "category": "Routine"
+  },
+  {
+    "name": "HDL",
+    "price": 25,
+    "category": "Routine"
+  },
+  {
+    "name": "LDL",
+    "price": 30,
+    "category": "Routine"
+  },
+  {
+    "name": "CRP",
+    "price": 30,
+    "category": "Routine"
+  },
+  {
+    "name": "ESR",
+    "price": 25,
+    "category": "Routine"
+  },
+  {
+    "name": "RF",
+    "price": 25,
+    "category": "Routine"
+  },
+  {
+    "name": "ASOT",
+    "price": 25,
+    "category": "Routine"
+  },
+  {
+    "name": "Albumin",
+    "price": 20,
+    "category": "Routine"
+  },
+  {
+    "name": "Globulin",
+    "price": 20,
+    "category": "Routine"
+  },
+  {
+    "name": "T. Protein",
+    "price": 20,
+    "category": "Routine"
+  },
+  {
+    "name": "Pregnancy test",
+    "price": 25,
+    "category": "Routine"
+  },
+  {
+    "name": "HIV Abs",
+    "price": 70,
+    "category": "Routine"
+  },
+  {
+    "name": "HBsAg",
+    "price": 60,
+    "category": "Routine"
+  },
+  {
+    "name": "H. Pylori (Blood)",
+    "price": 50,
+    "category": "Routine"
+  },
+  {
+    "name": "H. Pylori (Stool)",
+    "price": 80,
+    "category": "Routine"
+  },
+  {
+    "name": "Occult Blood",
+    "price": 50,
+    "category": "Routine"
+  },
+  {
+    "name": "Stool Analysis",
+    "price": 20,
+    "category": "Routine"
+  },
+  {
+    "name": "Urine Analysis",
+    "price": 20,
+    "category": "Routine"
+  },
+  {
+    "name": "Urine Culture",
+    "price": 50,
+    "category": "Routine"
+  },
+  {
+    "name": "Sputum Culture",
+    "price": 50,
+    "category": "Routine"
+  },
+  {
+    "name": "Pus Culture",
+    "price": 60,
+    "category": "Routine"
+  },
+  {
+    "name": "Semen Analysis",
+    "price": 50,
+    "category": "Routine"
+  },
+  {
+    "name": "Ferritin",
+    "price": 80,
+    "category": "Special"
+  },
+  {
+    "name": "TSH",
+    "price": 60,
+    "category": "Special"
+  },
+  {
+    "name": "F.T3",
+    "price": 60,
+    "category": "Special"
+  },
+  {
+    "name": "F.T4",
+    "price": 60,
+    "category": "Special"
+  },
+  {
+    "name": "Prolactin",
+    "price": 60,
+    "category": "Special"
+  },
+  {
+    "name": "FSH",
+    "price": 60,
+    "category": "Special"
+  },
+  {
+    "name": "LH",
+    "price": 60,
+    "category": "Special"
+  },
+  {
+    "name": "E2",
+    "price": 60,
+    "category": "Special"
+  },
+  {
+    "name": "DHEAS",
+    "price": 150,
+    "category": "Special"
+  },
+  {
+    "name": "D. Dimer",
+    "price": 140,
+    "category": "Special"
+  },
+  {
+    "name": "HbA1c",
+    "price": 60,
+    "category": "Special"
+  },
+  {
+    "name": "B-HCG",
+    "price": 70,
+    "category": "Special"
+  },
+  {
+    "name": "T. Testosterone",
+    "price": 80,
+    "category": "Special"
+  },
+  {
+    "name": "F. Testosterone",
+    "price": 100,
+    "category": "Special"
+  },
+  {
+    "name": "T. PSA",
+    "price": 100,
+    "category": "Special"
+  },
+  {
+    "name": "F. PSA",
+    "price": 150,
+    "category": "Special"
+  },
+  {
+    "name": "Vitamin D",
+    "price": 150,
+    "category": "Special"
+  },
+  {
+    "name": "Vitamin B12",
+    "price": 90,
+    "category": "Special"
+  },
+  {
+    "name": "Toxo IgM",
+    "price": 60,
+    "category": "Special"
+  },
+  {
+    "name": "Toxo IgG",
+    "price": 60,
+    "category": "Special"
+  },
+  {
+    "name": "IgG",
+    "price": 70,
+    "category": "Special"
+  },
+  {
+    "name": "IgM",
+    "price": 70,
+    "category": "Special"
+  },
+  {
+    "name": "ANA",
+    "price": 100,
+    "category": "Special"
+  },
+  {
+    "name": "Anti CCP",
+    "price": 200,
+    "category": "Special"
+  },
+  {
+    "name": "CEA",
+    "price": 150,
+    "category": "Special"
+  },
+  {
+    "name": "CA125",
+    "price": 150,
+    "category": "Special"
+  },
+  {
+    "name": "CA19.9",
+    "price": 150,
+    "category": "Special"
+  },
+  {
+    "name": "CA15.3",
+    "price": 150,
+    "category": "Special"
+  },
+  {
+    "name": "Anti-tga IgA",
+    "price": 150,
+    "category": "Special"
+  },
+  {
+    "name": "Anti-tga IgG",
+    "price": 150,
+    "category": "Special"
+  },
+  {
+    "name": "Antithyroglobulin Abs",
+    "price": 200,
+    "category": "Special"
+  }
+]
