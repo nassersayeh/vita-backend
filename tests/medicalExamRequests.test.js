@@ -107,7 +107,7 @@ test('monthly accounts reject doctors, isolate laboratories and use complete mon
 });
 test('request details cannot be fetched for another laboratory or by a doctor', async () => {
   let filter;
-  const router = load({ User: { exists: async () => true }, Request: { findOne(f) { filter = f; return { populate() { return this; }, lean: async () => null }; } } });
+  const router = load({ User: { exists: async () => true }, Request: { findOne(f) { filter = f; return { select() { return this; }, populate() { return this; }, lean: async () => null }; } } });
   const url='/aaaaaaaaaaaaaaaaaaaaaaaa/details';
   assert.equal((await request(router,'GET',url,doctor)).status,403);
   assert.equal((await request(router,'GET',url,{ _id: 'dddddddddddddddddddddddd', role: 'Lab' })).status,404);
@@ -130,4 +130,34 @@ test('archive pagination searches all owned requests and doctor listings exclude
   assert.equal(skipped,15);assert.equal(limited,15);assert.equal(result.body.pagination.totalPages,3);
   await request(router,'GET','/',doctor);
   assert.equal(filter.doctorId,doctor._id);assert.match(selection,/-pricing/);assert.match(selection,/-totalCost/);
+});
+
+test('laboratory can complete an owned request with no results', async () => {
+  let mutation;
+  const router=load({User:{exists:async()=>true},Request:{findOneAndUpdate:async(filter,update)=>{mutation={filter,update};return {};}}});
+  const result=await request(router,'PATCH','/aaaaaaaaaaaaaaaaaaaaaaaa/complete',{_id:'dddddddddddddddddddddddd',role:'Lab'},{results:''});
+  assert.equal(result.status,200);assert.equal(mutation.update.$set.results,'');assert.equal(mutation.update.$set.status,'completed');
+  assert.equal(mutation.filter.deletedAt,null);assert.equal(mutation.filter.laboratoryId,'dddddddddddddddddddddddd');
+});
+test('empty and partial result drafts save without completing and only include requested tests', async () => {
+  let mutation;
+  const stored={_id:'aaaaaaaaaaaaaaaaaaaaaaaa',tests:['CBC']};
+  const router=load({User:{exists:async()=>true},Request:{findOne:async()=>stored,findOneAndUpdate(filter,update){mutation={filter,update};return {select:async()=>stored};}}});
+  const lab={_id:'dddddddddddddddddddddddd',role:'Lab'};
+  assert.equal((await request(router,'PATCH','/aaaaaaaaaaaaaaaaaaaaaaaa/draft',doctor,{resultDraft:[]})).status,403);
+  assert.equal((await request(router,'PATCH','/aaaaaaaaaaaaaaaaaaaaaaaa/draft',lab,{resultDraft:[]})).status,200);
+  assert.equal(mutation.update.$set.status,undefined);assert.equal(mutation.filter.deletedAt,null);
+  assert.equal((await request(router,'PATCH','/aaaaaaaaaaaaaaaaaaaaaaaa/draft',lab,{resultDraft:[{name:'CBC',value:JSON.stringify({wbc:'6'})}]})).status,200);
+  assert.equal(mutation.update.$set.resultDraft[0].value,JSON.stringify({wbc:'6'}));
+  assert.equal((await request(router,'PATCH','/aaaaaaaaaaaaaaaaaaaaaaaa/draft',lab,{resultDraft:[{name:'Other',value:'123'}]})).status,400);
+});
+test('deleting is laboratory-owned, soft, and disallowed for doctors', async () => {
+  let mutation;
+  const router=load({User:{exists:async()=>true},Request:{findOneAndUpdate:async(filter,update)=>{mutation={filter,update};return {};}}});
+  const url='/aaaaaaaaaaaaaaaaaaaaaaaa';
+  assert.equal((await request(router,'DELETE',url,doctor)).status,403);
+  const lab={_id:'dddddddddddddddddddddddd',role:'Lab'};
+  assert.equal((await request(router,'DELETE',url,lab)).status,200);
+  assert.equal(mutation.filter.laboratoryId,lab._id);assert.equal(mutation.filter.deletedAt,null);
+  assert.equal(typeof mutation.update.$set.deletedAt.toISOString(),'string');
 });

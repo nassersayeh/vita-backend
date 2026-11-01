@@ -7,6 +7,8 @@ const schema = new mongoose.Schema({
   notes: { type: String, default: '' },
   status: { type: String, enum: ['awaiting_laboratory', 'pending', 'in_progress', 'completed'], required: true },
   results: { type: String, default: '' },
+  resultDraft: { type: [{ name: String, value: String }], default: [], select: false },
+  deletedAt: { type: Date, default: null },
   pricing: [{ name: String, price: { type: Number, min: 0, required: true }, originalCost: Number,
     discountPercentage: { type: Number, min: 0, max: 100 }, discountAmount: Number,
     vitaCommissionPercent: Number, vitaCommissionAmount: Number, providerNetAmount: Number }],

@@ -6,7 +6,8 @@ const schema = new mongoose.Schema({
   category: { type: String, default: 'Routine' },
   normalRange: { type: String, default: '' },
   unit: { type: String, default: '' },
-  fields: [{ label: { type: String, required: true, maxlength: 120 }, unit: String, normalRange: String }],
+  fields: [{ label: { type: String, required: true, maxlength: 120 }, key: String,
+    type: { type: String, enum: ['text', 'number', 'select', 'textarea'], default: 'text' }, options: [String], unit: String, normalRange: String }],
   isActive: { type: Boolean, default: true },
 }, { timestamps: true });
 schema.index({ laboratoryId: 1, name: 1 }, { unique: true });

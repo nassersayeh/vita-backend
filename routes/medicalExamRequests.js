@@ -3,6 +3,7 @@ const auth = require('../middleware/auth');
 const User = require('../models/User');
 const Request = require('../models/MedicalExamRequest');
 const Service = require('../models/LaboratoryService');
+const { resolveTemplate } = require('../utils/laboratoryTemplates');
 const { priceItem, requestAccounting, monthlyAccounts } = require('../utils/laboratoryAccounting');
 const { usesLegacyClinicDashboard } = require('../utils/partnerAccess');
 const validId = id => typeof id === 'string' && /^[a-f\d]{24}$/i.test(id);
@@ -30,7 +31,7 @@ router.get('/laboratories', doctorOnly, async (req, res) => {
 });
 router.get('/', async (req, res) => {
   try {
-    const filter = req.user.role === 'Lab' ? { laboratoryId: req.user._id } : { doctorId: req.user._id };
+    const filter = req.user.role === 'Lab' ? { laboratoryId: req.user._id, deletedAt: null } : { doctorId: req.user._id, deletedAt: null };
     if (req.query.patientId) {
       if (!validId(req.query.patientId)) return res.status(400).json({ message: 'معرّف المريض غير صحيح.' });
       filter.patientId = req.query.patientId;
@@ -45,7 +46,7 @@ router.get('/', async (req, res) => {
       const people = await User.find({ $or: [{ fullName: { $regex: escaped, $options: 'i' } }, { idNumber: { $regex: escaped, $options: 'i' } }] }).select('_id').lean();
       filter.$or = [{ patientId: { $in: people.map(p => p._id) } }, { doctorId: { $in: people.map(p => p._id) } }, { tests: { $regex: escaped, $options: 'i' } }];
     }
-    const query = Request.find(filter).select(req.user.role === 'Lab' ? '+pricing +totalCost' : '-pricing -totalCost').populate('laboratoryId', 'fullName').populate('patientId', 'fullName idNumber mobileNumber').populate('doctorId', 'fullName').sort({ createdAt: -1 });
+    const query = Request.find(filter).select(req.user.role === 'Lab' ? '+pricing +totalCost +resultDraft' : '-pricing -totalCost -resultDraft').populate('laboratoryId', 'fullName').populate('patientId', 'fullName idNumber mobileNumber birthdate sex').populate('doctorId', 'fullName').sort({ createdAt: -1 });
     if (paginated) query.skip((page - 1) * limit);
     const requests = await query.limit(limit).lean();
     const output = req.user.role === 'Lab' ? requests.map(request => ({ ...request, accounting: requestAccounting(request) })) : requests;
@@ -61,7 +62,7 @@ router.post('/', doctorOnly, async (req, res) => {
     if (!(req.user.patients || []).some(id => String(id) === patientId) || !await User.exists({ _id: patientId, role: 'User' })) return res.status(403).json({ message: 'المريض غير مرتبط بحسابك.' });
     if (laboratoryId && (!validId(laboratoryId) || !await findLaboratory(laboratoryId))) return res.status(400).json({ message: 'اختر مختبراً مستقلاً معتمداً.' });
     const request = await Request.create({ doctorId: req.user._id, patientId, laboratoryId: laboratoryId || null, tests: [...new Set(tests.map(test => test.trim()))], notes: notes.trim(), status: laboratoryId ? 'pending' : 'awaiting_laboratory' });
-    const publicRequest = request.toObject ? request.toObject() : { ...request }; delete publicRequest.pricing; delete publicRequest.totalCost;
+    const publicRequest = request.toObject ? request.toObject() : { ...request }; delete publicRequest.pricing; delete publicRequest.totalCost; delete publicRequest.resultDraft;
     res.status(201).json({ request: publicRequest });
   } catch { res.status(500).json({ message: 'تعذر حفظ طلب الفحص.' }); }
 });
@@ -69,18 +70,18 @@ router.patch('/:id/send', doctorOnly, async (req, res) => {
   try {
     const { laboratoryId } = req.body || {};
     if (!validId(req.params.id) || !validId(laboratoryId) || !await findLaboratory(laboratoryId)) return res.status(400).json({ message: 'اختر مختبراً مستقلاً معتمداً.' });
-    const request = await Request.findOneAndUpdate({ _id: req.params.id, doctorId: req.user._id, status: 'awaiting_laboratory', laboratoryId: null }, { $set: { laboratoryId, status: 'pending' } }, { new: true });
+    const request = await Request.findOneAndUpdate({ _id: req.params.id, deletedAt: null, doctorId: req.user._id, status: 'awaiting_laboratory', laboratoryId: null }, { $set: { laboratoryId, status: 'pending' } }, { new: true });
     if (!request) return res.status(409).json({ message: 'الطلب غير متاح للإرسال.' });
     const output = request.toObject ? request.toObject() : { ...request };
-    if (req.user.role !== 'Lab') { delete output.pricing; delete output.totalCost; }
+    if (req.user.role !== 'Lab') { delete output.pricing; delete output.totalCost; delete output.resultDraft; }
     res.json({ request: output });
   } catch { res.status(500).json({ message: 'تعذر إرسال الطلب.' }); }
 });
 router.patch('/:id/complete', async (req, res) => {
   try {
     if (req.user.role !== 'Lab') return res.status(403).json({ message: 'للمختبر فقط.' });
-    if (!validId(req.params.id) || typeof req.body?.results !== 'string' || !req.body.results.trim() || req.body.results.length > 10000) return res.status(400).json({ message: 'أدخل نتائج الفحص.' });
-    const request = await Request.findOneAndUpdate({ _id: req.params.id, laboratoryId: req.user._id, status: { $in: ['pending', 'in_progress'] } }, { $set: { status: 'completed', results: req.body.results.trim(), completedAt: new Date() } }, { new: true });
+    if (!validId(req.params.id) || (req.body?.results !== undefined && (typeof req.body.results !== 'string' || req.body.results.length > 10000))) return res.status(400).json({ message: 'أدخل نتائج الفحص.' });
+    const request = await Request.findOneAndUpdate({ _id: req.params.id, deletedAt: null, laboratoryId: req.user._id, status: { $in: ['pending', 'in_progress'] } }, { $set: { status: 'completed', results: (req.body.results || '').trim(), completedAt: new Date() } }, { new: true });
     if (!request) return res.status(404).json({ message: 'الطلب غير متاح.' });
     res.json({ request });
   } catch { res.status(500).json({ message: 'تعذر حفظ النتائج.' }); }
@@ -92,7 +93,7 @@ router.get('/services/catalog', async (req, res) => {
     const laboratoryId = req.user.role === 'Lab' ? req.user._id : req.query.laboratoryId;
     if (!validId(String(laboratoryId)) || (req.user.role !== 'Lab' && !await findLaboratory(laboratoryId))) return res.status(400).json({ message: 'Invalid laboratory.' });
     const services = await Service.find({ laboratoryId, isActive: true }).select(req.user.role === 'Lab' ? '' : '-price -fields -normalRange -unit').sort({ category: 1, name: 1 }).lean();
-    res.json({ services });
+    res.json({ services: req.user.role === 'Lab' ? services.map(resolveTemplate) : services });
   } catch { res.status(500).json({ message: 'Failed to load services.' }); }
 });
 router.post('/services/catalog', labOnly, async (req, res) => {
@@ -100,14 +101,15 @@ router.post('/services/catalog', labOnly, async (req, res) => {
     const { name, price, category = 'Routine', fields = [], unit = '', normalRange = '' } = req.body;
     if (typeof name !== 'string' || !name.trim() || name.length > 200 || typeof price !== 'number' || !Number.isFinite(price) || price < 0 || !Array.isArray(fields) || fields.length > 100 || fields.some(f => !f || typeof f.label !== 'string' || !f.label.trim() || f.label.length > 120)) return res.status(400).json({ message: 'Invalid service or fields.' });
     if (new Set(fields.map(f => f.label.trim().toLowerCase())).size !== fields.length) return res.status(400).json({ message: 'Field labels must be unique.' });
-    const service = await Service.findOneAndUpdate({ laboratoryId: req.user._id, name: name.trim() }, { $set: { price, category: String(category).slice(0,80), fields: fields.map(f => ({ label: f.label.trim(), unit: String(f.unit || '').slice(0,80), normalRange: String(f.normalRange || '').slice(0,300) })), unit: String(unit).slice(0,80), normalRange: String(normalRange).slice(0,300), isActive: true } }, { new: true, upsert: true, runValidators: true });
+    if (new Set(fields.map(f => String(f.key || f.label).trim())).size !== fields.length) return res.status(400).json({ message: 'Field keys must be unique.' });
+    const service = await Service.findOneAndUpdate({ laboratoryId: req.user._id, name: name.trim() }, { $set: { price, category: String(category).slice(0,80), fields: fields.map(f => ({ label: f.label.trim(), key: String(f.key || f.label).slice(0,120), type: ['text','number','select','textarea'].includes(f.type) ? f.type : 'text', options: Array.isArray(f.options) ? f.options.slice(0,50).map(v => String(v).slice(0,120)) : [], unit: String(f.unit || '').slice(0,80), normalRange: String(f.normalRange || '').slice(0,300) })), unit: String(unit).slice(0,80), normalRange: String(normalRange).slice(0,300), isActive: true } }, { new: true, upsert: true, runValidators: true });
     res.json({ service });
   } catch { res.status(500).json({ message: 'Failed to save service.' }); }
 });
 router.patch('/:id/pricing', labOnly, async (req, res) => {
   try {
     if (!validId(req.params.id)) return res.status(400).json({ message: 'Invalid request.' });
-    const request = await Request.findOne({ _id: req.params.id, laboratoryId: req.user._id, status: { $in: ['pending', 'in_progress'] } });
+    const request = await Request.findOne({ _id: req.params.id, deletedAt: null, laboratoryId: req.user._id, status: { $in: ['pending', 'in_progress'] } });
     if (!request) return res.status(404).json({ message: 'Request unavailable.' });
     const items = req.body.items;
     if (!Array.isArray(items) || items.length !== request.tests.length || new Set(items.map(i => i?.name)).size !== request.tests.length || items.some(i => !i || !request.tests.includes(i.name) || typeof i.price !== 'number' || !Number.isFinite(i.price) || i.price < 0 || (i.discountPercentage !== undefined && (typeof i.discountPercentage !== 'number' || !Number.isFinite(i.discountPercentage) || i.discountPercentage < 0 || i.discountPercentage > 100)))) return res.status(400).json({ message: 'Price every requested test.' });
@@ -115,7 +117,7 @@ router.patch('/:id/pricing', labOnly, async (req, res) => {
     for (const item of items) await Service.updateOne({ laboratoryId: req.user._id, name: item.name }, { $setOnInsert: { price: item.price, category: 'Custom', fields: [], isActive: true } }, { upsert: true, runValidators: true });
     request.pricing = items.map(i => priceItem({ ...i, originalCost: i.price }));
     request.totalCost = Math.round(request.pricing.reduce((sum,i) => sum + i.price, 0) * 100) / 100;
-    const updated = await Request.findOneAndUpdate({ _id: request._id, laboratoryId: req.user._id, status: { $in: ['pending', 'in_progress'] }, ...(request.updatedAt ? { updatedAt: request.updatedAt } : {}) }, { $set: { pricing: request.pricing, totalCost: request.totalCost } }, { new: true, runValidators: true });
+    const updated = await Request.findOneAndUpdate({ _id: request._id, deletedAt: null, laboratoryId: req.user._id, status: { $in: ['pending', 'in_progress'] }, ...(request.updatedAt ? { updatedAt: request.updatedAt } : {}) }, { $set: { pricing: request.pricing, totalCost: request.totalCost } }, { new: true, runValidators: true });
     if (!updated) return res.status(409).json({ message: 'Request changed; reload before pricing.' });
     res.json({ request: updated });
   } catch { res.status(500).json({ message: 'Failed to price request.' }); }
@@ -124,7 +126,7 @@ router.patch('/:id/pricing', labOnly, async (req, res) => {
 
 router.get('/dashboard/stats', labOnly, async (req, res) => {
   try {
-    const owner = { laboratoryId: req.user._id };
+    const owner = { laboratoryId: req.user._id, deletedAt: null };
     const [pending, inProgress, completed] = await Promise.all(['pending', 'in_progress', 'completed'].map(status => Request.countDocuments({ ...owner, status })));
     res.json({ pending, inProgress, completed });
   } catch { res.status(500).json({ message: 'Failed to load laboratory statistics.' }); }
@@ -132,7 +134,7 @@ router.get('/dashboard/stats', labOnly, async (req, res) => {
 router.get('/:id/details', labOnly, async (req, res) => {
   try {
     if (!validId(req.params.id)) return res.status(400).json({ message: 'Invalid request.' });
-    const request = await Request.findOne({ _id: req.params.id, laboratoryId: req.user._id }).populate('patientId', 'fullName idNumber mobileNumber').populate('doctorId', 'fullName').lean();
+    const request = await Request.findOne({ _id: req.params.id, deletedAt: null, laboratoryId: req.user._id }).select('+resultDraft').populate('patientId', 'fullName idNumber mobileNumber birthdate sex').populate('doctorId', 'fullName').lean();
     if (!request) return res.status(404).json({ message: 'Request not found.' });
     res.json({ request: { ...request, accounting: requestAccounting(request) } });
   } catch { res.status(500).json({ message: 'Failed to load request.' }); }
@@ -144,7 +146,7 @@ router.get('/accounts/monthly', labOnly, async (req, res) => {
     const month = Number(req.query.month || now.getUTCMonth() + 1);
     if (!Number.isInteger(year) || year < 2020 || year > 2100 || !Number.isInteger(month) || month < 1 || month > 12) return res.status(400).json({ message: 'Invalid accounting period.' });
     const range = { $gte: new Date(Date.UTC(year, month - 1, 1) - 3 * 3600000), $lt: new Date(Date.UTC(year, month, 1) - 3 * 3600000) };
-    const requests = await Request.find({ laboratoryId: req.user._id, status: 'completed', $or: [{ completedAt: range }, { completedAt: null, updatedAt: range }] })
+    const requests = await Request.find({ laboratoryId: req.user._id, deletedAt: null, status: 'completed', $or: [{ completedAt: range }, { completedAt: null, updatedAt: range }] })
       .populate('patientId', 'fullName idNumber').populate('doctorId', 'fullName').sort({ completedAt: -1, createdAt: -1 }).lean();
     res.json({ ...monthlyAccounts(requests), period: { year, month, timezone: 'Asia/Riyadh' }, commissionPercent: 5 });
   } catch { res.status(500).json({ message: 'Failed to load laboratory accounts.' }); }
@@ -152,10 +154,31 @@ router.get('/accounts/monthly', labOnly, async (req, res) => {
 router.patch('/:id/status', labOnly, async (req, res) => {
   try {
     if (!validId(req.params.id) || req.body.status !== 'in_progress') return res.status(400).json({ message: 'Invalid status.' });
-    const request = await Request.findOneAndUpdate({ _id: req.params.id, laboratoryId: req.user._id, status: 'pending' }, { $set: { status: 'in_progress' } }, { new: true });
+    const request = await Request.findOneAndUpdate({ _id: req.params.id, deletedAt: null, laboratoryId: req.user._id, status: 'pending' }, { $set: { status: 'in_progress' } }, { new: true });
     if (!request) return res.status(409).json({ message: 'Request is no longer pending.' });
     res.json({ request });
   } catch { res.status(500).json({ message: 'Failed to update request.' }); }
+});
+
+
+router.patch('/:id/draft', labOnly, async (req, res) => {
+  try {
+    if (!validId(req.params.id) || !Array.isArray(req.body.resultDraft) || req.body.resultDraft.length > 30 || req.body.resultDraft.some(item => !item || typeof item.name !== 'string' || typeof item.value !== 'string' || item.value.length > 20000) || new Set(req.body.resultDraft.map(item => item.name)).size !== req.body.resultDraft.length) return res.status(400).json({ message: 'Invalid result draft.' });
+    const request = await Request.findOne({ _id: req.params.id, laboratoryId: req.user._id, deletedAt: null, status: { $in: ['pending','in_progress'] } });
+    if (!request) return res.status(404).json({ message: 'Request unavailable.' });
+    if (req.body.resultDraft.some(item => !request.tests.includes(item.name))) return res.status(400).json({ message: 'Draft test is not part of this request.' });
+    const updated = await Request.findOneAndUpdate({ _id: request._id, laboratoryId: req.user._id, deletedAt: null, status: { $in: ['pending','in_progress'] } }, { $set: { resultDraft: req.body.resultDraft.map(item => ({ name: item.name, value: item.value })) } }, { new: true }).select('+resultDraft');
+    if (!updated) return res.status(409).json({ message: 'Request changed; reload.' });
+    res.json({ request: updated });
+  } catch { res.status(500).json({ message: 'Failed to save result draft.' }); }
+});
+router.delete('/:id', labOnly, async (req, res) => {
+  try {
+    if (!validId(req.params.id)) return res.status(400).json({ message: 'Invalid request.' });
+    const request = await Request.findOneAndUpdate({ _id: req.params.id, laboratoryId: req.user._id, deletedAt: null }, { $set: { deletedAt: new Date() } }, { new: true });
+    if (!request) return res.status(404).json({ message: 'Request not found.' });
+    res.json({ deleted: true });
+  } catch { res.status(500).json({ message: 'Failed to delete request.' }); }
 });
 
 module.exports = router;
