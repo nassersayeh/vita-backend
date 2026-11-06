@@ -1,0 +1,642 @@
+[
+  {
+    "name": "CBC – صورة الدم الكاملة",
+    "price": 20,
+    "category": "Routine"
+  },
+  {
+    "name": "ESR – سرعة ترسيب الدم",
+    "price": 25,
+    "category": "Routine"
+  },
+  {
+    "name": "Reticulocyte Count",
+    "price": 50,
+    "category": "Routine"
+  },
+  {
+    "name": "Peripheral Blood Smear",
+    "price": 100,
+    "category": "Routine"
+  },
+  {
+    "name": "Blood Group & Rh",
+    "price": 20,
+    "category": "Routine"
+  },
+  {
+    "name": "Hb Electrophoresis",
+    "price": 150,
+    "category": "Routine"
+  },
+  {
+    "name": "Coombs Test – Direct (DAT)",
+    "price": 40,
+    "category": "Routine"
+  },
+  {
+    "name": "Coombs Test – Indirect (IAT)",
+    "price": 60,
+    "category": "Routine"
+  },
+  {
+    "name": "Ferritin",
+    "price": 80,
+    "category": "Routine"
+  },
+  {
+    "name": "PT",
+    "price": 30,
+    "category": "Routine"
+  },
+  {
+    "name": "aPTT",
+    "price": 30,
+    "category": "Routine"
+  },
+  {
+    "name": "D-Dimer",
+    "price": 150,
+    "category": "Routine"
+  },
+  {
+    "name": "Protein C",
+    "price": 130,
+    "category": "Routine"
+  },
+  {
+    "name": "Protein S",
+    "price": 130,
+    "category": "Routine"
+  },
+  {
+    "name": "Antithrombin III",
+    "price": 150,
+    "category": "Routine"
+  },
+  {
+    "name": "Lupus Anticoagulant",
+    "price": 150,
+    "category": "Routine"
+  },
+  {
+    "name": "Fasting Blood Glucose",
+    "price": 10,
+    "category": "Routine"
+  },
+  {
+    "name": "Random Blood Glucose",
+    "price": 10,
+    "category": "Routine"
+  },
+  {
+    "name": "HbA1c",
+    "price": 60,
+    "category": "Routine"
+  },
+  {
+    "name": "OGTT – Glucose Tolerance Test",
+    "price": 75,
+    "category": "Routine"
+  },
+  {
+    "name": "Insulin",
+    "price": 150,
+    "category": "Routine"
+  },
+  {
+    "name": "C-Peptide",
+    "price": 200,
+    "category": "Routine"
+  },
+  {
+    "name": "HOMA-IR",
+    "price": 150,
+    "category": "Routine"
+  },
+  {
+    "name": "Urea",
+    "price": 25,
+    "category": "Routine"
+  },
+  {
+    "name": "Creatinine",
+    "price": 25,
+    "category": "Routine"
+  },
+  {
+    "name": "Uric Acid",
+    "price": 25,
+    "category": "Routine"
+  },
+  {
+    "name": "Sodium (Na)",
+    "price": 25,
+    "category": "Routine"
+  },
+  {
+    "name": "Potassium (K)",
+    "price": 25,
+    "category": "Routine"
+  },
+  {
+    "name": "Chloride (Cl)",
+    "price": 25,
+    "category": "Routine"
+  },
+  {
+    "name": "Calcium",
+    "price": 25,
+    "category": "Routine"
+  },
+  {
+    "name": "Phosphorus",
+    "price": 25,
+    "category": "Routine"
+  },
+  {
+    "name": "Magnesium",
+    "price": 50,
+    "category": "Routine"
+  },
+  {
+    "name": "Total Protein",
+    "price": 25,
+    "category": "Routine"
+  },
+  {
+    "name": "Albumin",
+    "price": 25,
+    "category": "Routine"
+  },
+  {
+    "name": "AST (SGOT)",
+    "price": 25,
+    "category": "Routine"
+  },
+  {
+    "name": "ALT (SGPT)",
+    "price": 25,
+    "category": "Routine"
+  },
+  {
+    "name": "ALP",
+    "price": 25,
+    "category": "Routine"
+  },
+  {
+    "name": "GGT",
+    "price": 40,
+    "category": "Routine"
+  },
+  {
+    "name": "Total Bilirubin",
+    "price": 25,
+    "category": "Routine"
+  },
+  {
+    "name": "Direct Bilirubin",
+    "price": 25,
+    "category": "Routine"
+  },
+  {
+    "name": "Lipid Profile",
+    "price": 100,
+    "category": "Routine"
+  },
+  {
+    "name": "Total Cholesterol",
+    "price": 25,
+    "category": "Routine"
+  },
+  {
+    "name": "Triglycerides",
+    "price": 25,
+    "category": "Routine"
+  },
+  {
+    "name": "HDL",
+    "price": 25,
+    "category": "Routine"
+  },
+  {
+    "name": "LDL",
+    "price": 25,
+    "category": "Routine"
+  },
+  {
+    "name": "Amylase",
+    "price": 50,
+    "category": "Routine"
+  },
+  {
+    "name": "Lipase",
+    "price": 90,
+    "category": "Routine"
+  },
+  {
+    "name": "LDH",
+    "price": 50,
+    "category": "Routine"
+  },
+  {
+    "name": "CK",
+    "price": 40,
+    "category": "Routine"
+  },
+  {
+    "name": "CK-MB",
+    "price": 60,
+    "category": "Routine"
+  },
+  {
+    "name": "Troponin I",
+    "price": 70,
+    "category": "Routine"
+  },
+  {
+    "name": "CRP",
+    "price": 30,
+    "category": "Routine"
+  },
+  {
+    "name": "TSH",
+    "price": 60,
+    "category": "Routine"
+  },
+  {
+    "name": "FT3",
+    "price": 60,
+    "category": "Routine"
+  },
+  {
+    "name": "FT4",
+    "price": 60,
+    "category": "Routine"
+  },
+  {
+    "name": "Total T3",
+    "price": 60,
+    "category": "Routine"
+  },
+  {
+    "name": "Total T4",
+    "price": 60,
+    "category": "Routine"
+  },
+  {
+    "name": "Anti-TPO",
+    "price": 200,
+    "category": "Routine"
+  },
+  {
+    "name": "Anti-Thyroglobulin",
+    "price": 200,
+    "category": "Routine"
+  },
+  {
+    "name": "FSH",
+    "price": 60,
+    "category": "Routine"
+  },
+  {
+    "name": "LH",
+    "price": 60,
+    "category": "Routine"
+  },
+  {
+    "name": "Prolactin",
+    "price": 60,
+    "category": "Routine"
+  },
+  {
+    "name": "Estradiol (E2)",
+    "price": 60,
+    "category": "Routine"
+  },
+  {
+    "name": "Progesterone",
+    "price": 70,
+    "category": "Routine"
+  },
+  {
+    "name": "Testosterone Total",
+    "price": 80,
+    "category": "Routine"
+  },
+  {
+    "name": "Free Testosterone",
+    "price": 100,
+    "category": "Routine"
+  },
+  {
+    "name": "DHEA-S",
+    "price": 150,
+    "category": "Routine"
+  },
+  {
+    "name": "AMH",
+    "price": 200,
+    "category": "Routine"
+  },
+  {
+    "name": "Beta-hCG",
+    "price": 70,
+    "category": "Routine"
+  },
+  {
+    "name": "PTH",
+    "price": 150,
+    "category": "Routine"
+  },
+  {
+    "name": "Cortisol",
+    "price": 100,
+    "category": "Routine"
+  },
+  {
+    "name": "Growth Hormone (GH)",
+    "price": 120,
+    "category": "Routine"
+  },
+  {
+    "name": "Vitamin D (25-OH)",
+    "price": 150,
+    "category": "Routine"
+  },
+  {
+    "name": "Vitamin B12",
+    "price": 90,
+    "category": "Routine"
+  },
+  {
+    "name": "Folic acid",
+    "price": 80,
+    "category": "Routine"
+  },
+  {
+    "name": "Zinc",
+    "price": 80,
+    "category": "Routine"
+  },
+  {
+    "name": "Copper",
+    "price": 120,
+    "category": "Routine"
+  },
+  {
+    "name": "Iron",
+    "price": 40,
+    "category": "Routine"
+  },
+  {
+    "name": "TIBC",
+    "price": 50,
+    "category": "Routine"
+  },
+  {
+    "name": "Transferrin",
+    "price": 75,
+    "category": "Routine"
+  },
+  {
+    "name": "RF",
+    "price": 30,
+    "category": "Routine"
+  },
+  {
+    "name": "ASO T",
+    "price": 25,
+    "category": "Routine"
+  },
+  {
+    "name": "ANA",
+    "price": 100,
+    "category": "Routine"
+  },
+  {
+    "name": "Anti-dsDNA",
+    "price": 100,
+    "category": "Routine"
+  },
+  {
+    "name": "ENA Profile (12 )",
+    "price": 300,
+    "category": "Routine"
+  },
+  {
+    "name": "Anti-CCP",
+    "price": 200,
+    "category": "Routine"
+  },
+  {
+    "name": "C3",
+    "price": 70,
+    "category": "Routine"
+  },
+  {
+    "name": "C4",
+    "price": 70,
+    "category": "Routine"
+  },
+  {
+    "name": "Immunoglobulin IgG",
+    "price": 70,
+    "category": "Routine"
+  },
+  {
+    "name": "Immunoglobulin IgM",
+    "price": 70,
+    "category": "Routine"
+  },
+  {
+    "name": "Immunoglobulin Ig E",
+    "price": 100,
+    "category": "Routine"
+  },
+  {
+    "name": "Immunoglobulin IgA",
+    "price": 70,
+    "category": "Routine"
+  },
+  {
+    "name": "Anti-Cardiolipin IgG",
+    "price": 100,
+    "category": "Routine"
+  },
+  {
+    "name": "Anti-Cardiolipin IgM",
+    "price": 100,
+    "category": "Routine"
+  },
+  {
+    "name": "Beta-2 Glycoprotein IgG",
+    "price": 200,
+    "category": "Routine"
+  },
+  {
+    "name": "Beta-2 Glycoprotein IgM",
+    "price": 200,
+    "category": "Routine"
+  },
+  {
+    "name": "HBsAg",
+    "price": 70,
+    "category": "Routine"
+  },
+  {
+    "name": "Anti-HBs",
+    "price": 100,
+    "category": "Routine"
+  },
+  {
+    "name": "Anti-HBc Total",
+    "price": 100,
+    "category": "Routine"
+  },
+  {
+    "name": "Anti-HCV",
+    "price": 100,
+    "category": "Routine"
+  },
+  {
+    "name": "H. pylori Stool Antigen",
+    "price": 80,
+    "category": "Routine"
+  },
+  {
+    "name": "H. pylori Breath Test",
+    "price": 150,
+    "category": "Routine"
+  },
+  {
+    "name": "EBV IgG",
+    "price": 120,
+    "category": "Routine"
+  },
+  {
+    "name": "EBV IgM",
+    "price": 120,
+    "category": "Routine"
+  },
+  {
+    "name": "CMV IgG",
+    "price": 60,
+    "category": "Routine"
+  },
+  {
+    "name": "CMV IgM",
+    "price": 60,
+    "category": "Routine"
+  },
+  {
+    "name": "Rubella IgG",
+    "price": 70,
+    "category": "Routine"
+  },
+  {
+    "name": "Rubella IgM",
+    "price": 70,
+    "category": "Routine"
+  },
+  {
+    "name": "Toxoplasma IgG",
+    "price": 60,
+    "category": "Routine"
+  },
+  {
+    "name": "Toxoplasma IgM",
+    "price": 60,
+    "category": "Routine"
+  },
+  {
+    "name": "HSV 1 /2 IgG",
+    "price": 100,
+    "category": "Routine"
+  },
+  {
+    "name": "HSV 1 /2 IgM",
+    "price": 100,
+    "category": "Routine"
+  },
+  {
+    "name": "Brucella screening rose bengal",
+    "price": 25,
+    "category": "Routine"
+  },
+  {
+    "name": "PSA Total",
+    "price": 100,
+    "category": "Routine"
+  },
+  {
+    "name": "CEA",
+    "price": 150,
+    "category": "Routine"
+  },
+  {
+    "name": "AFP",
+    "price": 70,
+    "category": "Routine"
+  },
+  {
+    "name": "CA 125",
+    "price": 150,
+    "category": "Routine"
+  },
+  {
+    "name": "CA 15-3",
+    "price": 150,
+    "category": "Routine"
+  },
+  {
+    "name": "CA 19-9",
+    "price": 150,
+    "category": "Routine"
+  },
+  {
+    "name": "Complete Urine Analysis",
+    "price": 20,
+    "category": "Routine"
+  },
+  {
+    "name": "Urine Culture & Sensitivity",
+    "price": 50,
+    "category": "Routine"
+  },
+  {
+    "name": "Albumin/Creatinine Ratio (ACR)",
+    "price": 100,
+    "category": "Routine"
+  },
+  {
+    "name": "Protein/Creatinine Ratio (PCR)",
+    "price": 100,
+    "category": "Routine"
+  },
+  {
+    "name": "Complete Stool Analysis",
+    "price": 20,
+    "category": "Routine"
+  },
+  {
+    "name": "Occult Blood in Stool (FOBT)",
+    "price": 50,
+    "category": "Routine"
+  },
+  {
+    "name": "Calprotectin in Stool",
+    "price": 250,
+    "category": "Routine"
+  },
+  {
+    "name": "Factor V Leiden Mutation",
+    "price": 250,
+    "category": "Routine"
+  },
+  {
+    "name": "Prothrombin Gene Mutation",
+    "price": 250,
+    "category": "Routine"
+  }
+]

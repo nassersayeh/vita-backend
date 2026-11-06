@@ -64,6 +64,34 @@ test('laboratory results update only requests assigned to authenticated laborato
   assert.deepEqual(Array.from(filter.status.$in), ['pending', 'in_progress']);
 });
 
+test('catalog pages stay scoped and clamp to the last page without loading the full catalog', async () => {
+  const lab = { _id: 'dddddddddddddddddddddddd', role: 'Lab' };
+  let offset, limit, counted, filter;
+  const router = load({ User: { exists: async () => true }, Service: {
+    countDocuments: async f => { counted = f; return 128; },
+    find(f) { filter = f; return {
+      select() { return this; }, sort() { return this; },
+      skip(n) { offset = n; return this; }, limit(n) { limit = n; return this; },
+      lean: async () => [],
+    }; },
+  } });
+  const result = await request(router, 'GET', '/services/catalog', lab, {}, { page: '2', limit: '15', laboratoryId: 'aaaaaaaaaaaaaaaaaaaaaaaa' });
+  assert.equal(result.status, 200);
+  assert.equal(filter.laboratoryId, lab._id);
+  assert.equal(counted.laboratoryId, lab._id);
+  assert.equal(filter.isActive, true);
+  assert.equal(offset, 15); assert.equal(limit, 15);
+  assert.equal(result.body.pagination.totalPages, 9);
+  assert.equal(result.body.pagination.total, 128);
+  const last = await request(router, 'GET', '/services/catalog', lab, {}, { page: '99', limit: '15' });
+  assert.equal(last.body.pagination.page, 9); assert.equal(offset, 120);
+  await request(router, 'GET', '/services/catalog', lab, {}, { page: '1', limit: '1000' });
+  assert.equal(limit, 100);
+  for (const page of ['0', '-1', '1.5', 'NaN', 'Infinity']) {
+    assert.equal((await request(router, 'GET', '/services/catalog', lab, {}, { page })).status, 400);
+  }
+});
+
 test('catalog hides prices and templates from doctors and scopes laboratory reads', async () => {
   let selected, filter;
   const Service = { find(f) { filter = f; return { select(s) { selected = s; return this; }, sort() { return this; }, lean: async () => [] }; } };

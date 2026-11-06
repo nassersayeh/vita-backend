@@ -92,8 +92,19 @@ router.get('/services/catalog', async (req, res) => {
   try {
     const laboratoryId = req.user.role === 'Lab' ? req.user._id : req.query.laboratoryId;
     if (!validId(String(laboratoryId)) || (req.user.role !== 'Lab' && !await findLaboratory(laboratoryId))) return res.status(400).json({ message: 'Invalid laboratory.' });
-    const services = await Service.find({ laboratoryId, isActive: true }).select(req.user.role === 'Lab' ? '' : '-price -fields -normalRange -unit').sort({ category: 1, name: 1 }).lean();
-    res.json({ services: req.user.role === 'Lab' ? services.map(resolveTemplate) : services });
+    const filter = { laboratoryId, isActive: true };
+    const paginated = req.query.page !== undefined;
+    const requestedPage = Number(req.query.page);
+    const requestedLimit = Number(req.query.limit ?? 15);
+    if (paginated && (!Number.isSafeInteger(requestedPage) || requestedPage < 1 || !Number.isSafeInteger(requestedLimit) || requestedLimit < 1)) return res.status(400).json({ message: 'Invalid pagination.' });
+    const limit = Math.min(100, requestedLimit);
+    const total = paginated ? await Service.countDocuments(filter) : undefined;
+    const totalPages = paginated ? Math.max(1, Math.ceil(total / limit)) : undefined;
+    const page = paginated ? Math.min(requestedPage, totalPages) : undefined;
+    const query = Service.find(filter).select(req.user.role === 'Lab' ? '' : '-price -fields -normalRange -unit').sort({ category: 1, name: 1, _id: 1 });
+    if (paginated) query.skip((page - 1) * limit).limit(limit);
+    const services = await query.lean();
+    res.json({ services: req.user.role === 'Lab' ? services.map(resolveTemplate) : services, ...(paginated ? { pagination: { page, limit, total, totalPages } } : {}) });
   } catch { res.status(500).json({ message: 'Failed to load services.' }); }
 });
 router.post('/services/catalog', labOnly, async (req, res) => {
