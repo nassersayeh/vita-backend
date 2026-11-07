@@ -206,8 +206,8 @@ exports.signup = async (req, res) => {
     if (specialty !== undefined && (typeof specialty !== 'string' || !specialties.some(s => s.en === specialty))) {
       return res.status(400).json({ message: 'اختر تخصصاً معتمداً من القائمة.' });
     }
-    if (req.salesManagerId && !['Doctor', 'Pharmacy'].includes(role)) {
-      return res.status(400).json({ message: 'اختر طبيباً أو صيدلية.' });
+    if (req.salesManagerId && !['Doctor', 'Pharmacy', 'User'].includes(role)) {
+      return res.status(400).json({ message: 'اختر طبيباً أو صيدلية أو مريضاً.' });
     }
     const normalizedMobile = normalizeLocalMobile(mobile, country);
     
@@ -445,6 +445,11 @@ exports.signup = async (req, res) => {
       }
     }
     
+    if (req.salesManagerId) return res.status(201).json({
+      success: true, message: 'تم إنشاء حساب المريض. يجب تأكيد رقم الهاتف عند الدخول.',
+      user: { _id: newUser._id, fullName: newUser.fullName, role: newUser.role, activationStatus: newUser.activationStatus },
+      verificationRequired: true,
+    });
     // If no method succeeded, still allow registration but warn
     if (sentVia.length === 0) {
       console.warn('⚠️ No verification channel available. User created without verification code delivery.');

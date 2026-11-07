@@ -4,13 +4,13 @@ const mongoose = require('mongoose');
 const { randomUUID } = require('node:crypto');
 const fs = require('node:fs');
 const vm = require('node:vm');
-test('sales totals exclude unused tickets, pending appointments and undispensed quotes', { skip: process.env.RUN_SALES_INTEGRATION !== '1' }, async () => {
+test('sales patient and provider metrics preserve activity scopes and deduplicate recorded commissions per owner', { skip: process.env.RUN_SALES_INTEGRATION !== '1' }, async () => {
   require('dotenv').config({ quiet: true });
   const connection = await mongoose.createConnection(process.env.MONGODB_URI, { serverSelectionTimeoutMS: 5000, autoIndex: false }).asPromise();
   const prefix = `vita_sales_test_${randomUUID().replaceAll('-', '')}_`;
   const models = {};
   try {
-    for (const name of ['User', 'MedicalTest', 'EPrescription', 'ControlledPrescription', 'Appointment', 'LabRequest', 'MedicalRecord', 'PharmacyPrescriptionQuote', 'ControlledQuote', 'MedicalExamRequest']) {
+    for (const name of ['User', 'MedicalTest', 'EPrescription', 'ControlledPrescription', 'Appointment', 'LabRequest', 'MedicalRecord', 'PharmacyPrescriptionQuote', 'ControlledQuote', 'MedicalExamRequest', 'Order', 'ImageRequest']) {
       models[name] = connection.model(prefix + name, new mongoose.Schema({}, { strict: false }), prefix + name);
     }
     const id = () => new mongoose.Types.ObjectId();
@@ -46,6 +46,42 @@ test('sales totals exclude unused tickets, pending appointments and undispensed 
     const separate = await module.exports.teamCommissions([manager, secondManager]);
     assert.equal(separate.get(String(manager)), 105);
     assert.equal(separate.get(String(secondManager)), 5);
+
+    const patient = id();
+    await models.User.insertMany([{ _id: patient, role: 'User', salesManager: manager }]);
+    await models.User.updateOne({ _id: pharmacy }, { $set: { salesManager: manager } });
+    await models.EPrescription.updateOne({ _id: prescription }, { $set: { patientId: patient } });
+    await models.ControlledPrescription.updateOne({ _id: controlled }, { $set: { patientId: patient } });
+    await models.LabRequest.updateMany({ doctorId: doctor }, { $set: { patientId: patient } });
+    await models.MedicalRecord.updateMany({ doctor }, { $set: { patient } });
+    await models.MedicalExamRequest.updateMany({ doctorId: doctor }, { $set: { patientId: patient } });
+    await models.MedicalExamRequest.updateOne({ doctorId: doctor, status: 'completed' }, { $set: { pricing: [{ vitaCommissionAmount: 2 }] } });
+    await models.MedicalExamRequest.insertMany([
+      { patientId: patient, source: 'patient', status: 'in_progress' },
+      { patientId: patient, source: 'patient', status: 'completed', pricing: [{ vitaCommissionAmount: 3 }] },
+      { patientId: patient, status: 'completed', deletedAt: new Date(), pricing: [{ vitaCommissionAmount: 100 }] },
+    ]);
+    await models.Order.insertMany([
+      { user: patient, status: 'pending', adminApprovalStatus: 'pending' },
+      { user: patient, status: 'completed', adminApprovalStatus: 'approved' },
+      { user: patient, status: 'cancelled' }, { user: patient, status: 'pending', adminApprovalStatus: 'rejected' },
+      { user: outsider, status: 'completed' },
+    ]);
+    await models.Appointment.insertMany(['pending', 'confirmed', 'completed', 'cancelled'].map(status => ({ patient, status })));
+    await models.ImageRequest.insertMany([{ patientId: patient, status: 'pending' }, { patientId: patient, status: 'cancelled' }]);
+    const [patientRow] = await module.exports.customerMetrics([{ _id: patient, role: 'User', fullName: 'Patient' }]);
+    assert.equal(patientRow.prescriptionCount, 2);
+    assert.equal(patientRow.appointmentCount, 3);
+    assert.equal(patientRow.labCount, 5);
+    assert.equal(patientRow.radiologyCount, 3);
+    assert.equal(patientRow.vitaCommission, 110);
+    assert.deepEqual(Object.keys(patientRow).sort(), ['_id', 'role', 'fullName', 'prescriptionCount', 'appointmentCount', 'labCount', 'radiologyCount', 'vitaCommission'].sort());
+    const combined = await module.exports.teamCommissions([manager, secondManager]);
+    assert.equal(combined.get(String(manager)), 110, 'patient, doctor and pharmacy share one owner; credit each recorded commission once');
+    await models.User.updateOne({ _id: patient }, { $set: { salesManager: secondManager } });
+    const patientOtherOwner = await module.exports.teamCommissions([manager, secondManager]);
+    assert.equal(patientOtherOwner.get(String(manager)), 107);
+    assert.equal(patientOtherOwner.get(String(secondManager)), 110);
 
   } finally {
     for (const model of Object.values(models)) await model.collection.drop().catch(error => { if (error.code !== 26) throw error; });

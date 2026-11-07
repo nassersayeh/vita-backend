@@ -39,7 +39,7 @@ router.post('/staff', salesSignupLimiter, async (req, res) => {
 router.get('/customers', async (req, res) => {
   try {
     const page = Math.max(1, Math.min(100000, Number.parseInt(req.query.page, 10) || 1));
-    const filter = { salesManager: req.user._id, role: { $in: ['Doctor', 'Pharmacy'] } };
+    const filter = { salesManager: req.user._id, role: { $in: ['Doctor', 'Pharmacy', 'User'] } };
     const [customers, total] = await Promise.all([
       User.find(filter).select('fullName role specialty address city mobileNumber activationStatus createdAt')
         .sort({ createdAt: -1, _id: -1 }).skip((page - 1) * 25).limit(25).lean(),
@@ -53,8 +53,8 @@ router.get('/customers', async (req, res) => {
 });
 
 router.post('/customers', salesSignupLimiter, (req, res) => {
-  if (!req.body || !['Doctor', 'Pharmacy'].includes(req.body.role)) {
-    return res.status(400).json({ message: 'يمكن فتح حساب طبيب أو صيدلية فقط.' });
+  if (!req.body || !['Doctor', 'Pharmacy', 'User'].includes(req.body.role)) {
+    return res.status(400).json({ message: 'يمكن فتح حساب طبيب أو صيدلية أو مريض فقط.' });
   }
   req.salesManagerId = req.user._id;
   return signup(req, res);

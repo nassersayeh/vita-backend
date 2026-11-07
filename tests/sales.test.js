@@ -44,9 +44,12 @@ test('customer listing ignores attacker owner filters and paginates only own cus
 test('registration binds manager to authenticated actor and rejects privileged roles', async () => {
   const app = router({ '../controllers/authController': { signup: (req, res) => res.json({ manager: req.salesManagerId }) } });
   const user = { _id: 'manager-A', role: 'SalesManager' };
-  for (const role of ['Admin', 'SalesManager', 'User']) assert.equal((await request(app, 'POST', '/customers', user, { role })).status, 400);
+  for (const role of ['Admin', 'SalesManager', 'SalesTeamLead']) assert.equal((await request(app, 'POST', '/customers', user, { role })).status, 400);
   const response = await request(app, 'POST', '/customers', user, { role: 'Doctor', salesManagerId: 'manager-B' });
   assert.equal(response.body.manager, 'manager-A');
+  const patient = await request(app, 'POST', '/customers', user, { role: 'User', salesManagerId: 'manager-B' });
+  assert.equal(patient.status, 200);
+  assert.equal(patient.body.manager, 'manager-A');
 });
 test('password changes require current password and atomically invalidate old sessions', async () => {
   let mutation;
@@ -85,6 +88,32 @@ test('shared signup saves attribution and specialty, keeps approval pending and 
   assert.equal(result.user.activationStatus, 'pending');
   assert.equal(result.token, undefined);
   assert.equal(result.autoLogin, undefined);
+});
+
+test('sales patient signup binds attribution and returns no patient session or phone verification code', async () => {
+  let saved;
+  class Patient {
+    constructor(fields) { Object.assign(this, fields); this._id = 'patient'; this.activationStatus = 'active'; saved = this; }
+    static async findOne() { return null; }
+    async save() { return this; }
+  }
+  const controller = load('../controllers/authController', {
+    '../models/User': Patient, '../models/Otp': {}, dotenv: { config() {} },
+    '../services/whatsappService': { isWhatsAppReady: async () => false },
+    nodemailer: { createTransport: () => ({}) },
+    jsonwebtoken: { sign() { throw new Error('No patient session may be given to sales'); } },
+    bcryptjs: { hash: async () => 'hashed' },
+  });
+  let response, status;
+  await controller.signup({ salesManagerId: 'manager-A', body: {
+    fullName: 'New Patient', mobile: '0591111111', password: 'Secure-7890', country: 'Palestine', city: 'Nablus',
+    idNumber: '123456789', address: 'Main street', role: 'User', salesManager: 'forged', registeredBy: 'forged', isPhoneVerified: true,
+  } }, { status(value) { status = value; return this; }, json(value) { response = value; } });
+  assert.equal(status, 201); assert.equal(saved.role, 'User');
+  assert.equal(saved.salesManager, 'manager-A'); assert.equal(saved.registeredBy, 'manager-A');
+  assert.equal(saved.isPhoneVerified, false); assert.equal(saved.password, 'hashed');
+  assert.equal(response.verificationRequired, true); assert.equal(response.user.role, 'User');
+  for (const key of ['token', 'autoLogin', 'password', 'phoneVerificationCode', 'verificationCode']) assert.equal(response[key], undefined);
 });
 
 test('only lead can create staff, ignoring privileged role and forged attribution', async () => {
