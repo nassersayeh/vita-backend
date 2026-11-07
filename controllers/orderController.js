@@ -31,15 +31,17 @@ exports.createOrder = async (req, res) => {
       deliveryMethod,
       deliveryAddress
     } = req.body;
-    console.log('Received request body:', req.body);
 
     const authenticatedUserId = req.user?._id;
+    if (req.user?.role !== 'User') return res.status(403).json({ message: 'Patient orders only.' });
+    if (deliveryMethod && deliveryMethod !== 'pickup') return res.status(400).json({ code: 'PICKUP_ONLY', message: 'التوصيل قريباً. الاستلام من الصيدلية متاح حالياً.' });
     if (!authenticatedUserId || !items || total === undefined || total === null) {
       return res.status(400).json({ message: 'Missing required order fields (user, items, or total).' });
     }
 
     if (!pharmacyId) return res.status(400).json({ message: 'Please select a pharmacy.' });
-    const selectedPharmacy = await User.findOne({ _id: pharmacyId, role: 'Pharmacy', activationStatus: 'active', isPublic: { $ne: false }, patientOrderingEnabled: { $ne: false } });
+    if (!mongoose.isValidObjectId(pharmacyId)) return res.status(400).json({ message: 'Invalid pharmacy.' });
+    const selectedPharmacy = await User.findOne({ _id: pharmacyId, role: 'Pharmacy', activationStatus: 'active', isPublic: { $ne: false }, patientOrderingEnabled: { $ne: false }, prescriptionDispensingEnabled: true });
     if (!selectedPharmacy) return res.status(400).json({ message: 'This pharmacy is not available for patient orders.' });
 
     const hasUploadedPrescriptionFile = Boolean(
@@ -80,7 +82,7 @@ exports.createOrder = async (req, res) => {
 
     // Process and validate items
     const processedItems = [];
-    for (const item of items) {
+    for (const item of (Array.isArray(items) ? items : [])) {
       if (!item.onModel || !item.quantity || !item.name || item.price === undefined || item.price === null) {
         console.warn(`Invalid item structure: ${JSON.stringify(item)}`);
         continue; // Skip invalid items but allow order to proceed
@@ -146,7 +148,7 @@ exports.createOrder = async (req, res) => {
         item.price = quote[index].price;
       });
     }
-    const totals = patientOrderTotals(processedItems, deliveryMethod);
+    const totals = patientOrderTotals(processedItems, 'pickup');
     const finalTotal = totals.total;
     if (!isUploadedPrescriptionOrder && Math.abs(Number(total) - finalTotal) > 0.009) {
       return res.status(409).json({ code: 'CATALOG_PRICE_CHANGED', message: 'Medicine prices changed. Reload prices before confirming the order.', total: finalTotal });
@@ -162,24 +164,23 @@ exports.createOrder = async (req, res) => {
     } : null;
     const newOrder = new Order({
       pharmacyId: pharmacyId || null,
-      city: city || deliveryAddress?.city || '',
+      city: selectedPharmacy.city || '',
       user: authenticatedUserId,
       items: processedItems,
       total: finalTotal,
       subtotal: totals.subtotal,
       deliveryFee: totals.deliveryFee,
-      deliveryFeeEstimated: deliveryMethod === 'delivery',
-      // Patient-selected pharmacy receives the order immediately.
+      deliveryFeeEstimated: false,
+      // Keep the patient's pharmacy choice while withholding it until approval.
       status: 'pending',
-      adminApprovalStatus: 'approved',
-      adminApprovedAt: new Date(),
+      adminApprovalStatus: 'pending',
       orderType: orderType || 'manual',
       prescriptionId: prescriptionId || null,
       prescriptionImage: normalizedPrescriptionImage,
       prescriptionNotes: prescriptionNotes || '',
       paymentMethod: 'Cash',
-      deliveryMethod: deliveryMethod || 'pickup',
-      deliveryAddress: deliveryAddress || null
+      deliveryMethod: 'pickup',
+      deliveryAddress: null
     });
     await newOrder.save();
     console.log('Saved order:', newOrder);
@@ -239,12 +240,13 @@ exports.createOrder = async (req, res) => {
 
     try {
       console.log('Creating notification with patient name:', patientName);
-      await Notification.create({
-          user: selectedPharmacy._id,
+      const admins = await User.find({ role: { $in: ['Admin', 'Superadmin'] } }).select('_id').lean();
+      await Notification.create(admins.map(admin => ({
+          user: admin._id,
           type: 'order',
           message: `طلب أدوية جديد من ${patientName}${city ? ` - ${city}` : ''}`,
           relatedId: newOrder._id
-      });
+      })));
     } catch (notificationError) {
       // The order is already saved; notification failure must not make the
       // client retry and accidentally create a duplicate order.
@@ -261,6 +263,7 @@ exports.createOrder = async (req, res) => {
 };
 
 exports.getAdminOrders = async (req, res) => {
+  if (!['Admin', 'Superadmin'].includes(req.user?.role)) return res.status(403).json({ message: 'Admin only.' });
   try {
     const orders = await Order.find({
       $or: [
@@ -284,6 +287,17 @@ exports.getAdminOrders = async (req, res) => {
   }
 };
 
+exports.getPendingOrderCount = async (req, res) => {
+  if (!['Admin', 'Superadmin'].includes(req.user?.role)) return res.status(403).json({ message: 'Admin only.' });
+  try {
+    const count = await Order.countDocuments({ adminApprovalStatus: 'pending', status: 'pending', user: { $ne: null } });
+    res.set('Cache-Control', 'no-store');
+    res.json({ count });
+  } catch (error) {
+    res.status(503).json({ message: 'تعذر تحميل عدد الطلبات.' });
+  }
+};
+
 exports.getUserOrders = async (req, res) => {
   try {
     const { userId } = req.params;
@@ -300,6 +314,7 @@ exports.getUserOrders = async (req, res) => {
 exports.getPharmacyOrders = async (req, res) => {
   try {
     const { pharmacyId } = req.params;
+    if (!req.user || (!['Admin', 'Superadmin'].includes(req.user.role) && !(req.user.role === 'Pharmacy' && String(req.user._id) === pharmacyId))) return res.status(403).json({ message: 'Not authorized for this pharmacy.' });
     const { date } = req.query;
 
     // Keep orders invisible to the pharmacy until an admin explicitly approves them.
@@ -401,6 +416,11 @@ exports.getOrderById = async (req, res) => {
     if (!order) {
       return res.status(404).json({ message: 'Order not found.' });
     }
+
+    const isAdmin = ['Admin', 'Superadmin'].includes(req.user?.role);
+    const isPatient = req.user?.role === 'User' && String(req.user._id) === String(order.user?._id || order.user);
+    const isPharmacy = req.user?.role === 'Pharmacy' && String(req.user._id) === String(order.pharmacyId?._id || order.pharmacyId) && (!order.adminApprovalStatus || order.adminApprovalStatus === 'approved');
+    if (!isAdmin && !isPatient && !isPharmacy) return res.status(403).json({ message: 'Not authorized for this order.' });
 
     res.json({ order });
   } catch (err) {
@@ -705,13 +725,16 @@ exports.reviewOrderByAdmin = async (req, res) => {
     }
 
     if (action === 'approve') {
-      const targetPharmacy = pharmacyId || order.pharmacyId;
+      if (order.status !== 'pending') return res.status(409).json({ message: 'الطلب غير متاح للموافقة.' });
+      if (order.pharmacyId && pharmacyId && String(order.pharmacyId) !== String(pharmacyId)) return res.status(400).json({ message: 'يجب إرسال الطلب إلى الصيدلية التي اختارها المريض.' });
+      const targetPharmacy = order.pharmacyId || pharmacyId;
       if (!targetPharmacy) {
         return res.status(400).json({ message: 'يجب اختيار صيدلية قبل الموافقة على الطلب' });
       }
       const pharmacy = await User.findOne({
         _id: targetPharmacy,
-        role: { $regex: /^pharmacy$/i }
+        role: 'Pharmacy', activationStatus: 'active', isPublic: { $ne: false },
+        prescriptionDispensingEnabled: true, patientOrderingEnabled: { $ne: false },
       }).select('_id fullName');
       if (!pharmacy) {
         return res.status(400).json({ message: 'الصيدلية المختارة غير موجودة أو غير صالحة' });
@@ -721,30 +744,33 @@ exports.reviewOrderByAdmin = async (req, res) => {
       order.adminApprovalStatus = 'approved';
       order.adminApprovedAt = new Date();
       order.adminApprovedBy = req.user._id;
+      order.$where = { adminApprovalStatus: 'pending', status: 'pending' };
       await order.save();
 
-      await Notification.create({
+      try { await Notification.create({
         user: pharmacy._id,
         type: 'order',
         message: `طلب جديد وافقت عليه الإدارة من ${order.user?.fullName || 'مريض'}`,
         relatedId: order._id
-      });
+      }); } catch (error) { console.error('Approved order notification failed:', error.message); }
       return res.json({ message: 'تمت الموافقة وإرسال الطلب إلى الصيدلية', order });
     }
 
     order.adminApprovalStatus = 'rejected';
     order.adminRejectionReason = reason || '';
     order.status = 'declined';
+    order.$where = { adminApprovalStatus: 'pending', status: 'pending' };
     await order.save();
-    await Notification.create({
+    try { await Notification.create({
       user: order.user._id,
       type: 'order',
       message: `تم رفض طلبك رقم #${orderId.slice(-6)} من الإدارة${reason ? `: ${reason}` : ''}`,
       relatedId: order._id
-    });
+    }); } catch (error) { console.error('Rejected order notification failed:', error.message); }
     return res.json({ message: 'تم رفض الطلب', order });
   } catch (err) {
     if (err.code === 'CONTROLLED_REQUIRED') return res.status(403).json({ message: err.message });
+    if (err.name === 'DocumentNotFoundError') return res.status(409).json({ message: 'تم تحديث الطلب مسبقاً. أعد تحميل القائمة.' });
     console.error('Error reviewing order by admin:', err);
     res.status(500).json({ message: 'خطأ في الخادم أثناء مراجعة الطلب' });
   }

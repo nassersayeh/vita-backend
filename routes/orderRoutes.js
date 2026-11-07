@@ -179,17 +179,18 @@ router.post('/analyze-prescription', uploadPrescription.single('file'), async (r
 router.post('/', auth, OrderController.createOrder);
 
 // Get pharmacy orders (MUST come before /:orderId routes)
-router.get('/pharmacy/:pharmacyId', OrderController.getPharmacyOrders);
+router.get('/pharmacy/:pharmacyId', auth, OrderController.getPharmacyOrders);
 
 // Get medicine orders assigned to admin review
-router.get('/admin/all', OrderController.getAdminOrders);
+router.get('/admin/all', auth, OrderController.getAdminOrders);
+router.get('/admin/pending-count', auth, OrderController.getPendingOrderCount);
 router.put('/:orderId/admin-review', auth, OrderController.reviewOrderByAdmin);
 
 // Get all orders for a user
 router.get('/user/:userId', OrderController.getUserOrders);
 
 // Get single order by ID
-router.get('/:orderId', OrderController.getOrderById);
+router.get('/:orderId', auth, OrderController.getOrderById);
 
 // Update order status (supports both routes for compatibility)
 router.put('/:orderId/status', auth, OrderController.updateOrderStatus);

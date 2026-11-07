@@ -72,7 +72,8 @@ test('order confirmation persists the central price and rejects a stale client t
       if (name === '../models/Order') return Order;
       if (name === '../utils/catalogCheckoutPricing') return { catalogCheckoutPricing: quote };
       if (name === '../utils/patientOrderTotals') return require('../utils/patientOrderTotals');
-      if (name === '../models/User') return { findOne: async () => ({ _id: 'pharmacy' }), findById: () => ({ lean: async () => ({ fullName: 'Patient' }) }) };
+      if (name === 'mongoose') return { isValidObjectId: () => true };
+      if (name === '../models/User') return { findOne: async () => ({ _id: 'pharmacy' }), findById: () => ({ lean: async () => ({ fullName: 'Patient' }) }), find: () => ({ select() { return this; }, lean: async () => [] }) };
       if (name === '../models/Points') return { findOne: async () => { throw new Error('unrelated optional reward service'); } };
       if (name === '../models/Notification') return { create: async () => {} };
       return {};
@@ -80,7 +81,7 @@ test('order confirmation persists the central price and rejects a stale client t
   });
   const submit = async (total, deliveryMethod = 'pickup') => {
     let result;
-    await module.exports.createOrder({ user: { _id: 'patient' }, body: {
+    await module.exports.createOrder({ user: { _id: 'patient', role: 'User' }, body: {
       pharmacyId: 'pharmacy', total, deliveryMethod, orderType: 'manual',
       items: [{ item: 'aaaaaaaaaaaaaaaaaaaaaaaa', onModel: 'Product', name: 'Medicine', quantity: 2, price: 999 }],
     } }, { status(code) { this.code = code; return this; }, json(body) { result = { code: this.code, body }; } });
@@ -89,11 +90,12 @@ test('order confirmation persists the central price and rejects a stale client t
   assert.equal((await submit(50)).code, 201);
   assert.equal(saved.total, 50);
   assert.equal(saved.items[0].price, 25);
-  assert.equal((await submit(65, 'delivery')).code, 201);
+  assert.equal((await submit(65, 'delivery')).code, 400);
   assert.equal(saved.subtotal, 50);
-  assert.equal(saved.deliveryFee, 15);
-  assert.equal(saved.deliveryFeeEstimated, true);
-  assert.equal(saved.total, 65);
+  assert.equal(saved.deliveryFee, 0);
+  assert.equal(saved.deliveryFeeEstimated, false);
+  assert.equal(saved.total, 50);
+  assert.equal(saved.adminApprovalStatus, 'pending');
   saved = null;
   const stale = await submit(1998);
   assert.equal(stale.code, 409);

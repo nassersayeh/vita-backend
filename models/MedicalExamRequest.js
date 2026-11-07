@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const schema = new mongoose.Schema({
-  doctorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+  doctorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: function() { return this.source !== 'patient'; }, index: true },
+  source: { type: String, enum: ['doctor', 'patient'], default: 'doctor' },
   patientId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   laboratoryId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null, index: true },
   tests: { type: [String], required: true },
@@ -16,5 +17,6 @@ const schema = new mongoose.Schema({
   completedAt: Date,
 }, { timestamps: true });
 schema.index({ doctorId: 1, patientId: 1, createdAt: -1 });
+schema.index({ patientId: 1, deletedAt: 1, createdAt: -1 });
 schema.index({ laboratoryId: 1, status: 1, completedAt: -1 });
 module.exports = mongoose.model('MedicalExamRequest', schema);

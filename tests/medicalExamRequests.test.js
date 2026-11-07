@@ -6,7 +6,8 @@ const { createRequire } = require('node:module');
 const filename = require.resolve('../routes/medicalExamRequests');
 const native = createRequire(filename);
 const doctor = { _id: 'aaaaaaaaaaaaaaaaaaaaaaaa', role: 'Doctor', patients: ['bbbbbbbbbbbbbbbbbbbbbbbb'] };
-function load({ legacy = false, User = {}, Request = {}, Service = {} } = {}) {
+const patient = { _id: 'bbbbbbbbbbbbbbbbbbbbbbbb', role: 'User' };
+function load({ legacy = false, User = {}, Request = {}, Service = {}, WhatsApp = { isWhatsAppReady: async () => false } } = {}) {
   const module = { exports: {} };
   vm.runInNewContext(fs.readFileSync(filename, 'utf8'), { module, console, require: name => {
     if (name === '../middleware/auth') return (req, res, next) => req.user ? next() : res.status(401).json({});
@@ -14,6 +15,7 @@ function load({ legacy = false, User = {}, Request = {}, Service = {} } = {}) {
     if (name === '../models/User') return User;
     if (name === '../models/MedicalExamRequest') return Request;
     if (name === '../models/LaboratoryService') return Service;
+    if (name === '../services/whatsappService') return WhatsApp;
     return native(name);
   } });
   return module.exports;
@@ -22,9 +24,134 @@ function request(router, method, url, user, body = {}, query = {}) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('No response')), 1500);
     const res = { statusCode: 200, set() { return this; }, status(code) { this.statusCode = code; return this; }, json(body) { clearTimeout(timer); resolve({ status: this.statusCode, body }); } };
-    router.handle({ method, url, originalUrl: url, headers: {}, user, body, query }, res, error => { clearTimeout(timer); reject(error || new Error('No route')); });
+    router.handle({ method, url, path: url.split('?')[0], originalUrl: url, headers: {}, user, body, query }, res, error => { clearTimeout(timer); reject(error || new Error('No route')); });
   });
 }
+
+test('laboratory WhatsApp uses the saved recipient after patient, doctor and queued requests are sent', async () => {
+  const labId = 'cccccccccccccccccccccccc', serviceId = 'dddddddddddddddddddddddd';
+  for (const flow of ['patient', 'doctor', 'queued']) {
+    let saved = false, sends = 0;
+    const stored = { _id: 'eeeeeeeeeeeeeeeeeeeeeeee', patientId: patient._id, laboratoryId: labId, tests: ['CBC'], status: 'pending' };
+    const router = load({ User: {
+      exists: async () => true,
+      findOne: () => ({ select() { return this; }, lean: async () => ({ _id: labId, fullName: 'Lab', mobileNumber: '0598809429' }) }),
+      findById: () => ({ select() { return this; }, lean: async () => ({ fullName: 'Patient' }) }),
+    }, Service: { find: () => ({ select() { return this; }, lean: async () => [{ _id: serviceId, name: 'CBC', price: 20 }] }) },
+    Request: {
+      create: async values => { saved = true; return { ...stored, ...values }; },
+      findOneAndUpdate: async () => { if (saved) return null; saved = true; return stored; },
+    }, WhatsApp: {
+      isWhatsAppReady: async () => true,
+      sendWhatsAppMessage: async (phone, message) => {
+        assert.equal(saved, true); assert.equal(phone, '0598809429');
+        assert.match(message, /CBC/); assert.match(message, /https:\/\/www.vita.ps\/login/);
+        assert.match(message, /eeeeeeeeeeeeeeeeeeeeeeee/);
+        assert.ok(message.includes(flow === 'patient' ? 'Patient' : 'Doctor'));
+        sends++;
+      },
+    } });
+    const url = flow === 'patient' ? '/patient' : flow === 'doctor' ? '/' : `/${stored._id}/send`;
+    const method = flow === 'queued' ? 'PATCH' : 'POST';
+    const sender = flow === 'patient' ? { ...patient, fullName: 'Patient' } : { ...doctor, fullName: 'Doctor' };
+    const response = await request(router, method, url, sender, { laboratoryId: labId, patientId: patient._id, serviceIds: [serviceId], tests: ['CBC'], mobileNumber: 'attacker' });
+    assert.equal(response.status, flow === 'queued' ? 200 : 201); assert.equal(sends, 1);
+    if (flow === 'queued') {
+      assert.equal((await request(router, method, url, sender, { laboratoryId: labId })).status, 409);
+      assert.equal(sends, 1);
+    }
+  }
+});
+
+test('WhatsApp unavailable, absent phone or send failure never loses a saved request; drafts do not notify', async () => {
+  const labId = 'cccccccccccccccccccccccc';
+  for (const scenario of ['offline', 'no-phone', 'send-error', 'draft']) {
+    let saved = false, sends = 0;
+    const router = load({ User: {
+      exists: async () => true,
+      findOne: () => ({ select() { return this; }, lean: async () => ({ _id: labId, mobileNumber: scenario === 'no-phone' ? '' : '0598809429' }) }),
+      findById: () => ({ select() { return this; }, lean: async () => ({ fullName: 'Patient' }) }),
+    }, Request: { create: async values => { saved = true; return { ...values, _id: 'eeeeeeeeeeeeeeeeeeeeeeee' }; } }, WhatsApp: {
+      isWhatsAppReady: async () => scenario !== 'offline',
+      sendWhatsAppMessage: async () => { sends++; throw new Error('Simulated WhatsApp failure'); },
+    } });
+    const response = await request(router, 'POST', '/', doctor, { patientId: patient._id, tests: ['CBC'], ...(scenario === 'draft' ? {} : { laboratoryId: labId }) });
+    assert.equal(response.status, 201); assert.equal(saved, true);
+    assert.equal(sends, scenario === 'send-error' ? 1 : 0);
+  }
+});
+
+test('patient request uses authenticated identity and laboratory catalog prices and reaches the laboratory inbox', async () => {
+  const labId = 'cccccccccccccccccccccccc';
+  const serviceId = 'dddddddddddddddddddddddd';
+  let stored, serviceFilter, inboxFilter;
+  const User = { exists: async () => true, findOne: () => ({ select() { return this; }, lean: async () => ({ _id: labId }) }) };
+  const chain = { select() { return this; }, populate() { return this; }, sort() { return this; }, limit() { return this; }, lean: async () => [stored] };
+  const router = load({ User, Service: { find(filter) { serviceFilter = filter; return { select() { return this; }, lean: async () => [{ _id: serviceId, name: 'CBC', price: 20 }] }; } }, Request: {
+    create: async values => { stored = { ...values, _id: 'eeeeeeeeeeeeeeeeeeeeeeee' }; return stored; },
+    find: filter => { inboxFilter = filter; return chain; },
+  } });
+  const response = await request(router, 'POST', '/patient', patient, { laboratoryId: labId, serviceIds: [serviceId], patientId: doctor._id, doctorId: doctor._id, price: 0, totalCost: 0, source: 'doctor', notes: ' note ' });
+  assert.equal(response.status, 201);
+  assert.equal(stored.patientId, patient._id); assert.equal(stored.doctorId, undefined);
+  assert.equal(stored.source, 'patient'); assert.equal(stored.status, 'pending');
+  assert.equal(stored.totalCost, 20); assert.equal(stored.pricing[0].price, 20);
+  assert.equal(stored.notes, 'note');
+  assert.equal(serviceFilter.laboratoryId, labId); assert.equal(serviceFilter.isActive, true);
+  assert.equal(response.body.request.pricing, undefined);
+  const inbox = await request(router, 'GET', '/', { _id: labId, role: 'Lab' });
+  assert.equal(inbox.status, 200); assert.equal(inboxFilter.laboratoryId, labId);
+  assert.equal(inbox.body.requests[0].source, 'patient');
+  assert.equal(inbox.body.requests[0].accounting.totalCost, 20);
+});
+
+test('patient cannot submit missing, duplicate, excessive or unavailable laboratory tests', async () => {
+  const laboratoryId = 'cccccccccccccccccccccccc', serviceId = 'dddddddddddddddddddddddd';
+  let creates = 0, available = true;
+  const router = load({ User: { findOne: () => ({ select() { return this; }, lean: async () => available ? { _id: laboratoryId } : null }) },
+    Service: { find: () => ({ select() { return this; }, lean: async () => [] }) },
+    Request: { create: async () => { creates++; } },
+  });
+  for (const serviceIds of [[], [serviceId, serviceId], ['invalid'], Array(31).fill(serviceId), [serviceId]]) {
+    assert.equal((await request(router, 'POST', '/patient', patient, { laboratoryId, serviceIds })).status, 400);
+  }
+  available = false;
+  assert.equal((await request(router, 'POST', '/patient', patient, { laboratoryId, serviceIds: [serviceId] })).status, 400);
+  assert.equal(creates, 0);
+  assert.equal((await request(router, 'POST', '/patient', doctor, { laboratoryId, serviceIds: [serviceId] })).status, 403);
+});
+
+test('patient history cannot be redirected to another patient and patient mutations are blocked', async () => {
+  let filter, selection;
+  const chain = { select(value) { selection = value; return this; }, populate() { return this; }, sort() { return this; }, limit() { return this; }, skip() { return this; }, lean: async () => [] };
+  const router = load({ Request: { find: value => { filter = value; return chain; }, countDocuments: async () => 0 } });
+  assert.equal((await request(router, 'GET', '/', patient, {}, { page: '1' })).status, 200);
+  assert.equal(filter.patientId, patient._id); assert.equal(filter.deletedAt, null);
+  assert.match(selection, /-pricing/); assert.match(selection, /-resultDraft/);
+  assert.equal((await request(router, 'GET', '/', patient, {}, { patientId: doctor._id })).status, 403);
+  for (const [method, url] of [['POST', '/'], ['POST', '/services/catalog'], ['PATCH', '/aaaaaaaaaaaaaaaaaaaaaaaa/pricing'], ['PATCH', '/aaaaaaaaaaaaaaaaaaaaaaaa/complete'], ['DELETE', '/aaaaaaaaaaaaaaaaaaaaaaaa'], ['GET', '/dashboard/stats'], ['GET', '/aaaaaaaaaaaaaaaaaaaaaaaa/details']]) {
+    assert.equal((await request(router, method, url, patient)).status, 403);
+  }
+});
+
+test('patient catalog exposes only public test fields and validates the laboratory', async () => {
+  let selected, filter;
+  const laboratoryId = 'cccccccccccccccccccccccc';
+  const router = load({ User: { findOne: () => ({ select() { return this; }, lean: async () => ({ _id: laboratoryId }) }) }, Service: {
+    find: value => { filter = value; return { select(value) { selected = value; return this; }, sort() { return this; }, lean: async () => [] }; },
+  } });
+  const result = await request(router, 'GET', '/services/catalog', patient, {}, { laboratoryId });
+  assert.equal(result.status, 200); assert.equal(filter.laboratoryId, laboratoryId);
+  assert.equal(selected, '_id name price category');
+  assert.equal((await request(router, 'GET', '/services/catalog', patient, {}, {})).status, 400);
+});
+
+test('patient-created request validates without a doctor while doctor requests still require one', async () => {
+  const Model = native('../models/MedicalExamRequest');
+  const values = { patientId: patient._id, laboratoryId: 'cccccccccccccccccccccccc', tests: ['CBC'], status: 'pending' };
+  assert.equal(new Model({ ...values, source: 'patient' }).validateSync(), undefined);
+  assert.ok(new Model(values).validateSync().errors.doctorId);
+});
 test('medical exams exclude anonymous, radiology and legacy clinic accounts', async () => {
   assert.equal((await request(load(), 'POST', '/', undefined)).status, 401);
   assert.equal((await request(load(), 'POST', '/', { role: 'Radiology' })).status, 403);

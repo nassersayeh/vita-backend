@@ -64,6 +64,7 @@ test('authenticated patient can read orderable pharmacy prices without private i
   assert.equal(seen.inventory.quantity.$gt, 0);
   assert.equal(seen.pharmacy.activationStatus, 'active');
   assert.equal(seen.pharmacy.patientOrderingEnabled.$ne, false);
+  assert.equal(seen.pharmacy.prescriptionDispensingEnabled, true);
   assert.equal(seen.inventoryFields, 'drugId drugName price priceSource');
 });
 

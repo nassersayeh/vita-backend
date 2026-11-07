@@ -134,6 +134,7 @@ exports.getAllPharmacies = async (req, res) => {
       role: 'Pharmacy',
       activationStatus: 'active',
       isPublic: { $ne: false },
+      prescriptionDispensingEnabled: true,
       ...(req.query?.network === 'true'
         ? { prescriptionDispensingEnabled: true }
         : { patientOrderingEnabled: { $ne: false } }),
@@ -155,6 +156,7 @@ exports.getPharmaciesByCity = async (req, res) => {
       activationStatus: 'active',
       isPublic: { $ne: false },
       patientOrderingEnabled: { $ne: false },
+      prescriptionDispensingEnabled: true,
       city: city
     }).select('fullName address mobileNumber');
 

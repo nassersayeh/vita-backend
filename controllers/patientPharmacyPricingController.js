@@ -33,6 +33,7 @@ exports.getPrices = async (req, res) => {
         activationStatus: 'active',
         isPublic: { $ne: false },
         patientOrderingEnabled: { $ne: false },
+        prescriptionDispensingEnabled: true,
       }).select('_id').lean(),
       PharmacyInventory.find({
         pharmacyId,

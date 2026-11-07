@@ -24,9 +24,9 @@ test('medical network requires explicit prescription selection, independently of
   assert.equal(response.length, 1);
 });
 
-test('medicine ordering retains its independent pharmacy selection', async () => {
+test('medicine ordering includes only pharmacies explicitly selected for the medical network', async () => {
   const { controller, filter } = setup();
   await controller.getAllPharmacies({ query: {} }, { json() {} });
   assert.equal(filter().patientOrderingEnabled.$ne, false);
-  assert.equal(filter().prescriptionDispensingEnabled, undefined);
+  assert.equal(filter().prescriptionDispensingEnabled, true);
 });
