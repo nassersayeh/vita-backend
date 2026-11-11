@@ -7,10 +7,11 @@ exports.buildPatientOrderQuote = (items, prices, deliveryFee) => {
     if (!line || !Number.isInteger(line.index) || line.index < 0 || line.index >= items.length || byIndex.has(line.index) ||
       line.discountedPrice == null || typeof line.discountedPrice === 'boolean' || String(line.discountedPrice).trim() === '' ||
       !Number.isFinite(Number(line.discountedPrice))) fail();
-    byIndex.set(line.index, Number(line.discountedPrice));
+    if (line.originalPrice !== undefined && ((typeof line.originalPrice !== 'number' && typeof line.originalPrice !== 'string') || String(line.originalPrice).trim() === '' || !Number.isFinite(Number(line.originalPrice)) || Number(line.originalPrice) < 0 || Number(line.originalPrice) > 1000000)) fail();
+    byIndex.set(line.index, line);
   }
   const quoted = items.map((item, index) => {
-    const originalPrice = Number(item.originalPrice ?? item.price), price = money(byIndex.get(index));
+    const originalPrice = money(Number(byIndex.get(index).originalPrice ?? item.originalPrice ?? item.price)), price = money(Number(byIndex.get(index).discountedPrice));
     if (!Number.isFinite(originalPrice) || originalPrice < 0 || price < 0 || price > originalPrice || !Number.isInteger(Number(item.quantity)) || Number(item.quantity) < 1) fail();
     return { ...(item.toObject ? item.toObject() : item), originalPrice, price };
   });
@@ -18,5 +19,6 @@ exports.buildPatientOrderQuote = (items, prices, deliveryFee) => {
   const subtotal = money(quoted.reduce((sum, item) => sum + item.price * item.quantity, 0));
   const discountAmount = money(originalSubtotal - subtotal);
   return { items: quoted, originalSubtotal, subtotal, originalTotal: money(originalSubtotal + deliveryFee), total: money(subtotal + deliveryFee), discountAmount,
+    vitaCommissionPercent: 2, vitaCommissionAmount: money(subtotal * 0.02),
     discountPercentage: originalSubtotal ? money(discountAmount / originalSubtotal * 100) : 0 };
 };

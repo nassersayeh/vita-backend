@@ -14,6 +14,7 @@ const ImageRequest = require('../models/ImageRequest');
 const grouped = (Model, match, field, value = 1) => Model.aggregate([
   { $match: match }, { $group: { _id: `$${field}`, value: { $sum: value } } },
 ]);
+const realizedOrders = { user: { $ne: null }, pharmacyPricedAt: { $type: 'date' }, status: { $in: ['delivered', 'completed'] }, adminApprovalStatus: { $ne: 'rejected' } };
 const valueFor = (rows, id) => Number(rows.find(row => String(row._id) === String(id))?.value || 0);
 
 const examTotals = (ids, field) => MedicalExamRequest.aggregate([
@@ -29,7 +30,7 @@ async function patientMetrics(patients) {
     { $unwind: '$rx' }, { $match: { 'rx.patientId': { $in: ids } } },
     { $group: { _id: '$rx.patientId', value: { $sum: '$vitaCommissionTotal' } } },
   ]);
-  const [orders, appointments, exams, diagnostics, images, treatment, quotes, controlledQuotes] = await Promise.all([
+  const [orders, appointments, exams, diagnostics, images, treatment, quotes, controlledQuotes, orderCommission] = await Promise.all([
     grouped(Order, { user: { $in: ids }, status: { $nin: ['cancelled', 'declined', 'paid'] }, adminApprovalStatus: { $ne: 'rejected' } }, 'user'),
     grouped(Appointment, { patient: { $in: ids }, status: { $in: ['pending', 'confirmed', 'completed'] } }, 'patient'),
     examTotals(ids, 'patientId'),
@@ -44,6 +45,7 @@ async function patientMetrics(patients) {
     grouped(ImageRequest, { patientId: { $in: ids }, status: { $in: ['pending', 'in_progress', 'completed'] } }, 'patientId'),
     grouped(MedicalRecord, { patient: { $in: ids }, 'billing.paidAmount': { $gt: 0 } }, 'patient', '$vitaCommissionAmount'),
     quoteTotals(Quote, Prescription), quoteTotals(ControlledQuote, Controlled),
+    grouped(Order, { ...realizedOrders, user: { $in: ids } }, 'user', '$vitaCommissionAmount'),
   ]);
   return new Map(ids.map(id => {
     const diagnostic = diagnostics.find(row => String(row._id) === String(id));
@@ -52,7 +54,7 @@ async function patientMetrics(patients) {
       prescriptionCount: valueFor(orders, id), appointmentCount: valueFor(appointments, id),
       labCount: valueFor(exams, id) + Number(diagnostic?.labCount || 0),
       radiologyCount: valueFor(diagnostics, id) + valueFor(images, id),
-      vitaCommission: Math.round((Number(exam?.commission || 0) + Number(diagnostic?.commission || 0) + valueFor(treatment, id) + valueFor(quotes, id) + valueFor(controlledQuotes, id)) * 100) / 100,
+      vitaCommission: Math.round((Number(exam?.commission || 0) + Number(diagnostic?.commission || 0) + valueFor(treatment, id) + valueFor(quotes, id) + valueFor(controlledQuotes, id) + valueFor(orderCommission, id)) * 100) / 100,
     }];
   }));
 }
@@ -77,7 +79,7 @@ async function customerMetrics(customers) {
     { $unwind: '$rx' }, { $match: { 'rx.doctorId': { $in: doctors } } },
     { $group: { _id: '$rx.doctorId', value: { $sum: '$vitaCommissionTotal' } } },
   ]);
-  const [prescriptions, controlled, appointments, medicalCommission, pharmacyCommission, controlledPharmacyCommission, doctorQuoteCommission, controlledDoctorCommission, medicalExamCounts, diagnostics, patientTotals] = await Promise.all([
+  const [prescriptions, controlled, appointments, medicalCommission, pharmacyCommission, controlledPharmacyCommission, doctorQuoteCommission, controlledDoctorCommission, medicalExamCounts, diagnostics, patientTotals, orderCommission] = await Promise.all([
     grouped(Prescription, { doctorId: { $in: doctors } }, 'doctorId'),
     grouped(Controlled, { doctorId: { $in: doctors }, issuedAt: { $ne: null } }, 'doctorId'),
     grouped(Appointment, { doctorId: { $in: doctors }, status: 'completed' }, 'doctorId'),
@@ -89,6 +91,7 @@ async function customerMetrics(customers) {
     doctors.length ? examTotals(doctors, 'doctorId') : [],
     diagnosticsQuery,
     patientTotalsPromise,
+    grouped(Order, { ...realizedOrders, pharmacyId: { $in: pharmacies } }, 'pharmacyId', '$vitaCommissionAmount'),
   ]);
   return customers.map(customer => {
     if (customer.role === 'User') return { ...customer, ...patientTotals.get(String(customer._id)) };
@@ -96,7 +99,7 @@ async function customerMetrics(customers) {
     const doctor = customer.role === 'Doctor';
     const commission = doctor
       ? valueFor(medicalCommission, id) + valueFor(doctorQuoteCommission, id) + valueFor(controlledDoctorCommission, id) + Number(diagnostics.find(r => String(r._id) === String(id))?.commission || 0) + Number(medicalExamCounts.find(r => String(r._id) === String(id))?.commission || 0)
-      : valueFor(pharmacyCommission, id) + valueFor(controlledPharmacyCommission, id);
+      : valueFor(pharmacyCommission, id) + valueFor(controlledPharmacyCommission, id) + valueFor(orderCommission, id);
     return { ...customer,
       prescriptionCount: doctor ? valueFor(prescriptions, id) + valueFor(controlled, id) : null,
       radiologyCount: doctor ? valueFor(diagnostics, id) : null,
@@ -122,6 +125,10 @@ async function teamCommissions(managerIds) {
     { $project: { amount: '$vitaCommissionTotal', owners: { $setUnion: ['$doctor.salesManager', '$pharmacyOwner.salesManager', '$patientOwner.salesManager'] } } }, ...finish,
   ]);
   const results = await Promise.all([
+    Order.aggregate([
+      { $match: realizedOrders }, ownerLookup('pharmacyId', 'provider'), ownerLookup('user', 'patientOwner'),
+      { $project: { amount: '$vitaCommissionAmount', owners: { $setUnion: ['$provider.salesManager', '$patientOwner.salesManager'] } } }, ...finish,
+    ]),
     quoteTotals(Quote, Prescription), quoteTotals(ControlledQuote, Controlled),
     MedicalRecord.aggregate([{ $match: { 'billing.paidAmount': { $gt: 0 } } }, ownerLookup('doctor', 'provider'), ownerLookup('patient', 'patientOwner'), { $project: { amount: '$vitaCommissionAmount', owners: { $setUnion: ['$provider.salesManager', '$patientOwner.salesManager'] } } }, ...finish]),
     LabRequest.aggregate([

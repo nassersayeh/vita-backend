@@ -44,6 +44,8 @@ const OrderSchema = new mongoose.Schema({
   originalTotal: { type: Number },
   discountAmount: { type: Number, min: 0, default: 0 },
   discountPercentage: { type: Number, min: 0, max: 100, default: 0 },
+  vitaCommissionPercent: { type: Number, default: 2 },
+  vitaCommissionAmount: { type: Number, min: 0 },
   pharmacyPricedAt: { type: Date },
   deliveryFee: { type: Number, min: 0, default: 0 },
   deliveryFeeEstimated: { type: Boolean, default: false },

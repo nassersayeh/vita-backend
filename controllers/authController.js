@@ -2,6 +2,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const Otp = require('../models/Otp');
+const { normalizeLoginIdentifier } = require('../utils/loginIdentifier');
 const nodemailer = require('nodemailer');
 const crypto = require('crypto');
 const { validatePasswordPolicy } = require('../utils/passwordPolicy');
@@ -489,7 +490,8 @@ exports.signup = async (req, res) => {
 
 exports.login = async (req, res) => {
   try {
-    const { mobile, password } = req.body;
+    const { mobile: rawMobile, password } = req.body;
+    const mobile = normalizeLoginIdentifier(rawMobile);
     if (typeof mobile !== 'string' || !mobile || mobile.length > 40 || typeof password !== 'string' || Buffer.byteLength(password, 'utf8') > 72) {
       return res.status(400).json({ message: 'Invalid mobile number or password.' });
     }

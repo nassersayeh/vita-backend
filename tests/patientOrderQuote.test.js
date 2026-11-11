@@ -12,9 +12,22 @@ test('discounted unit prices preserve original totals and keep delivery outside 
   assert.equal(quote.total, 41);
   assert.equal(quote.discountAmount, 8);
   assert.equal(quote.discountPercentage, 23.53);
+  assert.equal(quote.vitaCommissionAmount, 0.52);
+  assert.equal(quote.vitaCommissionPercent, 2);
   assert.equal(quote.items[0].originalPrice, 12);
   assert.equal(quote.items[0].price, 9);
   assert.equal(items[0].price, 12);
+});
+
+test('pharmacy can enter original prices and commission excludes delivery', () => {
+  const items = [{ price: 0, quantity: 3 }];
+  const quote = buildPatientOrderQuote(items, [{ index: 0, originalPrice: 20, discountedPrice: 15 }], 10);
+  assert.equal(quote.originalSubtotal, 60);
+  assert.equal(quote.total, 55);
+  assert.equal(quote.vitaCommissionAmount, 0.9);
+  for (const originalPrice of ['', null, true, -1, Infinity, 1000001]) {
+    assert.throws(() => buildPatientOrderQuote(items, [{ index: 0, originalPrice, discountedPrice: 1 }], 10));
+  }
 });
 
 test('missing, duplicate, foreign and invalid discount lines never create a partial quote', () => {

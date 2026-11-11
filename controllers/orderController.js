@@ -480,6 +480,8 @@ exports.updateOrderStatus = async (req, res) => {
       order.total = quote.total;
       order.discountAmount = quote.discountAmount;
       order.discountPercentage = quote.discountPercentage;
+      order.vitaCommissionPercent = quote.vitaCommissionPercent;
+      order.vitaCommissionAmount = quote.vitaCommissionAmount;
       order.pharmacyPricedAt = new Date();
     }
     const previousStatus = order.status;

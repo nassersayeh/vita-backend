@@ -1,4 +1,5 @@
 const buckets = new Map();
+const { normalizeLoginIdentifier } = require('../utils/loginIdentifier');
 
 const normalizeKeyPart = (value) => String(value || '').trim().toLowerCase().replace(/\s+/g, '');
 
@@ -7,7 +8,7 @@ const getClientIp = (req) => normalizeKeyPart(
 );
 
 const getMobile = (req) => normalizeKeyPart(
-  req.body?.mobile || req.body?.mobileNumber || req.body?.phone || req.body?.userId || 'unknown'
+  normalizeLoginIdentifier(req.body?.mobile || req.body?.mobileNumber || req.body?.phone || req.body?.userId || 'unknown')
 );
 
 const getUsername = (req) => normalizeKeyPart(req.body?.username || 'unknown');

@@ -40,6 +40,17 @@ test('mobile login still checks regular users before authority accounts', async 
   const result = await attempt({ identifier: '0000000101' });
   assert.equal(result.status, 200); assert.equal(result.userLookups, 1);
 });
+
+test('mobile keyboard decimal digits and contact direction marks resolve to the same account', async () => {
+  for (const identifier of ['٠٠٠٠٠٠٠١٠١', '۰۰۰۰۰۰۰۱۰۱', '\u200e0000000101\u200f', '\u20660000000101\u2069']) {
+    const result = await attempt({ identifier });
+    assert.equal(result.status, 200);
+    assert.equal(result.userLookups, 1);
+    assert.equal(result.body.user._id, 'account-id');
+  }
+  assert.equal((await attempt({ identifier: '٠٠٠٠٠٠٠١٠١', password: 'incorrect' })).status, 400);
+  assert.equal((await attempt({ identifier: '٠٠٠٠٠٠٠١٠١', password: 'Test-password-١٢٣' })).status, 400);
+});
 test('incorrect passwords and inactive authorities cannot log in', async () => {
   assert.equal((await attempt({ password: 'incorrect' })).status, 400);
   assert.equal((await attempt({ active: false })).status, 400);
