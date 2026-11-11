@@ -21,7 +21,7 @@ function router(mocks = {}) {
   return load('../routes/sales', {
     '../middleware/auth': auth,
     '../middleware/authRateLimiter': { salesSignupLimiter: limiter, salesPasswordLimiter: limiter },
-    '../models/User': {}, '../services/salesMetrics': { customerMetrics: async rows => rows },
+    '../models/User': {}, '../services/salesMetrics': { customerMetrics: async rows => rows, teamCommissions: async () => new Map() },
     '../controllers/authController': { signup: () => { throw new Error('Unexpected signup'); } }, ...mocks,
   });
 }
@@ -88,6 +88,18 @@ test('shared signup saves attribution and specialty, keeps approval pending and 
   assert.equal(result.user.activationStatus, 'pending');
   assert.equal(result.token, undefined);
   assert.equal(result.autoLogin, undefined);
+});
+
+test('sales total covers every customer and only the authenticated manager, independent of pagination', async () => {
+  const app = router({
+    '../models/User': { find: () => ({ select() { return this; }, sort() { return this; }, skip() { return this; }, limit() { return this; }, lean: async () => [] }), countDocuments: async () => 100 },
+    '../services/salesMetrics': { customerMetrics: async rows => rows, teamCommissions: async ids => {
+      assert.equal(ids.length, 1); assert.equal(ids[0], 'manager-A'); return new Map([['manager-A', 48.62]]);
+    } },
+  });
+  const result = await request(app, 'GET', '/customers', { _id: 'manager-A', role: 'SalesManager' }, {}, { page: '3', salesManager: 'attacker' });
+  assert.equal(result.status, 200); assert.equal(result.body.vitaCommission, 48.62);
+  assert.equal(result.body.page, 3); assert.equal(result.body.total, 100);
 });
 
 test('sales patient signup binds attribution and returns no patient session or phone verification code', async () => {

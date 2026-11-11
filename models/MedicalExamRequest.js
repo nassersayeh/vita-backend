@@ -4,6 +4,8 @@ const schema = new mongoose.Schema({
   source: { type: String, enum: ['doctor', 'patient'], default: 'doctor' },
   patientId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   laboratoryId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null, index: true },
+  referredAt: Date,
+  referredBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   tests: { type: [String], required: true },
   notes: { type: String, default: '' },
   status: { type: String, enum: ['awaiting_laboratory', 'pending', 'in_progress', 'completed'], required: true },

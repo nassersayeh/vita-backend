@@ -6,6 +6,7 @@ const prescriptionSchema = new mongoose.Schema({
   clinicId: { type: mongoose.Schema.Types.ObjectId, ref: 'Clinic' },
   workflowStatus: { type: String, enum: ['pending_secretary', 'sent_to_pharmacy', 'completed'], default: 'pending_secretary' },
   routedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  routedAt: { type: Date },
   routedTo: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   // Prescriptions published to the admin-selected Vita pharmacy network.
   // Kept separate from the legacy single-pharmacy routing workflow.

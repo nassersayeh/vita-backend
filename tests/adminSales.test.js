@@ -5,9 +5,9 @@ const fs = require('node:fs');
 const { createRequire } = require('node:module');
 const filename = require.resolve('../routes/adminSales');
 const native = createRequire(filename);
-function load(User, customerMetrics = async rows => rows) {
+function load(User, customerMetrics = async rows => rows, teamCommissions = async () => new Map()) {
   const module = { exports: {} };
-  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), { module, console, require: name => name === '../models/User' ? User : name === '../services/salesMetrics' ? { customerMetrics, teamCommissions: async () => new Map() } : native(name) });
+  vm.runInNewContext(fs.readFileSync(filename, 'utf8'), { module, console, require: name => name === '../models/User' ? User : name === '../services/salesMetrics' ? { customerMetrics, teamCommissions } : native(name) });
   return module.exports;
 }
 function request(router, url, role = 'Admin', query = {}) {
@@ -18,11 +18,35 @@ function request(router, url, role = 'Admin', query = {}) {
   });
 }
 const chain = rows => ({ select() { return this; }, sort() { return this; }, skip() { return this; }, limit() { return this; }, lean: async () => rows });
+
+test('admin displays commission amounts and a unique team total rather than adding duplicate customer rows', async () => {
+  const router = load({ find: filter => chain(filter.role === 'SalesManager' ? [{ _id: 'A' }, { _id: 'B' }] : []) }, async rows => rows,
+    async (ids, options) => {
+      assert.equal(ids.join(','), 'A,B'); assert.equal(options.breakdown, true);
+      const totals = { medicineCommission: 0.6, treatmentCommission: 0, diagnosticCommission: 0, vitaCommission: 0.6 };
+      return options.unique ? new Map([['null', totals]]) : new Map([['A', totals], ['B', totals]]);
+    });
+  const result = await request(router, '/');
+  assert.equal(result.status, 200);
+  assert.equal(result.body.managers[0].medicineCommission, 0.6);
+  assert.equal(result.body.managers[1].vitaCommission, 0.6);
+  assert.equal(result.body.totals.vitaCommission, 0.6);
+});
 test('admin sales denies sales staff, ordinary accounts and missing identity', async () => {
   const router = load({ find() { throw new Error('Must not access DB'); } });
   for (const role of ['SalesManager', 'Doctor', 'Pharmacy', undefined]) {
     for (const url of ['/', '/aaaaaaaaaaaaaaaaaaaaaaaa/customers']) assert.equal((await request(router, url, role || 'unknown')).status, 403);
   }
+});
+
+test('clinical activity is admin-only, including when mounted for the sales team lead', async () => {
+  const router = load({ findOne() { throw Error('No database access allowed'); } });
+  for (const role of ['SalesTeamLead', 'SalesManager', 'Doctor', 'Pharmacy', 'unknown']) {
+    assert.equal((await request(router, '/aaaaaaaaaaaaaaaaaaaaaaaa/activity', role)).status, 403);
+  }
+  assert.equal((await request(router, '/bad/activity', 'Admin')).status, 400);
+  const missing = load({ findOne: () => chain(null) });
+  assert.equal((await request(missing, '/aaaaaaaaaaaaaaaaaaaaaaaa/activity', 'Superadmin')).status, 404);
 });
 test('summary includes every customer across batches and staff with zero customers', async () => {
   let batch = 0;

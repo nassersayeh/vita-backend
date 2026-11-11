@@ -5,7 +5,7 @@ const User = require('../models/User');
 const { signup } = require('../controllers/authController');
 const { validatePasswordPolicy } = require('../utils/passwordPolicy');
 const { salesSignupLimiter, salesPasswordLimiter } = require('../middleware/authRateLimiter');
-const { customerMetrics } = require('../services/salesMetrics');
+const { customerMetrics, teamCommissions } = require('../services/salesMetrics');
 
 router.use(auth, (req, res, next) => {
   if (!['SalesManager', 'SalesTeamLead'].includes(req.user.role)) return res.status(403).json({ message: 'غير مصرح بهذا الإجراء.' });
@@ -45,7 +45,8 @@ router.get('/customers', async (req, res) => {
         .sort({ createdAt: -1, _id: -1 }).skip((page - 1) * 25).limit(25).lean(),
       User.countDocuments(filter),
     ]);
-    res.json({ customers: await customerMetrics(customers), total, page, pageSize: 25 });
+    const [metrics, commissions] = await Promise.all([customerMetrics(customers), teamCommissions([req.user._id])]);
+    res.json({ customers: metrics, vitaCommission: commissions.get(String(req.user._id)) || 0, total, page, pageSize: 25 });
   } catch (error) {
     console.error('Sales customer metrics failed:', error.message);
     res.status(500).json({ message: 'تعذر تحميل العملاء، حاول مرة أخرى.' });

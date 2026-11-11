@@ -39,8 +39,16 @@ test('laboratory WhatsApp uses the saved recipient after patient, doctor and que
       findById: () => ({ select() { return this; }, lean: async () => ({ fullName: 'Patient' }) }),
     }, Service: { find: () => ({ select() { return this; }, lean: async () => [{ _id: serviceId, name: 'CBC', price: 20 }] }) },
     Request: {
-      create: async values => { saved = true; return { ...stored, ...values }; },
-      findOneAndUpdate: async () => { if (saved) return null; saved = true; return stored; },
+      create: async values => {
+        assert.equal(values.referredBy, flow === 'patient' ? patient._id : doctor._id);
+        assert.ok(Number.isFinite(new Date(values.referredAt).getTime()));
+        saved = true; return { ...stored, ...values };
+      },
+      findOneAndUpdate: async (filter, update) => {
+        assert.equal(update.$set.referredBy, doctor._id);
+        assert.ok(Number.isFinite(new Date(update.$set.referredAt).getTime()));
+        if (saved) return null; saved = true; return stored;
+      },
     }, WhatsApp: {
       isWhatsAppReady: async () => true,
       sendWhatsAppMessage: async (phone, message) => {

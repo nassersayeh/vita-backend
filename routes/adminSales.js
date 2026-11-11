@@ -47,12 +47,28 @@ router.get('/', async (req, res) => {
       lastId = customers[customers.length - 1]._id;
       if (customers.length < 250) break;
     }
-    const commissions = await teamCommissions(managers.map(manager => manager._id));
-    for (const row of rows) row.vitaCommission = commissions.get(String(row._id)) || 0;
-    res.json({ managers: rows });
+    const ids = managers.map(manager => manager._id);
+    const [commissions, uniqueCommissions] = await Promise.all([
+      teamCommissions(ids, { breakdown: true }), teamCommissions(ids, { breakdown: true, unique: true }),
+    ]);
+    for (const row of rows) Object.assign(row, commissions.get(String(row._id)) || { medicineCommission: 0, diagnosticCommission: 0, treatmentCommission: 0, vitaCommission: 0 });
+    res.json({ managers: rows, totals: uniqueCommissions.get('null') || { medicineCommission: 0, diagnosticCommission: 0, treatmentCommission: 0, vitaCommission: 0 } });
   } catch (error) {
     console.error('Admin sales summary failed:', error.message);
     res.status(500).json({ message: 'تعذر تحميل إحصائيات المبيعات.' });
+  }
+});
+// Clinical detail is restricted to administrators, even on the team-lead mount.
+router.get('/:id/activity', async (req, res) => {
+  if (!['Admin', 'Superadmin'].includes(req.user?.role)) return res.status(403).json({ message: 'Administrator access required.' });
+  if (!/^[a-f\d]{24}$/i.test(req.params.id)) return res.status(400).json({ message: 'Invalid sales manager ID.' });
+  try {
+    const manager = await User.findOne({ _id: new mongoose.Types.ObjectId(req.params.id), role: 'SalesManager' }).select('_id').lean();
+    if (!manager) return res.status(404).json({ message: 'Sales manager not found.' });
+    const { getAdminSalesActivity } = require('../services/adminSalesActivity');
+    res.json(await getAdminSalesActivity(manager._id, req.query));
+  } catch (error) {
+    res.status(error.status === 400 ? 400 : 500).json({ message: error.status === 400 ? error.message : 'Could not load activity details.' });
   }
 });
 router.get('/:id/customers', async (req, res) => {
@@ -66,7 +82,8 @@ router.get('/:id/customers', async (req, res) => {
       User.find(filter).select('fullName role specialty address city mobileNumber activationStatus createdAt').sort({ createdAt: -1, _id: -1 }).skip((page - 1) * 25).limit(25).lean(),
       User.countDocuments(filter),
     ]);
-    res.json({ manager, customers: await customerMetrics(customers), total, page, pageSize: 25 });
+    const [metrics, commissions] = await Promise.all([customerMetrics(customers), teamCommissions([manager._id])]);
+    res.json({ manager, customers: metrics, vitaCommission: commissions.get(String(manager._id)) || 0, total, page, pageSize: 25 });
   } catch (error) {
     console.error('Admin sales customers failed:', error.message);
     res.status(500).json({ message: 'تعذر تحميل عملاء الموظفة.' });

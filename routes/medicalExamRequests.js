@@ -85,7 +85,7 @@ router.post('/patient', async (req, res) => {
     if (selected.some(service => !service || !Number.isFinite(service.price) || service.price < 0)) return res.status(400).json({ message: 'تعذر التحقق من أسعار الفحوصات.' });
     const pricing = selected.map(service => priceItem({ name: service.name, price: service.price }));
     const totalCost = Math.round(pricing.reduce((sum, item) => sum + item.price, 0) * 100) / 100;
-    const created = await Request.create({ source: 'patient', patientId: req.user._id, laboratoryId, tests: selected.map(service => service.name), pricing, totalCost, notes: notes.trim(), status: 'pending' });
+    const created = await Request.create({ source: 'patient', patientId: req.user._id, laboratoryId, referredAt: new Date(), referredBy: req.user._id, tests: selected.map(service => service.name), pricing, totalCost, notes: notes.trim(), status: 'pending' });
     await notifyLaboratory(laboratory, created, req.user);
     res.status(201).json({ request: { _id: created._id, laboratoryId, tests: created.tests, status: created.status, totalCost, createdAt: created.createdAt } });
   } catch { res.status(500).json({ message: 'تعذر إرسال طلب الفحوصات.' }); }
@@ -97,7 +97,7 @@ router.post('/', doctorOnly, async (req, res) => {
     if (!(req.user.patients || []).some(id => String(id) === patientId) || !await User.exists({ _id: patientId, role: 'User' })) return res.status(403).json({ message: 'المريض غير مرتبط بحسابك.' });
     const laboratory = laboratoryId && validId(laboratoryId) ? await findLaboratory(laboratoryId) : null;
     if (laboratoryId && !laboratory) return res.status(400).json({ message: 'اختر مختبراً مستقلاً معتمداً.' });
-    const request = await Request.create({ doctorId: req.user._id, patientId, laboratoryId: laboratoryId || null, tests: [...new Set(tests.map(test => test.trim()))], notes: notes.trim(), status: laboratoryId ? 'pending' : 'awaiting_laboratory' });
+    const request = await Request.create({ doctorId: req.user._id, patientId, laboratoryId: laboratoryId || null, ...(laboratoryId ? { referredAt: new Date(), referredBy: req.user._id } : {}), tests: [...new Set(tests.map(test => test.trim()))], notes: notes.trim(), status: laboratoryId ? 'pending' : 'awaiting_laboratory' });
     if (laboratory) await notifyLaboratory(laboratory, request, req.user);
     const publicRequest = request.toObject ? request.toObject() : { ...request }; delete publicRequest.pricing; delete publicRequest.totalCost; delete publicRequest.resultDraft;
     res.status(201).json({ request: publicRequest });
@@ -109,7 +109,7 @@ router.patch('/:id/send', doctorOnly, async (req, res) => {
     if (!validId(req.params.id) || !validId(laboratoryId)) return res.status(400).json({ message: 'اختر مختبراً مستقلاً معتمداً.' });
     const laboratory = await findLaboratory(laboratoryId);
     if (!laboratory) return res.status(400).json({ message: 'اختر مختبراً مستقلاً معتمداً.' });
-    const request = await Request.findOneAndUpdate({ _id: req.params.id, deletedAt: null, doctorId: req.user._id, status: 'awaiting_laboratory', laboratoryId: null }, { $set: { laboratoryId, status: 'pending' } }, { new: true });
+    const request = await Request.findOneAndUpdate({ _id: req.params.id, deletedAt: null, doctorId: req.user._id, status: 'awaiting_laboratory', laboratoryId: null }, { $set: { laboratoryId, status: 'pending', referredAt: new Date(), referredBy: req.user._id } }, { new: true });
     if (!request) return res.status(409).json({ message: 'الطلب غير متاح للإرسال.' });
     await notifyLaboratory(laboratory, request, req.user);
     const output = request.toObject ? request.toObject() : { ...request };

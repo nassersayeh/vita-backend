@@ -31,7 +31,7 @@ test('sales patient and provider metrics preserve activity scopes and deduplicat
     await models.PharmacyPrescriptionQuote.insertMany([{ prescription, pharmacy, status: 'dispensed', vitaCommissionTotal: 2 }, { prescription, pharmacy, status: 'priced', vitaCommissionTotal: 50 }]);
     await models.ControlledQuote.insertMany([{ prescription: controlled, pharmacy, status: 'dispensed', vitaCommissionTotal: 3 }]);
     const module = { exports: {} };
-    vm.runInNewContext(fs.readFileSync(require.resolve('../services/salesMetrics'), 'utf8'), { module, require: name => models[name.split('/').pop()] });
+    vm.runInNewContext(fs.readFileSync(require.resolve('../services/salesMetrics'), 'utf8'), { module, require: name => name === '../utils/patientOrderCommission' ? require(name) : models[name.split('/').pop()] });
     const rows = await module.exports.customerMetrics([{ _id: doctor, role: 'Doctor' }, { _id: pharmacy, role: 'Pharmacy' }]);
     assert.equal(rows[0].prescriptionCount, 2);
     assert.equal(rows[0].radiologyCount, 2);

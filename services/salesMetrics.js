@@ -14,7 +14,7 @@ const ImageRequest = require('../models/ImageRequest');
 const grouped = (Model, match, field, value = 1) => Model.aggregate([
   { $match: match }, { $group: { _id: `$${field}`, value: { $sum: value } } },
 ]);
-const realizedOrders = { user: { $ne: null }, pharmacyPricedAt: { $type: 'date' }, status: { $in: ['delivered', 'completed'] }, adminApprovalStatus: { $ne: 'rejected' } };
+const { realizedPatientOrders: realizedOrders } = require('../utils/patientOrderCommission');
 const valueFor = (rows, id) => Number(rows.find(row => String(row._id) === String(id))?.value || 0);
 
 const examTotals = (ids, field) => MedicalExamRequest.aggregate([
@@ -111,10 +111,15 @@ async function customerMetrics(customers) {
 }
 // Attribute each realized transaction once per sales owner, even when both
 // prescribing doctor and dispensing pharmacy belong to that owner.
-async function teamCommissions(managerIds) {
-  if (!managerIds.length) return new Map();
+async function teamCommissions(managerIds, { breakdown = false, unique = false, allTransactions = false } = {}) {
+  if (!managerIds.length && !allTransactions) return new Map();
   const ownerLookup = (field, as) => ({ $lookup: { from: User.collection.name, localField: field, foreignField: '_id', as } });
-  const finish = [
+  const finish = allTransactions ? [
+    { $group: { _id: null, value: { $sum: '$amount' } } },
+  ] : unique ? [
+    { $match: { owners: { $in: managerIds } } },
+    { $group: { _id: null, value: { $sum: '$amount' } } },
+  ] : [
     { $unwind: '$owners' }, { $match: { owners: { $in: managerIds } } },
     { $group: { _id: '$owners', value: { $sum: '$amount' } } },
   ];
@@ -145,8 +150,23 @@ async function teamCommissions(managerIds) {
     ]),
   ]);
   const totals = new Map();
-  for (const row of results.flat()) totals.set(String(row._id), (totals.get(String(row._id)) || 0) + Number(row.value || 0));
-  for (const [id, value] of totals) totals.set(id, Math.round(value * 100) / 100);
+  const categories = ['medicineCommission', 'medicineCommission', 'medicineCommission', 'treatmentCommission', 'diagnosticCommission', 'diagnosticCommission'];
+  results.forEach((rows, index) => {
+    for (const row of rows) {
+      const id = String(row._id);
+      const value = totals.get(id) || { medicineCommission: 0, treatmentCommission: 0, diagnosticCommission: 0, vitaCommission: 0 };
+      value[categories[index]] += Number(row.value || 0);
+      value.vitaCommission += Number(row.value || 0);
+      totals.set(id, value);
+    }
+  });
+  for (const [id, value] of totals) totals.set(id, breakdown
+    ? Object.fromEntries(Object.entries(value).map(([key, amount]) => [key, Math.round(amount * 100) / 100]))
+    : Math.round(value.vitaCommission * 100) / 100);
   return totals;
 }
-module.exports = { customerMetrics, teamCommissions };
+async function platformCommissions() {
+  const totals = await teamCommissions([], { breakdown: true, allTransactions: true });
+  return { ...(totals.get('null') || { medicineCommission: 0, treatmentCommission: 0, diagnosticCommission: 0, vitaCommission: 0 }), currency: 'ILS', period: 'all_time' };
+}
+module.exports = { customerMetrics, teamCommissions, platformCommissions };

@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const { createRequire } = require('node:module');
 
-function load(models) {
+function load(models, services = {}) {
   const file = require.resolve('../controllers/adminController');
   const native = createRequire(file);
   const module = { exports: {} };
@@ -13,11 +13,22 @@ function load(models) {
     require(name) {
       if (name.startsWith('../models/')) return models[name.slice('../models/'.length)] || {};
       if (name === '../utils/assignDefaultInventory') return {};
+      if (name === '../services/salesMetrics') return services;
       return native(name);
     }
   });
   return module.exports;
 }
+
+test('monthly medicine revenue is realized commission, with complete Riyadh month boundaries', async () => {
+  let pipeline, result;
+  const controller = load({ Order: { aggregate: async value => { pipeline = value; return [{ totalRevenue: 0.6, grossOrderValue: 30 }]; } } });
+  await controller.getRevenueByMonth({ params: { year: '2026', month: '11' } }, { json(value) { result = value; }, status() { throw Error('Unexpected failure'); } });
+  assert.equal(result.orderRevenue, 0.6); assert.equal(result.grossOrderValue, 30);
+  assert.equal(pipeline[2].$match.commissionRealizedAt.$gte.toISOString(), '2026-10-31T21:00:00.000Z');
+  assert.equal(pipeline[2].$match.commissionRealizedAt.$lt.toISOString(), '2026-11-30T21:00:00.000Z');
+  assert.equal(pipeline[1].$addFields.commissionRealizedAt.$ifNull[0], '$deliveredAt');
+});
 
 test('analytics starts all independent queries together and preserves summary values', async () => {
   const releases = [];
@@ -29,13 +40,18 @@ test('analytics starts all independent queries together and preserves summary va
       aggregate: pipeline => query(pipeline[0].$group ? [{ _id: 'User', count: 10, active: 7, pending: 3, recent: 2 }] : [{ totalRevenue: 50 }])
     },
     Appointment: { countDocuments: filter => query(filter ? 2 : 8) },
-    Order: { countDocuments: filter => query(filter ? 3 : 15), aggregate: () => query([{ totalRevenue: 100 }]) },
+    Order: { countDocuments: filter => query(filter ? 3 : 15), aggregate: pipeline => {
+      assert.equal(pipeline[3].$group.totalRevenue.$sum, '$vitaCommissionAmount');
+      assert.equal(pipeline[3].$group.grossOrderValue.$sum, '$total');
+      assert.equal(JSON.stringify(pipeline[0].$match.status), JSON.stringify({ $in: ['delivered', 'completed'] }));
+      return query([{ totalRevenue: 0.6, grossOrderValue: 30 }]);
+    } },
     Points: { aggregate: () => query([{ total: 30 }]) },
     Financial: { aggregate: () => query([{ totalEarnings: 80, totalExpenses: 20 }]) }
-  });
+  }, { platformCommissions: () => query({ vitaCommission: 48.62, medicineCommission: 3.42, diagnosticCommission: 45.2, treatmentCommission: 0, currency: 'ILS', period: 'all_time' }) });
   let result;
   const pending = controller.getDashboardAnalytics({ query: {} }, { json(value) { result = value; }, status() { throw new Error('Unexpected failure'); } });
-  assert.equal(releases.length, 10, 'all summary queries start before the first result resolves');
+  assert.equal(releases.length, 11, 'all summary queries start before the first result resolves');
   releases.forEach(release => release());
   await pending;
   assert.equal(result.users.total, 10);
@@ -44,7 +60,12 @@ test('analytics starts all independent queries together and preserves summary va
   assert.equal(result.appointments.recent, 2);
   assert.equal(result.orders.total, 15);
   assert.equal(result.orders.recent, 3);
-  assert.equal(result.orders.revenue, 150);
+  assert.equal(result.orders.revenue, 50.6);
+  assert.equal(result.orders.orderRevenue, 0.6);
+  assert.equal(result.orders.grossOrderValue, 30);
+  assert.equal(result.commissions.vitaCommission, 48.62);
+  assert.equal(result.commissions.currency, 'ILS');
+  assert.equal(result.commissions.period, 'all_time');
   assert.equal(result.points.totalAwarded, 30);
   assert.equal(result.financial.totalExpenses, 20);
   assert.equal(result.latestUsers[0].fullName, 'Latest account');

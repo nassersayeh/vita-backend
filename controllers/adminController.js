@@ -855,16 +855,13 @@ exports.getDashboardAnalytics = async (req, res) => {
     const { userDistributionPipeline, summarizeUserDistribution } = require('../utils/userDistribution');
     // Independent collections can be queried together instead of paying a round trip per query.
     const [distribution, totalAppointments, recentAppointments, totalOrders, recentOrders,
-      orderRevenue, subscriptionRevenue, totalPointsAwarded, financialOverview, latestUsers] = await Promise.all([
+      orderRevenue, subscriptionRevenue, totalPointsAwarded, financialOverview, latestUsers, commissions] = await Promise.all([
       User.aggregate(userDistributionPipeline(startDate, endDate)),
       Appointment.countDocuments(),
       Appointment.countDocuments({ createdAt: { $gte: startDate } }),
       Order.countDocuments(),
       Order.countDocuments({ createdAt: { $gte: startDate } }),
-      Order.aggregate([
-        { $match: { createdAt: { $gte: startDate }, status: { $ne: 'cancelled' } } },
-        { $group: { _id: null, totalRevenue: { $sum: '$total' } } }
-      ]),
+      Order.aggregate(require('../utils/patientOrderCommission').orderCommissionRevenuePipeline(startDate, endDate)),
       User.aggregate([
         { $match: { isPaid: true, lastPaymentAt: { $gte: startDate }, lastPaymentAmount: { $exists: true, $ne: null } } },
         { $group: { _id: null, totalRevenue: { $sum: '$lastPaymentAmount' } } }
@@ -875,12 +872,14 @@ exports.getDashboardAnalytics = async (req, res) => {
         { $group: { _id: null, totalEarnings: { $sum: '$totalEarnings' }, totalExpenses: { $sum: '$totalExpenses' } } }
       ]),
       User.find().select('fullName role city createdAt activationStatus').sort({ createdAt: -1, _id: -1 }).limit(5).lean(),
+      require('../services/salesMetrics').platformCommissions(),
     ]);
     const userStatistics = summarizeUserDistribution(distribution, User.schema.path('role').enumValues);
     const totalRevenue = (orderRevenue[0]?.totalRevenue || 0) + (subscriptionRevenue[0]?.totalRevenue || 0);
 
     res.json({
       users: userStatistics,
+      commissions,
       latestUsers,
       appointments: {
         total: totalAppointments,
@@ -891,6 +890,7 @@ exports.getDashboardAnalytics = async (req, res) => {
         recent: recentOrders,
         revenue: totalRevenue,
         orderRevenue: orderRevenue[0]?.totalRevenue || 0,
+        grossOrderValue: orderRevenue[0]?.grossOrderValue || 0,
         subscriptionRevenue: subscriptionRevenue[0]?.totalRevenue || 0
       },
       points: {
@@ -1086,26 +1086,21 @@ exports.updateUser = async (req, res) => {
 exports.getRevenueByMonth = async (req, res) => {
   try {
     const { year, month } = req.params;
+    const y = Number(year), mon = Number(month);
+    if (!Number.isInteger(y) || y < 2020 || y > 2100 || !Number.isInteger(mon) || mon < 1 || mon > 12) return res.status(400).json({ message: 'Invalid reporting month.' });
     
     // Calculate date range for the month
-    const startDate = new Date(Number(year), Number(month) - 1, 1);
-    const endDate = new Date(Number(year), Number(month), 0, 23, 59, 59);
+    const startDate = new Date(Date.UTC(y, mon - 1, 1) - 3 * 3600000);
+    const endDate = new Date(Date.UTC(y, mon, 1) - 3 * 3600000);
 
     // Order revenue for the month
-    const orderRevenue = await Order.aggregate([
-      { 
-        $match: { 
-          createdAt: { $gte: startDate, $lte: endDate },
-          status: { $ne: 'cancelled' }
-        } 
-      },
-      { $group: { _id: null, totalRevenue: { $sum: '$total' } } }
-    ]);
+    const orderRevenue = await Order.aggregate(require('../utils/patientOrderCommission').orderCommissionRevenuePipeline(startDate, endDate));
 
     res.json({
       year: Number(year),
       month: Number(month),
       orderRevenue: orderRevenue[0]?.totalRevenue || 0,
+      grossOrderValue: orderRevenue[0]?.grossOrderValue || 0,
     });
   } catch (error) {
     console.error('Get revenue by month error:', error);

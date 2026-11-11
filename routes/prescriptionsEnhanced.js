@@ -406,7 +406,7 @@ router.put('/:prescriptionId/renewal/:renewalIndex', async (req, res) => {
 // Secretary routes a clinic prescription to its internal pharmacy.
 router.put('/:prescriptionId/route', async (req, res) => {
   try {
-    const { pharmacyId, routedBy } = req.body;
+    const { pharmacyId } = req.body;
     const prescription = await Prescription.findById(req.params.prescriptionId);
     if (!prescription) return res.status(404).json({ message: 'Prescription not found' });
     if (!prescription.clinicId) return res.status(400).json({ message: 'Prescription is not clinic-managed' });
@@ -414,7 +414,8 @@ router.put('/:prescriptionId/route', async (req, res) => {
     if (!pharmacy) return res.status(404).json({ message: 'Internal pharmacy not found' });
     prescription.workflowStatus = 'sent_to_pharmacy';
     prescription.routedTo = pharmacy._id;
-    prescription.routedBy = routedBy || undefined;
+    prescription.routedBy = req.user._id;
+    prescription.routedAt = new Date();
     await prescription.save();
     res.json({ success: true, prescription });
   } catch (error) {
