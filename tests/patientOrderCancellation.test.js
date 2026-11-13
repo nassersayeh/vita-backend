@@ -4,9 +4,10 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const { createRequire } = require('node:module');
 
-function setup() {
+function setup(overrides = {}) {
   let saved = false;
   const order = { _id: 'order-id', user: { _id: 'patient-id' }, pharmacyId: 'pharmacy-id', status: 'pending', adminApprovalStatus: 'approved', items: [{ item: 'medicine-id', onModel: 'Product', name: 'Medicine', price: 12, quantity: 2 }], deliveryFee: 15, total: 39, save: async () => { saved = true; } };
+  Object.assign(order, overrides);
   function load(file, mocks) {
     const filename = require.resolve(file), native = createRequire(filename), module = { exports: {} };
     vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
@@ -71,4 +72,17 @@ test('another patient and an anonymous request cannot cancel the order', async (
   const anonymous = await setup().request('/order-id/status');
   assert.equal(anonymous.code, 401);
   assert.equal(anonymous.saved, false);
+});
+
+
+test('photo orders use the dispense action and completed dispensing cannot be cancelled', async () => {
+  const photo = await setup({ orderType: 'upload' }).request('/order-id/status', { _id: 'pharmacy-id', role: 'Pharmacy' }, { status: 'accepted' });
+  assert.equal(photo.code, 400);
+  assert.equal(photo.saved, false);
+  const dispensed = await setup({ dispensedAt: new Date() }).request('/order-id/status', { _id: 'patient-id', role: 'User' });
+  assert.equal(dispensed.code, 409);
+  assert.equal(dispensed.saved, false);
+  const cancelled = await setup().request('/order-id/status', { _id: 'patient-id', role: 'User' });
+  assert.equal(cancelled.body.order.$where.status, 'pending');
+  assert.equal(cancelled.body.order.$where.dispensedAt, null);
 });

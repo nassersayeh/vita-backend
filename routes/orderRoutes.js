@@ -104,7 +104,7 @@ router.post('/upload-prescription', uploadPrescription.single('file'), async (re
     }
 
     // Create file URL
-    const fileUrl = `${req.protocol}://${req.get('host')}/uploads/prescriptions/${req.file.filename}`;
+    const fileUrl = `${req.protocol}://${req.get('host')}/api/uploads/prescriptions/${req.file.filename}`;
 
     res.json({
       message: 'Prescription uploaded successfully',
@@ -160,7 +160,7 @@ router.post('/analyze-prescription', uploadPrescription.single('file'), async (r
       prescriptionImage: {
         filename: req.file.filename,
         filePath: req.file.path,
-        fileUrl: `${req.protocol}://${req.get('host')}/uploads/prescriptions/${req.file.filename}`,
+        fileUrl: `${req.protocol}://${req.get('host')}/api/uploads/prescriptions/${req.file.filename}`,
         uploadedAt: new Date(),
         notes: req.body.notes || ''
       },
@@ -190,6 +190,8 @@ router.put('/:orderId/admin-review', auth, OrderController.reviewOrderByAdmin);
 router.get('/user/:userId', OrderController.getUserOrders);
 
 // Get single order by ID
+router.get('/patient/:patientId/dispensed-medicines', auth, require('../controllers/uploadedOrderController').history);
+router.put('/:orderId/dispense-upload', auth, require('../controllers/uploadedOrderController').dispense);
 router.get('/:orderId', auth, OrderController.getOrderById);
 
 // Update order status (supports both routes for compatibility)

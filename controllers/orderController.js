@@ -450,6 +450,11 @@ exports.updateOrderStatus = async (req, res) => {
       return res.status(403).json({ message: 'تم رفض الطلب من الإدارة' });
     }
 
+    if (order.orderType === 'upload' && order.status === 'pending' && status === 'accepted') {
+      return res.status(400).json({ message: 'Add the available medicines and use the dispense action for uploaded prescriptions.' });
+    }
+    if (order.dispensedAt) return res.status(409).json({ message: 'Dispensed orders cannot be changed.' });
+
     // Validate status transitions
     const validTransitions = {
       pending: ['accepted', 'declined', 'cancelled'],
@@ -527,6 +532,7 @@ exports.updateOrderStatus = async (req, res) => {
       notes: req.body.notes || null
     });
 
+    order.$where = { status: previousStatus, dispensedAt: null };
     await order.save();
 
     // Get pharmacy details for notifications
@@ -703,6 +709,7 @@ exports.updateOrderStatus = async (req, res) => {
     });
   } catch (err) {
     if (err.code === 'CONTROLLED_REQUIRED') return res.status(403).json({ message: err.message });
+    if (err.name === 'DocumentNotFoundError') return res.status(409).json({ message: 'This order changed. Refresh before trying again.' });
     console.error('Error updating order status:', err);
     if (err.status === 400) return res.status(400).json({ message: err.message });
     res.status(500).json({ message: 'خطأ في الخادم أثناء تحديث الطلب.' });

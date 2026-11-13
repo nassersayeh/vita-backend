@@ -190,7 +190,12 @@ app.use('/api/orders', orderRoutes);
 app.use('/api/orders', require('./routes/orders')); // Add new orders route
 app.use('/api/addresses', addressRoutes);
 app.use('/api/patient-services', require('./routes/patientServices'));
-app.use('/uploads', express.static('uploads'));
+// Resolve against the application directory, independent of the process working directory.
+const uploadedFiles = require('./utils/uploadedFiles').createUploadedFilesMiddleware(undefined, {
+  fallbackOrigin: process.env.UPLOADS_FALLBACK_ORIGIN || (process.env.NODE_ENV !== 'production' ? 'https://api.vita.ps' : undefined),
+});
+app.use('/api/uploads', uploadedFiles);
+app.use('/uploads', uploadedFiles);
 app.use('/api/users', usersRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/pharmacies', pharmaciesRoutes);
