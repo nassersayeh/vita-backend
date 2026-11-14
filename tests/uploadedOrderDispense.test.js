@@ -68,3 +68,38 @@ test('concurrent dispensing and retries commit exactly once', async () => {
   await assert.rejects(dispenseUploadedOrder({ orderId, pharmacy, lines: [line] }, f.models), e => e.status === 409);
   assert.equal(f.writes.length, 1);
 });
+
+test('uploaded medicines retain original prices and commission uses only discounted subtotal', async () => {
+  const f = fixture(); f.order.deliveryFee = 10;
+  const result = await dispenseUploadedOrder({ orderId, pharmacy, lines: [{ ...line, originalPrice: '20.00', price: '15.00', quantity: 3 }] }, f.models);
+  assert.equal(result.items[0].originalPrice, 20);
+  assert.equal(result.items[0].price, 15);
+  assert.equal(result.originalSubtotal, 60);
+  assert.equal(result.subtotal, 45);
+  assert.equal(result.originalTotal, 70);
+  assert.equal(result.total, 55);
+  assert.equal(result.discountAmount, 15);
+  assert.equal(result.discountPercentage, 25);
+  assert.equal(result.vitaCommissionAmount, 0.9);
+});
+
+test('missing original prices keep older clients compatible while explicit invalid prices are rejected', async () => {
+  const f = fixture();
+  const unchanged = await dispenseUploadedOrder({ orderId, pharmacy, lines: [line] }, f.models);
+  assert.equal(unchanged.items[0].originalPrice, Number(line.price));
+  assert.equal(unchanged.discountAmount, 0);
+  for (const originalPrice of ['', null, true, false, -1, Infinity, 1000001, 12.351, 12]) {
+    const f = fixture();
+    await assert.rejects(dispenseUploadedOrder({ orderId, pharmacy, lines: [{ ...line, originalPrice }] }, f.models), e => e.status === 400);
+    assert.equal(f.writes.length, 0);
+  }
+});
+
+test('fully discounted medicines are valid and produce zero medicine commission', async () => {
+  const f = fixture();
+  const result = await dispenseUploadedOrder({ orderId, pharmacy, lines: [{ ...line, originalPrice: 10, price: 0 }] }, f.models);
+  assert.equal(result.originalSubtotal, 20);
+  assert.equal(result.total, 0);
+  assert.equal(result.discountAmount, 20);
+  assert.equal(result.vitaCommissionAmount, 0);
+});

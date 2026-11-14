@@ -18,6 +18,9 @@ async function dispenseUploadedOrder({ orderId, pharmacy, lines }, models = {}) 
     if (!Number.isSafeInteger(line.quantity) || line.quantity < 1 || line.quantity > 10000) fail('Enter a valid whole quantity.');
     if (!['number', 'string'].includes(typeof line.price) || String(line.price).trim() === '' || !Number.isFinite(Number(line.price)) || Number(line.price) < 0 || Number(line.price) > 1000000) fail('Enter a valid unit price.');
     if (Math.abs(Number(line.price) * 100 - Math.round(Number(line.price) * 100)) > 0.000001) fail('Unit prices can have at most two decimal places.');
+    const originalPrice = line.originalPrice === undefined ? line.price : line.originalPrice;
+    if (!['number', 'string'].includes(typeof originalPrice) || String(originalPrice).trim() === '' || !Number.isFinite(Number(originalPrice)) || Number(originalPrice) < 0 || Number(originalPrice) > 1000000 || Math.abs(Number(originalPrice) * 100 - Math.round(Number(originalPrice) * 100)) > 0.000001) fail('Enter a valid unit price before discount.');
+    if (Number(line.price) > Number(originalPrice)) fail('The discounted unit price cannot exceed the original price.');
     if (typeof line.isSubstitute !== 'boolean') fail('Specify whether this medicine is a substitute.');
     if (line.originalDrugName != null && (typeof line.originalDrugName !== 'string' || line.originalDrugName.trim().length > 300)) fail('The original medicine name must be at most 300 characters.');
   }
@@ -27,11 +30,11 @@ async function dispenseUploadedOrder({ orderId, pharmacy, lines }, models = {}) 
     const drug = byId.get(String(line.drugId));
     if (!drug) fail('A selected medicine is no longer available in the catalog.');
     return { onModel: 'Product', item: drug._id, drugId: drug._id, name: drug.name, quantity: line.quantity,
-      price: Number(line.price), isSubstitute: line.isSubstitute, originalDrugName: line.isSubstitute ? (line.originalDrugName || '').trim() : '',
+      originalPrice: Number(line.originalPrice === undefined ? line.price : line.originalPrice), price: Number(line.price), isSubstitute: line.isSubstitute, originalDrugName: line.isSubstitute ? (line.originalDrugName || '').trim() : '',
       details: { drugId: drug._id, source: 'uploaded_prescription' } };
   });
   await guard(items, pharmacy);
-  const quote = buildPatientOrderQuote(items, items.map((item, index) => ({ index, originalPrice: item.price, discountedPrice: item.price })), Number(order.deliveryFee || 0));
+  const quote = buildPatientOrderQuote(items, items.map((item, index) => ({ index, originalPrice: item.originalPrice, discountedPrice: item.price })), Number(order.deliveryFee || 0));
   const now = new Date();
   // One conditional write prevents retries and concurrent tabs from dispensing twice.
   const updated = await Order.findOneAndUpdate(filter, { $set: { ...quote, status: 'completed', pharmacyPricedAt: now,
