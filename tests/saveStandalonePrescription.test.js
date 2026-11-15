@@ -126,3 +126,27 @@ test('ordinary full-quantity pricing persists matching totals without changing s
   assert.equal(quote.pricingBasis, 'line');
   assert.deepEqual(state.inventory.map(item => item.quantity), [6, 6]);
 });
+
+test('manual ordinary dispensing allows medicines missing from inventory and prevents repeat dispensing', async () => {
+  const { state, args } = fixture([0, 0]);
+  delete state.prescription.products[0].drugId;
+  args.Inventory.findOneAndUpdate = async () => { throw new Error('Inventory must not be accessed'); };
+  const options = { ...args, dispense: true, pricePerLine: true, manageInventory: false };
+  const quote = await saveStandalonePrescription(options);
+  assert.equal(quote.status, 'dispensed');
+  assert.equal(quote.discountedTotal, 16);
+  assert.equal(quote.vitaCommissionTotal, 0.32);
+  assert.equal(state.prescription.dispensedCount, 1);
+  assert.deepEqual(state.inventory.map(item => item.quantity), [0, 0]);
+  await assert.rejects(saveStandalonePrescription(options), /UNAVAILABLE/);
+});
+test('manual dispensing still rolls back a failed final commit without touching inventory', async () => {
+  const { state, args } = fixture([0, 0]);
+  const update = args.Prescription.updateOne;
+  args.Prescription.updateOne = (filter, changes) => filter.isValid ? { modifiedCount: 0 } : update(filter, changes);
+  await assert.rejects(saveStandalonePrescription({ ...args, dispense: true, manageInventory: false }), /UNAVAILABLE/);
+  assert.equal(state.quote, null);
+  assert.ok(!state.prescription.dispensedAt);
+  assert.ok(!state.prescription.pharmacyWriteLock);
+  assert.deepEqual(state.inventory.map(item => item.quantity), [0, 0]);
+});

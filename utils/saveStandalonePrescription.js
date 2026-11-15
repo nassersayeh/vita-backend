@@ -4,7 +4,7 @@ const { activePrescriptionFilter, buildPrescriptionQuote } = require('./pharmacy
 // Standalone MongoDB cannot commit multiple documents in a transaction. Serialize
 // prescription writes with a durable lock and compensate known failed writes.
 // Keep the lock on ambiguous failures so a retry cannot dispense a second time.
-async function saveStandalonePrescription({ Prescription, Inventory, Quote, prescriptionId, pharmacyId, items, dispense, pricePerLine = false, beforeCommit, validatePrescription, commitFields = {}, auditEvent }) {
+async function saveStandalonePrescription({ Prescription, Inventory, Quote, prescriptionId, pharmacyId, items, dispense, pricePerLine = false, manageInventory = true, beforeCommit, validatePrescription, commitFields = {}, auditEvent }) {
   const token = randomUUID();
   const lockFilter = { _id: prescriptionId, 'pharmacyWriteLock.token': token };
   const prescription = await Prescription.findOneAndUpdate(
@@ -23,7 +23,7 @@ async function saveStandalonePrescription({ Prescription, Inventory, Quote, pres
     if (validatePrescription) await validatePrescription(prescription);
     const pricing = buildPrescriptionQuote(prescription.products, items, { pricePerLine });
     oldQuote = await Quote.findOne(quoteFilter).lean();
-    if (dispense) {
+    if (dispense && manageInventory) {
       // Aggregate duplicate drug lines before touching inventory.
       const quantities = new Map();
       for (const product of prescription.products) {

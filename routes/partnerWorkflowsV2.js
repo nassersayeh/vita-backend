@@ -652,7 +652,7 @@ async function savePharmacyPrescription(req, res, dispense) {
     if (!topology.setName && topology.msg !== 'isdbgrid') {
       const quote = await saveStandalonePrescription({
         Prescription, Inventory: PharmacyInventory, Quote: PharmacyPrescriptionQuote,
-        prescriptionId: req.params.prescriptionId, pharmacyId: req.user._id, items: req.body.items, dispense, pricePerLine: true,
+        prescriptionId: req.params.prescriptionId, pharmacyId: req.user._id, items: req.body.items, dispense, pricePerLine: true, manageInventory: false,
         validatePrescription: prescription => assertOrdinaryAllowed(prescription.products, req.user),
         beforeCommit: async () => { const prescription = await Prescription.findById(req.params.prescriptionId); await assertOrdinaryAllowed(prescription.products, req.user); },
       });
@@ -671,16 +671,6 @@ async function savePharmacyPrescription(req, res, dispense) {
         dispense ? { $set: { dispensedAt: now, dispensedBy: req.user._id, workflowStatus: 'completed' }, $inc: { dispensedCount: 1 } }
           : { $inc: { __v: 1 } }, { session });
       if (!claimed.modifiedCount) throw new Error('UNAVAILABLE');
-      if (dispense) {
-        for (const product of prescription.products) {
-          if (!product.drugId) throw new Error('STOCK');
-          const quantity = product.quantity ?? 1;
-          const stock = await PharmacyInventory.updateOne({ pharmacyId: req.user._id, drugId: product.drugId,
-            isActive: true, isAvailable: true, quantity: { $gte: quantity } },
-          { $inc: { quantity: -quantity, soldCount: quantity }, $set: { lastSoldDate: now } }, { session });
-          if (!stock.modifiedCount) throw new Error('STOCK');
-        }
-      }
       quote = await PharmacyPrescriptionQuote.findOneAndUpdate(
         { prescription: prescription._id, pharmacy: req.user._id },
         { ...pricing, status: dispense ? 'dispensed' : 'priced' },
