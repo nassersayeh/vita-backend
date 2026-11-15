@@ -117,3 +117,12 @@ test('revoked controlled permission before commit restores pricing and inventory
   assert.ok(!state.prescription.dispensedAt);
   assert.ok(!state.prescription.pharmacyWriteLock);
 });
+
+test('ordinary full-quantity pricing persists matching totals without changing stock quantities', async () => {
+  const { state, args } = fixture();
+  const quote = await saveStandalonePrescription({ ...args, pricePerLine: true, dispense: true });
+  assert.equal(quote.discountedTotal, 16);
+  assert.equal(quote.vitaCommissionTotal, 0.32);
+  assert.equal(quote.pricingBasis, 'line');
+  assert.deepEqual(state.inventory.map(item => item.quantity), [6, 6]);
+});

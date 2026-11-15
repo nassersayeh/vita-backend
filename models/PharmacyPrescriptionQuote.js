@@ -12,6 +12,7 @@ const PharmacyPrescriptionQuoteSchema = new mongoose.Schema({
   prescription: { type: mongoose.Schema.Types.ObjectId, ref: 'EPrescription', required: true, index: true },
   pharmacy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
   items: { type: [QuoteItemSchema], default: [] },
+  pricingBasis: { type: String, enum: ['unit', 'line'], default: 'unit' },
   originalTotal: { type: Number, required: true, min: 0 },
   discountedTotal: { type: Number, required: true, min: 0 },
   vitaCommissionTotal: { type: Number, required: true, min: 0 },

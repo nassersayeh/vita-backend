@@ -4,7 +4,7 @@ const activePrescriptionFilter = (now = new Date()) => ({
   $or: [{ expiryDate: null }, { expiryDate: { $gt: now } }],
 });
 
-function buildPrescriptionQuote(products, submittedItems) {
+function buildPrescriptionQuote(products, submittedItems, { pricePerLine = false } = {}) {
   if (!products.length || !Array.isArray(submittedItems) || submittedItems.length !== products.length) throw new Error('INVALID_PRICE');
   const byId = new Map(submittedItems.map(item => [String(item?.prescriptionProductId), item]));
   if (byId.size !== products.length) throw new Error('INVALID_PRICE');
@@ -18,16 +18,16 @@ function buildPrescriptionQuote(products, submittedItems) {
     if (originalPrice < 0 || discountedPrice < 0 || discountedPrice > originalPrice || !Number.isInteger(quantity) || quantity <= 0) throw new Error('INVALID_PRICE');
     return { prescriptionProductId: product._id, originalPrice, discountedPrice,
       discountPercentage: originalPrice ? Number(((originalPrice - discountedPrice) / originalPrice * 100).toFixed(2)) : 0,
-      vitaCommission: Number((discountedPrice * quantity * 0.02).toFixed(2)) };
+      vitaCommission: Number((discountedPrice * (pricePerLine ? 1 : quantity) * 0.02).toFixed(2)) };
   });
   const totals = items.reduce((sum, item, index) => {
-    const quantity = products[index].quantity ?? 1;
+    const quantity = pricePerLine ? 1 : (products[index].quantity ?? 1);
     sum.original += item.originalPrice * quantity;
     sum.discounted += item.discountedPrice * quantity;
     sum.commission += item.vitaCommission;
     return sum;
   }, { original: 0, discounted: 0, commission: 0 });
   if (![totals.original, totals.discounted, totals.commission].every(value => Number.isFinite(value) && value <= Number.MAX_SAFE_INTEGER / 100)) throw new Error('INVALID_PRICE');
-  return { items, originalTotal: Number(totals.original.toFixed(2)), discountedTotal: Number(totals.discounted.toFixed(2)), vitaCommissionTotal: Number(totals.commission.toFixed(2)) };
+  return { items, ...(pricePerLine ? { pricingBasis: 'line' } : {}), originalTotal: Number(totals.original.toFixed(2)), discountedTotal: Number(totals.discounted.toFixed(2)), vitaCommissionTotal: Number(totals.commission.toFixed(2)) };
 }
 module.exports = { activePrescriptionFilter, buildPrescriptionQuote };

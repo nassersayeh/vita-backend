@@ -4,7 +4,7 @@ const { activePrescriptionFilter, buildPrescriptionQuote } = require('./pharmacy
 // Standalone MongoDB cannot commit multiple documents in a transaction. Serialize
 // prescription writes with a durable lock and compensate known failed writes.
 // Keep the lock on ambiguous failures so a retry cannot dispense a second time.
-async function saveStandalonePrescription({ Prescription, Inventory, Quote, prescriptionId, pharmacyId, items, dispense, beforeCommit, validatePrescription, commitFields = {}, auditEvent }) {
+async function saveStandalonePrescription({ Prescription, Inventory, Quote, prescriptionId, pharmacyId, items, dispense, pricePerLine = false, beforeCommit, validatePrescription, commitFields = {}, auditEvent }) {
   const token = randomUUID();
   const lockFilter = { _id: prescriptionId, 'pharmacyWriteLock.token': token };
   const prescription = await Prescription.findOneAndUpdate(
@@ -21,7 +21,7 @@ async function saveStandalonePrescription({ Prescription, Inventory, Quote, pres
   const quoteFilter = { prescription: prescriptionId, pharmacy: pharmacyId };
   try {
     if (validatePrescription) await validatePrescription(prescription);
-    const pricing = buildPrescriptionQuote(prescription.products, items);
+    const pricing = buildPrescriptionQuote(prescription.products, items, { pricePerLine });
     oldQuote = await Quote.findOne(quoteFilter).lean();
     if (dispense) {
       // Aggregate duplicate drug lines before touching inventory.
@@ -73,8 +73,8 @@ async function saveStandalonePrescription({ Prescription, Inventory, Quote, pres
     try {
       if (quoteWritten) {
         if (oldQuote) {
-          const { items, originalTotal, discountedTotal, vitaCommissionTotal, status } = oldQuote;
-          await Quote.updateOne(quoteFilter, { $set: { items, originalTotal, discountedTotal, vitaCommissionTotal, status } });
+          const { items, originalTotal, discountedTotal, vitaCommissionTotal, status, pricingBasis = 'unit' } = oldQuote;
+          await Quote.updateOne(quoteFilter, { $set: { items, originalTotal, discountedTotal, vitaCommissionTotal, status, pricingBasis } });
         } else {
           await Quote.deleteOne(quoteFilter);
         }

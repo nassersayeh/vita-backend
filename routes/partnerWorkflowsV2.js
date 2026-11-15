@@ -643,7 +643,7 @@ router.get('/pharmacy/prescriptions', requireSelectedPharmacy, async (req, res) 
   } catch (error) { res.status(error.status || 500).json({ message: error.status ? error.message : 'Failed to load prescriptions.' }); }
 });
 
-// Prices are per unit; quote totals include prescribed quantities.
+// Ordinary prescription prices cover the full prescribed quantity of each medicine.
 async function savePharmacyPrescription(req, res, dispense) {
   if (!objectIdIsValid(req.params.prescriptionId)) return res.status(400).json({ message: 'Invalid prescription ID.' });
   let session;
@@ -652,7 +652,7 @@ async function savePharmacyPrescription(req, res, dispense) {
     if (!topology.setName && topology.msg !== 'isdbgrid') {
       const quote = await saveStandalonePrescription({
         Prescription, Inventory: PharmacyInventory, Quote: PharmacyPrescriptionQuote,
-        prescriptionId: req.params.prescriptionId, pharmacyId: req.user._id, items: req.body.items, dispense,
+        prescriptionId: req.params.prescriptionId, pharmacyId: req.user._id, items: req.body.items, dispense, pricePerLine: true,
         validatePrescription: prescription => assertOrdinaryAllowed(prescription.products, req.user),
         beforeCommit: async () => { const prescription = await Prescription.findById(req.params.prescriptionId); await assertOrdinaryAllowed(prescription.products, req.user); },
       });
@@ -664,7 +664,7 @@ async function savePharmacyPrescription(req, res, dispense) {
       const prescription = await Prescription.findOne({ _id: req.params.prescriptionId, ...activePrescriptionFilter(), pharmacyWriteLock: null }).session(session);
       if (!prescription) throw new Error('UNAVAILABLE');
       await assertOrdinaryAllowed(prescription.products, req.user);
-      const pricing = buildPrescriptionQuote(prescription.products, req.body.items);
+      const pricing = buildPrescriptionQuote(prescription.products, req.body.items, { pricePerLine: true });
       // Both pricing and dispensing write the prescription, preventing concurrent stale quotes.
       const now = new Date();
       const claimed = await Prescription.updateOne({ _id: prescription._id, ...activePrescriptionFilter(now), pharmacyWriteLock: null },

@@ -31,3 +31,14 @@ test('active filter excludes dispensed, expired and unpublished prescriptions', 
   assert.deepEqual(filter.workflowStatus, { $ne: 'pending_secretary' });
   assert.deepEqual(filter.$or, [{ expiryDate: null }, { expiryDate: { $gt: now } }]);
 });
+
+test('ordinary prescription full-quantity prices match screenshot without multiplying tablet counts', () => {
+  const products = [{ _id: 'a', quantity: 30 }, { _id: 'b', quantity: 1 }, { _id: 'c', quantity: 1 }];
+  const items = [[139,122], [19,18], [35,30]].map(([originalPrice, discountedPrice], i) => ({ prescriptionProductId: products[i]._id, originalPrice, discountedPrice }));
+  const quote = buildPrescriptionQuote(products, items, { pricePerLine: true });
+  assert.equal(quote.originalTotal, 193);
+  assert.equal(quote.discountedTotal, 170);
+  assert.equal(quote.vitaCommissionTotal, 3.4);
+  assert.equal(quote.pricingBasis, 'line');
+  assert.equal(buildPrescriptionQuote(products, items).discountedTotal, 3708);
+});
