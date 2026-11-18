@@ -20,7 +20,7 @@ function request(router, url, role = 'Admin', query = {}) {
 const chain = rows => ({ select() { return this; }, sort() { return this; }, skip() { return this; }, limit() { return this; }, lean: async () => rows });
 
 test('admin displays commission amounts and a unique team total rather than adding duplicate customer rows', async () => {
-  const router = load({ find: filter => chain(filter.role === 'SalesManager' ? [{ _id: 'A' }, { _id: 'B' }] : []) }, async rows => rows,
+  const router = load({ find: filter => chain(filter.role?.$in?.includes('SalesTeamLead') ? [{ _id: 'A' }, { _id: 'B' }] : []) }, async rows => rows,
     async (ids, options) => {
       assert.equal(ids.join(','), 'A,B'); assert.equal(options.breakdown, true);
       const totals = { medicineCommission: 0.6, treatmentCommission: 0, diagnosticCommission: 0, vitaCommission: 0.6 };
@@ -51,7 +51,7 @@ test('clinical activity is admin-only, including when mounted for the sales team
 test('summary includes every customer across batches and staff with zero customers', async () => {
   let batch = 0;
   const router = load({ find(filter) {
-    if (filter.role === 'SalesManager') return chain([{ _id: 'A', fullName: 'A' }, { _id: 'B', fullName: 'B' }]);
+    if (filter.role?.$in?.includes('SalesTeamLead')) return chain([{ _id: 'A', fullName: 'A' }, { _id: 'B', fullName: 'B' }]);
     assert.equal(filter.salesManager.$in.join(','), 'A,B');
     if (batch++) { assert.equal(filter._id.$gt, 250); return chain([{ _id: 251, salesManager: 'A', role: 'Doctor' }]); }
     return chain(Array.from({ length: 250 }, (_, i) => ({ _id: i + 1, salesManager: 'A', role: 'Doctor' })));
@@ -67,7 +67,7 @@ test('summary includes every customer across batches and staff with zero custome
 test('detail validates manager and scopes pagination to selected staff', async () => {
   const id = 'aaaaaaaaaaaaaaaaaaaaaaaa';
   const router = load({
-    findOne(filter) { assert.equal(filter.role, 'SalesManager'); return chain({ _id: id, fullName: 'A' }); },
+    findOne(filter) { assert.deepEqual(Array.from(filter.role.$in), ['SalesManager', 'SalesTeamLead']); return chain({ _id: id, fullName: 'A' }); },
     find(filter) {
       assert.equal(filter.salesManager, id);
       const q = chain([{ fullName: 'Customer' }]);
@@ -91,4 +91,32 @@ test('team lead can read team reports', async () => {
   const response = await request(router, '/', 'SalesTeamLead');
   assert.equal(response.status, 200);
   assert.equal(response.body.managers.length, 0);
+});
+
+test('team lead appears with staff and her linked customers remain accessible to the admin', async () => {
+  const id = 'aaaaaaaaaaaaaaaaaaaaaaaa';
+  const seen = {};
+  const router = load({
+    find(filter) {
+      if (!filter.salesManager) {
+        assert.deepEqual(Array.from(filter.role.$in), ['SalesManager', 'SalesTeamLead']);
+        return chain([{ _id: id, fullName: 'Afnan', role: 'SalesTeamLead' }]);
+      }
+      seen.customerOwner = filter.salesManager;
+      return chain([{ _id: 'customer', salesManager: id, role: 'Doctor' }]);
+    },
+    findOne(filter) {
+      assert.deepEqual(Array.from(filter.role.$in), ['SalesManager', 'SalesTeamLead']);
+      return chain({ _id: id, fullName: 'Afnan', role: 'SalesTeamLead' });
+    }, countDocuments: async () => 1,
+  });
+  const summary = await request(router, '/');
+  assert.equal(summary.status, 200);
+  assert.equal(summary.body.managers[0].fullName, 'Afnan');
+  assert.equal(summary.body.managers[0].customerCount, 1);
+  const detail = await request(router, '/' + id + '/customers');
+  assert.equal(detail.status, 200);
+  assert.equal(detail.body.manager.role, 'SalesTeamLead');
+  assert.equal(detail.body.customers.length, 1);
+  assert.equal(seen.customerOwner, id);
 });

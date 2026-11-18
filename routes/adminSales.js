@@ -37,7 +37,7 @@ router.put('/join-requests/:userId/approve', (req, res) => {
 });
 router.get('/', async (req, res) => {
   try {
-    const managers = await User.find({ role: 'SalesManager' }).select('fullName mobileNumber activationStatus').sort({ fullName: 1 }).lean();
+    const managers = await User.find({ role: { $in: ['SalesManager', 'SalesTeamLead'] } }).select('fullName mobileNumber activationStatus').sort({ fullName: 1 }).lean();
     const rows = managers.map(manager => ({ ...manager, customerCount: 0, prescriptionCount: 0, radiologyCount: 0, appointmentCount: 0, labCount: 0, vitaCommission: 0 }));
     const byId = new Map(rows.map(row => [String(row._id), row]));
     // Walk every customer, independently of the paginated detail table.
@@ -70,7 +70,7 @@ router.get('/:id/activity', async (req, res) => {
   if (!['Admin', 'Superadmin'].includes(req.user?.role)) return res.status(403).json({ message: 'Administrator access required.' });
   if (!/^[a-f\d]{24}$/i.test(req.params.id)) return res.status(400).json({ message: 'Invalid sales manager ID.' });
   try {
-    const manager = await User.findOne({ _id: new mongoose.Types.ObjectId(req.params.id), role: 'SalesManager' }).select('_id').lean();
+    const manager = await User.findOne({ _id: new mongoose.Types.ObjectId(req.params.id), role: { $in: ['SalesManager', 'SalesTeamLead'] } }).select('_id').lean();
     if (!manager) return res.status(404).json({ message: 'Sales manager not found.' });
     const { getAdminSalesActivity } = require('../services/adminSalesActivity');
     res.json(await getAdminSalesActivity(manager._id, req.query));
@@ -81,7 +81,7 @@ router.get('/:id/activity', async (req, res) => {
 router.get('/:id/customers', async (req, res) => {
   try {
     if (!/^[a-f\d]{24}$/i.test(req.params.id)) return res.status(400).json({ message: 'معرّف الموظفة غير صحيح.' });
-    const manager = await User.findOne({ _id: new mongoose.Types.ObjectId(req.params.id), role: 'SalesManager' }).select('fullName mobileNumber activationStatus').lean();
+    const manager = await User.findOne({ _id: new mongoose.Types.ObjectId(req.params.id), role: { $in: ['SalesManager', 'SalesTeamLead'] } }).select('fullName mobileNumber activationStatus').lean();
     if (!manager) return res.status(404).json({ message: 'حساب موظفة المبيعات غير موجود.' });
     const page = Math.max(1, Math.min(100000, Number.parseInt(req.query.page, 10) || 1));
     const filter = { salesManager: manager._id, role: { $in: ['Doctor', 'Pharmacy', 'User', 'Lab', 'Radiology'] } };
