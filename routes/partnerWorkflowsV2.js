@@ -24,6 +24,8 @@ const { getMobileCandidates, normalizeMobileForStorage } = require('../utils/mob
 const { sendWhatsAppMessage, isWhatsAppReady } = require('../services/whatsappService');
 
 const { isDentist, usesLegacyClinicDashboard } = require('../utils/partnerAccess');
+const { serviceTotals } = require('../utils/patientServiceBooking');
+const { radiologyRates } = require('../utils/radiologyRates');
 const router = express.Router();
 router.use(auth);
 router.use(async (req, res, next) => {
@@ -89,7 +91,7 @@ router.get('/context', async (req, res) => {
     const dentist = req.user.role === 'Doctor' && !req.legacyClinicDashboard;
     const burj = req.user.role === 'Radiology' && isRadiologyCenter(req.user);
     const pharmacy = isSelectedPharmacy(req.user);
-    const response = { capabilities: { dentist, burj, pharmacy } };
+    const response = { capabilities: { dentist, burj, pharmacy }, radiologyPricing: { ...radiologyRates(req.user, 0), fixedDiscount: req.user.radiologyDiscountPercent != null } };
     if (dentist) {
       const centers = await findRadiologyCenters();
       const center = centers[0] || null;
@@ -309,20 +311,17 @@ router.post('/dentist/radiology-referrals', requireDoctor, requireLinkedPatient,
     if (!objectIdIsValid(patientId) || !objectIdIsValid(centerId) || !Array.isArray(testIds) || !testIds.length || testIds.length > 20) {
       return res.status(400).json({ message: 'Patient, radiology branch, and imaging types are required.' });
     }
-    const [patient, center] = await Promise.all([User.findOne({ _id: patientId, role: 'User' }).select('_id fullName'), User.findOne({ _id: centerId, role: 'Radiology', activationStatus: 'active' }).select('fullName mobileNumber role isPublic clinicId')]);
+    const [patient, center] = await Promise.all([User.findOne({ _id: patientId, role: 'User' }).select('_id fullName'), User.findOne({ _id: centerId, role: 'Radiology', activationStatus: 'active' }).select('fullName mobileNumber role isPublic clinicId radiologyDiscountPercent radiologyCommissionPercent')]);
     if (!patient) return res.status(404).json({ message: 'Patient not found.' });
     if (!center || !isRadiologyCenter(center) || await usesLegacyClinicDashboard(center)) return res.status(409).json({ message: 'The selected radiology center is not available.' });
     const services = await MedicalTest.find({ _id: { $in: testIds }, providerId: center._id, type: 'radiology', isActive: true }).select('price name');
     if (services.length !== [...new Set(testIds)].length) return res.status(400).json({ message: 'One or more imaging types are unavailable.' });
-    const originalCost = services.reduce((sum, service) => sum + (Number(service.price) || 0), 0);
-    const pricingItems = services.map((service) => ({ testId: service._id, originalCost: Number(service.price) || 0, discountPercentage: 0, discountAmount: 0, finalCost: Number(service.price) || 0, vitaCommissionAmount: Number(((Number(service.price) || 0) * 0.05).toFixed(2)), providerNetAmount: Number(((Number(service.price) || 0) * 0.95).toFixed(2)) }));
+    const pricing = serviceTotals(services, radiologyRates(center, 0));
     const request = await LabRequest.create({
       patientId, doctorId: req.user._id, labId: center._id, testIds,
-      notes: String(notes).trim().slice(0, 1000), originalCost, totalCost: originalCost,
-      vitaCommissionPercent: 5, vitaCommissionAmount: Number((originalCost * 0.05).toFixed(2)), providerNetAmount: Number((originalCost * 0.95).toFixed(2)),
+      notes: String(notes).trim().slice(0, 1000), ...pricing,
       status: 'pending', approvalStatus: 'approved', requestedBy: req.user._id,
       sourceChannel: 'vita_partner_network',
-      pricingItems,
     });
     try {
       if (center.mobileNumber && await isWhatsAppReady()) {
@@ -434,9 +433,9 @@ router.get('/radiology/accounts', requireRadiologyCenter, async (req, res) => {
       .populate('patientId', 'fullName idNumber').populate('doctorId', 'fullName').populate('testIds', 'name type').sort({ completedDate: -1, createdAt: -1 }).lean();
     const rows = requests.map((request) => {
       const grossAmount = Number(request.totalCost) || 0;
-      const vitaCommissionAmount = Number(request.vitaCommissionAmount ?? (grossAmount * 0.05));
+      const vitaCommissionAmount = Number(request.vitaCommissionAmount ?? (grossAmount * (request.vitaCommissionPercent ?? radiologyRates(req.user).commissionPercent) / 100));
       const providerNetAmount = Number(request.providerNetAmount ?? (grossAmount - vitaCommissionAmount));
-      return { requestId: request._id, patientName: request.patientId?.fullName, patientIdNumber: request.patientId?.idNumber, doctorName: request.doctorId?.fullName, tests: request.testIds?.map((test) => test.name) || [], completedAt: request.completedDate, vitaCommissionPercent: 5, vitaCommissionAmount: Number(vitaCommissionAmount.toFixed(2)), providerNetAmount: Number(providerNetAmount.toFixed(2)), grossAmount: Number(grossAmount.toFixed(2)) };
+      return { requestId: request._id, patientName: request.patientId?.fullName, patientIdNumber: request.patientId?.idNumber, doctorName: request.doctorId?.fullName, tests: request.testIds?.map((test) => test.name) || [], completedAt: request.completedDate, vitaCommissionPercent: request.vitaCommissionPercent ?? radiologyRates(req.user).commissionPercent, vitaCommissionAmount: Number(vitaCommissionAmount.toFixed(2)), providerNetAmount: Number(providerNetAmount.toFixed(2)), grossAmount: Number(grossAmount.toFixed(2)) };
     });
     const summary = rows.reduce((total, row) => ({
       completedReferrals: total.completedReferrals + 1,
@@ -445,7 +444,7 @@ router.get('/radiology/accounts', requireRadiologyCenter, async (req, res) => {
       centerNetIncome: total.centerNetIncome + row.providerNetAmount,
     }), { completedReferrals: 0, grossIncome: 0, vitaCommission: 0, centerNetIncome: 0 });
     Object.keys(summary).forEach((key) => { if (key !== 'completedReferrals') summary[key] = Number(summary[key].toFixed(2)); });
-    res.json({ summary, rows, period: { year, month } });
+    res.json({ summary, rows, commissionPercent: radiologyRates(req.user).commissionPercent, period: { year, month } });
   } catch (error) { res.status(500).json({ message: 'Failed to load radiology accounts.' }); }
 });
 
@@ -509,6 +508,7 @@ router.delete('/radiology/services/:serviceId', requireRadiologyCenter, async (r
 router.patch('/radiology/requests/:requestId/discount', requireRadiologyCenter, async (req, res) => {
   try {
     const discountPercentage = Number(req.body.discountPercentage);
+    if (req.user.radiologyDiscountPercent != null && discountPercentage !== req.user.radiologyDiscountPercent) return res.status(400).json({ message: "This center has a fixed agreed discount." });
     const submittedOriginalCost = req.body.originalCost === undefined ? null : Number(req.body.originalCost);
     const testId = req.body.testId;
     if (!Number.isFinite(discountPercentage) || discountPercentage < 0 || discountPercentage > 100) return res.status(400).json({ message: 'Discount must be between 0 and 100.' });
@@ -524,14 +524,14 @@ router.patch('/radiology/requests/:requestId/discount', requireRadiologyCenter, 
       const itemDiscount = String(test._id) === String(testId) ? discountPercentage : Number(existing?.discountPercentage || 0);
       const discountAmount = Number((original * itemDiscount / 100).toFixed(2));
       const finalCost = Number((original - discountAmount).toFixed(2));
-      const commission = Number((finalCost * 0.05).toFixed(2));
+      const commission = Number((finalCost * (request.vitaCommissionPercent ?? radiologyRates(req.user).commissionPercent) / 100).toFixed(2));
       return { testId: test._id, originalCost: original, discountPercentage: itemDiscount, discountAmount, finalCost, vitaCommissionAmount: commission, providerNetAmount: Number((finalCost - commission).toFixed(2)) };
     });
     request.originalCost = request.pricingItems.reduce((sum, item) => sum + item.originalCost, 0);
     request.discountAmount = request.pricingItems.reduce((sum, item) => sum + item.discountAmount, 0);
     request.totalCost = request.pricingItems.reduce((sum, item) => sum + item.finalCost, 0);
     request.discount = request.originalCost ? Number(((request.discountAmount / request.originalCost) * 100).toFixed(2)) : 0;
-    request.vitaCommissionPercent = 5; request.vitaCommissionAmount = request.pricingItems.reduce((sum, item) => sum + item.vitaCommissionAmount, 0);
+    request.vitaCommissionPercent = request.vitaCommissionPercent ?? radiologyRates(req.user).commissionPercent; request.vitaCommissionAmount = request.pricingItems.reduce((sum, item) => sum + item.vitaCommissionAmount, 0);
     request.providerNetAmount = request.pricingItems.reduce((sum, item) => sum + item.providerNetAmount, 0);
     await request.save();
     res.json({ request });

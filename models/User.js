@@ -118,6 +118,9 @@ const UserSchema = new mongoose.Schema({
   phoneVerificationCode: { type: String },
   phoneVerificationCodeExpiration: { type: Date },
   
+  // Optional negotiated radiology rates; null preserves existing network defaults.
+  radiologyDiscountPercent: { type: Number, min: 0, max: 100, default: null },
+  radiologyCommissionPercent: { type: Number, min: 0, max: 100, default: null },
   // Professional details
   generalDetails: { type: String, default: '' },
   workingSchedule: { type: [ScheduleSchema], default: [] },

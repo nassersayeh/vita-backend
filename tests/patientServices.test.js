@@ -7,7 +7,7 @@ const { serviceTotals } = require('../utils/patientServiceBooking');
 const centerId = 'aaaaaaaaaaaaaaaaaaaaaaaa',
   testId = 'bbbbbbbbbbbbbbbbbbbbbbbb';
 
-function setup({ offered = true, centerAvailable = true } = {}) {
+function setup({ offered = true, centerAvailable = true, centerRates = {} } = {}) {
   const seen = {};
   const query = (result) => ({
     select() {
@@ -27,7 +27,7 @@ function setup({ offered = true, centerAvailable = true } = {}) {
       },
       findOne: (filter) => {
         seen.center = filter;
-        return query(centerAvailable ? { _id: centerId } : null);
+        return query(centerAvailable ? { _id: centerId, ...centerRates } : null);
       },
     },
     '../models/MedicalTest': {
@@ -147,4 +147,24 @@ test('rounding is consistent per service and unpriced services cannot generate f
     () => serviceTotals([{ price: undefined }]),
     (error) => error.status === 400,
   );
+});
+
+test('Basma negotiated rates appear on the catalog and are enforced on patient requests', async () => {
+  const { request, seen } = setup({ centerRates: { radiologyDiscountPercent: 5, radiologyCommissionPercent: 2 } });
+  assert.equal((await request('/centers/' + centerId + '/services', 'GET', 'radiology')).body.discount, 5);
+  assert.equal((await request('/requests', 'POST', 'radiology', { type: 'radiology', centerId, testIds: [testId], discount: 90, vitaCommissionPercent: 0 })).code, 201);
+  assert.equal(seen.created.discount, 5);
+  assert.equal(seen.created.totalCost, 95);
+  assert.equal(seen.created.vitaCommissionPercent, 2);
+  assert.equal(seen.created.vitaCommissionAmount, 1.9);
+  assert.equal(seen.created.providerNetAmount, 93.1);
+});
+test('Basma image price list calculates 5 percent discount and 2 percent Vita per service', () => {
+  const totals = serviceTotals([30,200,120,40,100].map((price, i) => ({ _id: i, price })), { discountPercent: 5, commissionPercent: 2 });
+  assert.equal(totals.originalCost, 490);
+  assert.equal(totals.totalCost, 465.5);
+  assert.equal(totals.vitaCommissionAmount, 9.31);
+  assert.equal(totals.providerNetAmount, 456.19);
+  assert.equal(serviceTotals([{price:100}]).totalCost, 80);
+  assert.equal(serviceTotals([{price:100}], {discountPercent:0}).vitaCommissionAmount, 5);
 });

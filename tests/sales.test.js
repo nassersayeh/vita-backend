@@ -27,7 +27,7 @@ function router(mocks = {}) {
 }
 test('sales endpoints reject anonymous and other roles', async () => {
   const app = router();
-  for (const [method, path] of [['GET', '/customers'], ['POST', '/customers'], ['POST', '/password']]) {
+  for (const [method, path] of [['GET', '/customers'], ['POST', '/customers'], ['POST', '/password'], ['GET', '/providers/templates'], ['POST', '/providers']]) {
     assert.equal((await request(app, method, path)).status, 401);
     for (const role of ['Doctor', 'Pharmacy', 'User', 'Admin']) assert.equal((await request(app, method, path, { role })).status, 403);
   }

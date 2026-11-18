@@ -9,6 +9,13 @@ router.use((req, res, next) => {
   next();
 });
 // Only new provider registrations: no staff/admin roles or subscription renewals.
+router.get('/order-pharmacies', async (req, res) => {
+  try {
+    const pharmacies = await User.find({ role: 'Pharmacy', activationStatus: 'active', isPublic: { $ne: false }, prescriptionDispensingEnabled: true, patientOrderingEnabled: { $ne: false } })
+      .select('fullName city address').sort({ fullName: 1 }).lean();
+    res.json({ pharmacies });
+  } catch { res.status(500).json({ message: 'Unable to load pharmacies.' }); }
+});
 router.get('/join-requests', async (req, res) => {
   try {
     const page = Math.max(1, Math.min(100000, Number.parseInt(req.query.page, 10) || 1));
@@ -36,7 +43,7 @@ router.get('/', async (req, res) => {
     // Walk every customer, independently of the paginated detail table.
     let lastId;
     while (managers.length) {
-      const customers = await User.find({ salesManager: { $in: managers.map(manager => manager._id) }, role: { $in: ['Doctor', 'Pharmacy', 'User'] }, ...(lastId ? { _id: { $gt: lastId } } : {}) })
+      const customers = await User.find({ salesManager: { $in: managers.map(manager => manager._id) }, role: { $in: ['Doctor', 'Pharmacy', 'User', 'Lab', 'Radiology'] }, ...(lastId ? { _id: { $gt: lastId } } : {}) })
         .select('role salesManager').sort({ _id: 1 }).limit(250).lean();
       if (!customers.length) break;
       for (const customer of await customerMetrics(customers)) {
@@ -77,7 +84,7 @@ router.get('/:id/customers', async (req, res) => {
     const manager = await User.findOne({ _id: new mongoose.Types.ObjectId(req.params.id), role: 'SalesManager' }).select('fullName mobileNumber activationStatus').lean();
     if (!manager) return res.status(404).json({ message: 'حساب موظفة المبيعات غير موجود.' });
     const page = Math.max(1, Math.min(100000, Number.parseInt(req.query.page, 10) || 1));
-    const filter = { salesManager: manager._id, role: { $in: ['Doctor', 'Pharmacy', 'User'] } };
+    const filter = { salesManager: manager._id, role: { $in: ['Doctor', 'Pharmacy', 'User', 'Lab', 'Radiology'] } };
     const [customers, total] = await Promise.all([
       User.find(filter).select('fullName role specialty address city mobileNumber activationStatus createdAt').sort({ createdAt: -1, _id: -1 }).skip((page - 1) * 25).limit(25).lean(),
       User.countDocuments(filter),

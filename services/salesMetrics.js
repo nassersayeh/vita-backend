@@ -64,6 +64,13 @@ async function customerMetrics(customers) {
   if (!customers.length) return [];
   const doctors = customers.filter(c => c.role === 'Doctor').map(c => c._id);
   const pharmacies = customers.filter(c => c.role === 'Pharmacy').map(c => c._id);
+  const providers = customers.filter(c => ['Lab', 'Radiology'].includes(c.role)).map(c => c._id);
+  const providerTotals = providers.length ? await Promise.all([
+    LabRequest.aggregate([
+      { $match: { labId: { $in: providers }, status: { $nin: ['cancelled', 'rejected', 'declined'] }, approvalStatus: { $ne: 'rejected' } } },
+      { $group: { _id: '$labId', value: { $sum: 1 }, commission: { $sum: { $cond: [{ $eq: ['$status', 'completed'] }, '$vitaCommissionAmount', 0] } } } },
+    ]), examTotals(providers, 'laboratoryId'),
+  ]) : [[], []];
   const patientTotalsPromise = patientMetrics(customers.filter(customer => customer.role === 'User'));
   const diagnosticsQuery = doctors.length ? LabRequest.aggregate([
     { $match: { doctorId: { $in: doctors }, status: { $ne: 'cancelled' }, approvalStatus: { $ne: 'rejected' } } },
@@ -94,6 +101,14 @@ async function customerMetrics(customers) {
     grouped(Order, { ...realizedOrders, pharmacyId: { $in: pharmacies } }, 'pharmacyId', '$vitaCommissionAmount'),
   ]);
   return customers.map(customer => {
+    if (['Lab', 'Radiology'].includes(customer.role)) {
+      const legacy = providerTotals[0].find(row => String(row._id) === String(customer._id));
+      const exams = providerTotals[1].find(row => String(row._id) === String(customer._id));
+      return { ...customer, prescriptionCount: null, appointmentCount: null,
+        radiologyCount: customer.role === 'Radiology' ? (legacy?.value || 0) : null,
+        labCount: customer.role === 'Lab' ? (legacy?.value || 0) + (exams?.value || 0) : null,
+        vitaCommission: Math.round(((legacy?.commission || 0) + (exams?.commission || 0)) * 100) / 100 };
+    }
     if (customer.role === 'User') return { ...customer, ...patientTotals.get(String(customer._id)) };
     const id = customer._id;
     const doctor = customer.role === 'Doctor';

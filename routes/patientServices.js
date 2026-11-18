@@ -3,6 +3,7 @@ const User = require('../models/User');
 const MedicalTest = require('../models/MedicalTest');
 const LabRequest = require('../models/LabRequest');
 const { serviceFilter, serviceTotals } = require('../utils/patientServiceBooking');
+const { radiologyRates } = require('../utils/radiologyRates');
 const validId = (value) => typeof value === 'string' && /^[a-f\d]{24}$/i.test(value);
 const providerFilter = (type) => ({
   role: type === 'radiology' ? 'Radiology' : 'Lab',
@@ -39,14 +40,14 @@ router.get('/centers/:centerId/services', async (req, res) => {
       _id: req.params.centerId,
       ...providerFilter(req.query.type),
     })
-      .select('_id')
+      .select('_id radiologyDiscountPercent radiologyCommissionPercent')
       .lean();
     if (!center) return res.status(404).json({ message: 'Center unavailable.' });
     const services = await MedicalTest.find(serviceFilter(center._id, req.query.type))
       .select('name category description price preparationInstructions estimatedDuration')
       .sort({ name: 1 })
       .lean();
-    res.json({ services, discount: 20 });
+    res.json({ services, discount: req.query.type === 'radiology' ? radiologyRates(center).discountPercent : 20 });
   } catch {
     res.status(500).json({ message: 'Unable to load center services.' });
   }
@@ -67,7 +68,7 @@ router.post('/requests', async (req, res) => {
   }
   try {
     const center = await User.findOne({ _id: centerId, ...providerFilter(type) })
-      .select('_id')
+      .select('_id radiologyDiscountPercent radiologyCommissionPercent')
       .lean();
     if (!center) return res.status(404).json({ message: 'Center unavailable.' });
     const services = await MedicalTest.find({
@@ -89,7 +90,7 @@ router.post('/requests', async (req, res) => {
       status: 'pending',
       approvalStatus: 'approved',
       sourceChannel: 'vita_partner_network',
-      ...serviceTotals(services),
+      ...serviceTotals(services, type === 'radiology' ? radiologyRates(center) : undefined),
     });
     res.status(201).json({ request });
   } catch (error) {

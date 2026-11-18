@@ -78,9 +78,9 @@ const summarizePendingCommissions = async () => {
       { $match: { vitaCommissionAmount: { $gt: 0 } } },
       { $lookup: { from: 'users', localField: '_id', foreignField: '_id', as: 'provider' } },
       { $unwind: '$provider' },
-      { $project: { providerId: '$_id', _id: 0, providerName: '$provider.fullName', city: '$provider.city', grossAmount: 1, vitaCommissionAmount: 1, sourceCount: 1 } },
+      { $project: { providerId: '$_id', _id: 0, providerName: '$provider.fullName', city: '$provider.city', radiologyCommissionPercent: '$provider.radiologyCommissionPercent', grossAmount: 1, vitaCommissionAmount: 1, sourceCount: 1 } },
     ]);
-    return rows.map((row) => ({ ...row, providerType, commissionRate: config.rate }));
+    return rows.map((row) => ({ ...row, providerType, commissionRate: providerType === 'radiology' ? (row.radiologyCommissionPercent ?? config.rate) : config.rate }));
   }));
   return summaries.flat().sort((a, b) => b.vitaCommissionAmount - a.vitaCommissionAmount);
 };
@@ -118,7 +118,9 @@ router.post('/partner-commissions/receive', async (req, res) => {
     if (!settledRows.length) return res.status(409).json({ message: 'This balance was already received.' });
     const grossAmount = settledRows.reduce((sum, row) => sum + Number(config.grossField.split('.').reduce((value, key) => value?.[key], row) || 0), 0);
     const vitaCommissionAmount = settledRows.reduce((sum, row) => sum + Number(row[config.commissionField] || 0), 0);
-    const settlement = await PartnerCommissionSettlement.create({ _id: settlementId, provider: providerId, providerType: req.body.providerType, commissionRate: config.rate, grossAmount: Number(grossAmount.toFixed(2)), vitaCommissionAmount: Number(vitaCommissionAmount.toFixed(2)), sourceCount: settledRows.length, sourceIds: settledRows.map((row) => row._id), receivedBy: req.user._id, receivedAt: new Date() });
+    const center = req.body.providerType === 'radiology' ? await User.findById(providerId).select('radiologyCommissionPercent').lean() : null;
+    const commissionRate = center?.radiologyCommissionPercent ?? config.rate;
+    const settlement = await PartnerCommissionSettlement.create({ _id: settlementId, provider: providerId, providerType: req.body.providerType, commissionRate, grossAmount: Number(grossAmount.toFixed(2)), vitaCommissionAmount: Number(vitaCommissionAmount.toFixed(2)), sourceCount: settledRows.length, sourceIds: settledRows.map((row) => row._id), receivedBy: req.user._id, receivedAt: new Date() });
     res.status(201).json({ settlement });
   } catch (error) {
     await config.Model.updateMany({ vitaSettlement: settlementId }, { $set: { vitaSettlement: null } }).catch(() => {});

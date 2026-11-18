@@ -240,7 +240,7 @@ exports.createOrder = async (req, res) => {
 
     try {
       console.log('Creating notification with patient name:', patientName);
-      const admins = await User.find({ role: { $in: ['Admin', 'Superadmin'] } }).select('_id').lean();
+      const admins = await User.find({ role: { $in: ['Admin', 'Superadmin', 'SalesTeamLead'] } }).select('_id').lean();
       await Notification.create(admins.map(admin => ({
           user: admin._id,
           type: 'order',
@@ -263,9 +263,10 @@ exports.createOrder = async (req, res) => {
 };
 
 exports.getAdminOrders = async (req, res) => {
-  if (!['Admin', 'Superadmin'].includes(req.user?.role)) return res.status(403).json({ message: 'Admin only.' });
+  if (!['Admin', 'Superadmin', 'SalesTeamLead'].includes(req.user?.role)) return res.status(403).json({ message: 'Admin only.' });
   try {
     const orders = await Order.find({
+      ...(req.user.role === 'SalesTeamLead' ? { adminApprovalStatus: 'pending', status: 'pending' } : {}),
       $or: [
         { adminApprovalStatus: { $in: ['pending', 'approved', 'rejected'] } },
         { pharmacyId: null, adminApprovalStatus: { $exists: false } },
@@ -288,7 +289,7 @@ exports.getAdminOrders = async (req, res) => {
 };
 
 exports.getPendingOrderCount = async (req, res) => {
-  if (!['Admin', 'Superadmin'].includes(req.user?.role)) return res.status(403).json({ message: 'Admin only.' });
+  if (!['Admin', 'Superadmin', 'SalesTeamLead'].includes(req.user?.role)) return res.status(403).json({ message: 'Admin only.' });
   try {
     const count = await Order.countDocuments({ adminApprovalStatus: 'pending', status: 'pending', user: { $ne: null } });
     res.set('Cache-Control', 'no-store');
@@ -720,7 +721,7 @@ exports.reviewOrderByAdmin = async (req, res) => {
   try {
     const { orderId } = req.params;
     const { action, reason, pharmacyId } = req.body;
-    if (!['Admin', 'Superadmin'].includes(req.user?.role)) {
+    if (!['Admin', 'Superadmin', 'SalesTeamLead'].includes(req.user?.role)) {
       return res.status(403).json({ message: 'هذا الإجراء متاح للإدارة فقط' });
     }
     if (!['approve', 'reject'].includes(action)) {

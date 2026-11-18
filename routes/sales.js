@@ -15,6 +15,7 @@ router.use(auth, (req, res, next) => {
 
 // Team reports and staff provisioning are available only to the team lead.
 router.use('/team', require('./adminSales'));
+router.use('/providers', require('./salesProviders'));
 router.post('/staff', salesSignupLimiter, async (req, res) => {
   if (req.user.role !== 'SalesTeamLead') return res.status(403).json({ message: 'هذه الصلاحية لمديرة الفريق فقط.' });
   try {
@@ -39,7 +40,7 @@ router.post('/staff', salesSignupLimiter, async (req, res) => {
 router.get('/customers', async (req, res) => {
   try {
     const page = Math.max(1, Math.min(100000, Number.parseInt(req.query.page, 10) || 1));
-    const filter = { salesManager: req.user._id, role: { $in: ['Doctor', 'Pharmacy', 'User'] } };
+    const filter = { salesManager: req.user._id, role: { $in: ['Doctor', 'Pharmacy', 'User', 'Lab', 'Radiology'] } };
     const [customers, total] = await Promise.all([
       User.find(filter).select('fullName role specialty address city mobileNumber activationStatus createdAt')
         .sort({ createdAt: -1, _id: -1 }).skip((page - 1) * 25).limit(25).lean(),
